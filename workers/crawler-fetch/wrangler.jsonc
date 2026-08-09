@@ -3,6 +3,21 @@
   "name": "reputa-crawler-fetch-dev",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
+  "observability": {
+    "enabled": false,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": false,
+      "persist": true,
+      "head_sampling_rate": 1
+    }
+  },
   "kv_namespaces": [{ "binding": "CRAWL_CACHE", "id": "00000000000000000000000000000002" }],
   "r2_buckets": [{ "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-dev" }],
   "queues": {

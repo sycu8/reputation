@@ -3,15 +3,51 @@
   "name": "reputa-state-dev",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
+  "observability": {
+    "enabled": false,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": false,
+      "persist": true,
+      "head_sampling_rate": 1
+    }
+  },
   "durable_objects": {
     "bindings": [
-      { "name": "USER_DIRECTORY", "class_name": "UserDirectoryDO" },
-      { "name": "TENANT_DIRECTORY", "class_name": "TenantDirectoryDO" },
-      { "name": "MONITOR_DO", "class_name": "MonitorDO" },
-      { "name": "TENANT_BUDGET", "class_name": "TenantBudgetDO" },
-      { "name": "DOMAIN_DO", "class_name": "DomainCoordinatorDO" },
-      { "name": "BROWSER_POOL_DO", "class_name": "BrowserPoolDO" },
-      { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO" }
+      {
+        "name": "USER_DIRECTORY",
+        "class_name": "UserDirectoryDO"
+      },
+      {
+        "name": "TENANT_DIRECTORY",
+        "class_name": "TenantDirectoryDO"
+      },
+      {
+        "name": "MONITOR_DO",
+        "class_name": "MonitorDO"
+      },
+      {
+        "name": "TENANT_BUDGET",
+        "class_name": "TenantBudgetDO"
+      },
+      {
+        "name": "DOMAIN_DO",
+        "class_name": "DomainCoordinatorDO"
+      },
+      {
+        "name": "BROWSER_POOL_DO",
+        "class_name": "BrowserPoolDO"
+      },
+      {
+        "name": "SCHEDULER_SHARD",
+        "class_name": "SchedulerShardDO"
+      }
     ]
   },
   "migrations": [
@@ -28,11 +64,17 @@
     },
     {
       "tag": "v2",
-      "new_sqlite_classes": ["SchedulerShardDO"]
+      "new_sqlite_classes": [
+        "SchedulerShardDO"
+      ]
     }
   ],
   "env": {
-    "staging": { "name": "reputa-state-staging" },
-    "production": { "name": "reputa-state-production" }
+    "staging": {
+      "name": "reputa-state-staging"
+    },
+    "production": {
+      "name": "reputa-state-production"
+    }
   }
 }
