@@ -228,6 +228,19 @@ function pathMatch(pathname: string, pattern: RegExp): RegExpMatchArray | null {
   return pathname.match(pattern);
 }
 
+/** Workers route `hostname/api/*` keeps the `/api` prefix; normalize to app paths. */
+export function normalizeApiPathname(pathname: string): string {
+  if (pathname === "/api") return "/";
+  if (pathname.startsWith("/api/")) return pathname.slice(4) || "/";
+  return pathname;
+}
+
+function requestUrlForRouting(request: Request): URL {
+  const url = new URL(request.url);
+  url.pathname = normalizeApiPathname(url.pathname);
+  return url;
+}
+
 async function signup(request: Request, env: Env): Promise<Response> {
   const body = await readJson(request);
   const email = asString(body.email, "email").toLowerCase();
@@ -734,7 +747,7 @@ async function route(request: Request, env: Env, context: RouteContext): Promise
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const requestId = request.headers.get("cf-ray") ?? crypto.randomUUID();
-    const context: RouteContext = { requestId, url: new URL(request.url) };
+    const context: RouteContext = { requestId, url: requestUrlForRouting(request) };
     try {
       if (request.method === "OPTIONS") return corsPreflight(request, env);
       const response = await route(request, env, context);

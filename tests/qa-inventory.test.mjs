@@ -237,6 +237,54 @@ test("production auth cookies are Secure + SameSite=None for cross-origin dashbo
   assert.equal((await viaBearer.json()).user.email, world.accounts.owner.email);
 });
 
+test("custom-hostname /api prefix routes to the same handlers", async () => {
+  const { normalizeApiPathname } = await import("../apps/api-worker/src/index.ts");
+  assert.equal(normalizeApiPathname("/api/health"), "/health");
+  assert.equal(normalizeApiPathname("/api/v1/me"), "/v1/me");
+  assert.equal(normalizeApiPathname("/api/v1/auth/signup"), "/v1/auth/signup");
+  assert.equal(normalizeApiPathname("/v1/me"), "/v1/me");
+  assert.equal(normalizeApiPathname("/api"), "/");
+  assert.equal(normalizeApiPathname("/health"), "/health");
+
+  if (!world) world = await buildSeededEnv({ mentionsPerMonitor: 4 });
+  const health = await api.fetch(new Request("https://reputation.orangecloud.vn/api/health"), world.env);
+  assert.equal(health.status, 200);
+  assert.equal((await health.json()).status, "ok");
+
+  const probeEmail = `api-prefix-${Date.now()}@example.com`;
+  const signup = await api.fetch(
+    new Request("https://reputation.orangecloud.vn/api/v1/auth/signup", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Origin: "https://reputation.orangecloud.vn"
+      },
+      body: JSON.stringify({
+        email: probeEmail,
+        password: QA_PASSWORD,
+        workspaceName: "API Prefix Workspace"
+      })
+    }),
+    world.env
+  );
+  assert.equal(signup.status, 201);
+  const body = await signup.json();
+  assert.ok(body.session?.token);
+
+  const me = await api.fetch(
+    new Request("https://reputation.orangecloud.vn/api/v1/me", {
+      method: "GET",
+      headers: {
+        Origin: "https://reputation.orangecloud.vn",
+        Authorization: `Bearer ${body.session.token}`
+      }
+    }),
+    world.env
+  );
+  assert.equal(me.status, 200);
+  assert.equal((await me.json()).user.email, probeEmail);
+});
+
 test("shardFromSessionCookie strips cookie name prefix", () => {
   assert.equal(shardFromSessionCookie("reputa_session=abc.def.ghi"), "abc");
 });
