@@ -23,7 +23,7 @@
   // Optional plain vars: RSS_FEED_URLS, SITEMAP_URLS (comma-separated public HTTPS URLs)
   // Public news RSS discovery (HN/Bing) is always enabled in code — no key required.
   "vars": {
-    "RSS_FEED_URLS": "https://feeds.bbci.co.uk/news/rss.xml,https://vnexpress.net/rss/tin-moi-nhat.rss,https://vnexpress.net/rss/kinh-doanh.rss,https://www.theguardian.com/world/rss"
+    "RSS_FEED_URLS": "https://feeds.bbci.co.uk/news/rss.xml,https://feeds.bbci.co.uk/news/technology/rss.xml,https://vnexpress.net/rss/tin-moi-nhat.rss,https://vnexpress.net/rss/kinh-doanh.rss,https://vnexpress.net/rss/so-hoa.rss,https://www.theguardian.com/world/rss,https://www.theguardian.com/technology/rss,https://techcrunch.com/feed/,https://www.bleepingcomputer.com/feed/,https://thanhnien.vn/rss/home.rss,https://tuoitre.vn/rss/tin-moi-nhat.rss,https://hnrss.org/frontpage"
   },
   "durable_objects": {
     "bindings": [
@@ -45,7 +45,7 @@
     "production": {
       "name": "reputa-discovery-production",
       "vars": {
-        "RSS_FEED_URLS": "https://feeds.bbci.co.uk/news/rss.xml,https://vnexpress.net/rss/tin-moi-nhat.rss,https://vnexpress.net/rss/kinh-doanh.rss,https://www.theguardian.com/world/rss"
+        "RSS_FEED_URLS": "https://feeds.bbci.co.uk/news/rss.xml,https://feeds.bbci.co.uk/news/technology/rss.xml,https://vnexpress.net/rss/tin-moi-nhat.rss,https://vnexpress.net/rss/kinh-doanh.rss,https://vnexpress.net/rss/so-hoa.rss,https://www.theguardian.com/world/rss,https://www.theguardian.com/technology/rss,https://techcrunch.com/feed/,https://www.bleepingcomputer.com/feed/,https://thanhnien.vn/rss/home.rss,https://tuoitre.vn/rss/tin-moi-nhat.rss,https://hnrss.org/frontpage"
       },
       "durable_objects": {
         "bindings": [

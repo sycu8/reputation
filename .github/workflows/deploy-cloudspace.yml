@@ -65,3 +65,8 @@ jobs:
 
       - name: Deploy to Cloudspace
         run: npm run deploy:cloudspace
+
+      - name: Bootstrap live collector workspace
+        if: ${{ (github.event.inputs.environment || 'production') == 'production' }}
+        run: npm run bootstrap:collection
+        continue-on-error: true

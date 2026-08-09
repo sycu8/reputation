@@ -352,7 +352,9 @@ export class PublicNewsRssDiscoveryProvider implements DiscoveryProvider {
     if (!q) return [];
     const templates = [
       `https://hnrss.org/newest?q=${encodeURIComponent(q)}`,
+      `https://hnrss.org/newest?q=${encodeURIComponent(q)}&points=20`,
       `https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss`,
+      `https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss&qft=interval%3d%227%22`,
       `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`,
       `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=vi&gl=VN&ceid=VN:vi`
     ];

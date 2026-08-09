@@ -91,7 +91,7 @@ async function discoverAll(query: string, providers: DiscoveryProvider[]): Promi
   const ast = parseBooleanQuery(query);
   const batches = await Promise.all(providers.map(async (provider) => {
     try {
-      return await provider.discover({ query, ast, limit: 20 });
+      return await provider.discover({ query, ast, limit: 40 });
     } catch (error) {
       structuredLog("warn", "discovery_provider_failed", { requestId: "discovery-fanout" }, {
         providerId: provider.id,
@@ -114,7 +114,7 @@ async function processMessage(message: Message<JobEnvelope<DiscoveryPayload>>, e
   for (const query of queries) {
     const candidates = await discoverAll(query.rawQuery, providers);
     candidateCount += candidates.length;
-    for (const candidate of candidates) {
+    for (const candidate of candidates.slice(0, 40)) {
       const discoveryKey = await idempotencyKey([job.monitorId, candidate.source, candidate.url]);
       const crawl = createJob<CrawlPayload>({
         source: candidate.source,

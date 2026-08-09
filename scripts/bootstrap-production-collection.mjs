@@ -1,20 +1,45 @@
 #!/usr/bin/env node
 /**
- * Create a production collector workspace + monitors so the live pipeline has work.
+ * Create / refresh the production collector workspace so discovery has work.
+ * Starter plan = 3 monitors max — we enrich with multiple queries per monitor.
  *
  * Usage:
  *   node scripts/bootstrap-production-collection.mjs
- *   API_BASE=https://reputa-api-production.sycu-lee.workers.dev node scripts/bootstrap-production-collection.mjs
  */
 const API_BASE = (process.env.API_BASE || "https://reputa-api-production.sycu-lee.workers.dev").replace(/\/$/, "");
 const EMAIL = (process.env.COLLECTOR_EMAIL || "collector@pulsewatch.orangecloud.vn").toLowerCase();
 const PASSWORD = process.env.COLLECTOR_PASSWORD || "PulseWatch-Collect-2026!";
 const WORKSPACE = process.env.COLLECTOR_WORKSPACE || "PulseWatch Live Collection";
 
+/** Max 3 monitors on starter; pack coverage into queries instead. */
 const MONITORS = [
-  { name: "Cloudflare", type: "company", query: "Cloudflare" },
-  { name: "OrangeCloud", type: "brand", query: '"OrangeCloud" OR "PulseWatch"' },
-  { name: "AI Agents", type: "product", query: '"AI agent" OR "AI agents"' }
+  {
+    name: "Cloudflare",
+    type: "company",
+    queries: [
+      "Cloudflare",
+      "\"Cloudflare Workers\" OR Workers.dev",
+      "\"Cloudflare Outage\" OR \"Cloudflare downtime\""
+    ]
+  },
+  {
+    name: "OrangeCloud",
+    type: "brand",
+    queries: [
+      "OrangeCloud OR PulseWatch OR reputation.orangecloud.vn",
+      "\"social listening\" OR \"reputation monitoring\"",
+      "\"giám sát\" OR \"lắng nghe mạng xã hội\""
+    ]
+  },
+  {
+    name: "AI Agents",
+    type: "product",
+    queries: [
+      "\"AI agent\" OR \"AI agents\"",
+      "OpenAI OR ChatGPT OR AgentCN",
+      "ransomware OR \"data breach\" OR cybersecurity"
+    ]
+  }
 ];
 
 async function api(path, { method = "GET", token, body } = {}) {
@@ -47,10 +72,7 @@ async function main() {
     token = signup.session.token;
     workspaceId = signup.workspace.id;
     console.log(`Created account ${EMAIL} (role=${signup.user.globalRole}) workspace=${workspaceId}`);
-  } catch (error) {
-    if (error.status !== 409 && error.data?.error !== "account_exists") {
-      // signup may return account_exists from DO as 409
-    }
+  } catch {
     const login = await api("/v1/auth/login", {
       method: "POST",
       body: { email: EMAIL, password: PASSWORD }
@@ -78,15 +100,16 @@ async function main() {
     } else {
       console.log(`Reuse monitor ${spec.name} -> ${monitorId}`);
     }
-    const queries = await api(`/v1/workspaces/${workspaceId}/monitors/${monitorId}/queries`, { token });
-    const hasQuery = (queries.queries || []).some((q) => q.rawQuery === spec.query);
-    if (!hasQuery) {
+    const listed = await api(`/v1/workspaces/${workspaceId}/monitors/${monitorId}/queries`, { token });
+    const have = new Set((listed.queries || []).map((q) => q.rawQuery));
+    for (const rawQuery of spec.queries) {
+      if (have.has(rawQuery)) continue;
       await api(`/v1/workspaces/${workspaceId}/monitors/${monitorId}/queries`, {
         method: "POST",
         token,
-        body: { rawQuery: spec.query }
+        body: { rawQuery }
       });
-      console.log(`  + query ${spec.query}`);
+      console.log(`  + query ${rawQuery}`);
     }
   }
 
@@ -94,7 +117,7 @@ async function main() {
   console.log(`  email: ${EMAIL}`);
   console.log(`  password: ${PASSWORD}`);
   console.log(`  app: https://reputa-dashboard-production.sycu-lee.workers.dev/app/`);
-  console.log("Mentions appear after the next scheduler tick (~1 min) once discovery/crawl/AI complete.");
+  console.log("Mentions appear after the next scheduler tick (~1–5 min).");
 }
 
 main().catch((error) => {

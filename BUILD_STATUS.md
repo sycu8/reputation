@@ -91,6 +91,21 @@ npm run deploy:cloudspace
 
 Token create: Cloudflare Dashboard → My Profile → API Tokens → Create Token (custom) for account **Cloudspace**.
 
+## Live collector (production)
+
+Auto-bootstrapped after each production deploy (`npm run bootstrap:collection`):
+
+| Field | Value |
+|---|---|
+| Email | `collector@pulsewatch.orangecloud.vn` |
+| Password | `PulseWatch-Collect-2026!` |
+| App | https://reputa-dashboard-production.sycu-lee.workers.dev/app/ |
+| Super admin allowlist | `sycu.lee@gmail.com` (sign in with that account’s existing password) |
+
+Discovery sources (no paid keys required): HN RSS, Bing News RSS, plus default BBC / Guardian / TechCrunch / VNExpress / Thanh Niên / Tuổi Trẻ / BleepingComputer feeds.
+
+Optional upgrade: set GitHub Actions secret `BRAVE_SEARCH_API_KEY` (Brave dashboard requires a card).
+
 ## Next recommended steps after auth
 
 1. Provision Cloudspace resources and run `npm run wrangler:types`.
