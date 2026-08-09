@@ -4,7 +4,7 @@ Read `AGENTS.md`, `docs/AUTH_BILLING_SUPERADMIN.md`, `docs/DATA_MODEL.md`, `docs
 
 ## Objective
 
-Complete production-oriented subscription and entitlement enforcement for USD 29/49/99 plans plus internal super-admin unlimited entitlements.
+Complete production-oriented subscription and entitlement enforcement for technical plan keys plus internal super-admin unlimited entitlements.
 
 ## Build
 

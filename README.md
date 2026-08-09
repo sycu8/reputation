@@ -18,7 +18,7 @@ The repository uses zero runtime dependencies. `typescript` and `wrangler` are d
 
 ## HTTP API documentation
 
-Interactive reference (auth, RBAC, plans, every `/v1` route):
+Interactive reference (auth, RBAC, every `/v1` route):
 
 - Dashboard nav **API docs**, or open `/docs/index.html`
 - Written guide: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)
@@ -79,15 +79,6 @@ Cloudflare Email Service must be onboarded for the domain used by `ALERT_FROM_EM
 ## Browser Run
 
 `workers/crawler-browser` uses `env.BROWSER.quickAction("content", ...)` and is configured with a remote browser binding. Static/simple pages are fetched first; Browser Run is only the fallback.
-
-## Product plans
-
-- Starter: USD 29/month
-- Pro: USD 49/month
-- Business: USD 99/month
-- Super admin: explicit internal unlimited entitlements, while still respecting security/source/platform limits
-
-Full billing checkout/webhook integration remains a later phase; entitlement primitives already exist.
 
 ## Safety / source policy
 

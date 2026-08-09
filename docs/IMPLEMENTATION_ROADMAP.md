@@ -226,7 +226,7 @@ Build:
 ## Phase 13 — Billing, Entitlements, and Super Admin
 
 Build:
-- USD 29 / 49 / 99 versioned plan catalog
+- Versioned technical plan entitlement catalog (pricing outside repo)
 - billing provider adapter and signed webhook handling
 - subscription state machine
 - entitlement evaluation

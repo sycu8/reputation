@@ -10,7 +10,6 @@ Production target:
 - Cloudflare account: **Cloudspace**
 - Account ID (deployment target reference only): `4c15704ef706b9c8954cd6f9feb678d8`
 - Production hostname: `reputation.orangecloud.vn`
-- Product plans: `$29`, `$49`, `$99` per month
 - Owner/super-admin: explicit `super_admin` role with commercial quota bypass, while still respecting platform safety/rate limits.
 - Core SLA: important supported-source negative alerts P95 `< 15 minutes`.
 
@@ -51,7 +50,7 @@ Continue from the current `BUILD_STATUS.md` until the application is production-
 6. Source adapters for YouTube, X, Reddit, Facebook, TikTok and LinkedIn using lawful supported access modes.
 7. Virality tracking and cluster-level alerts.
 8. Reports and production hardening.
-9. Authentication UX, subscriptions, `$29/$49/$99` plans, metering, billing webhook/provider adapter and super-admin console.
+9. Authentication UX, subscriptions, metering, billing webhook/provider adapter and super-admin console.
 10. Cloudflare production provisioning, deployment, routes and smoke tests.
 
 ## Non-negotiable architecture

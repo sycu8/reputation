@@ -29,7 +29,7 @@ Complete all unfinished product areas:
 5. target-aware sentiment, severity, virality and high-priority negative-alert fast lane;
 6. full dashboard UX for overview/mentions/detail/alerts/monitors/reports/settings/source health;
 7. durable alert delivery, retries, receipts and reconciliation;
-8. authentication/account UX, plans `$29/$49/$99`, metering/quotas, subscription provider adapter/webhooks, and secure super-admin console;
+8. authentication/account UX, subscriptions, metering/quotas, subscription provider adapter/webhooks, and secure super-admin console;
 9. reports, observability, SLO measurement and production hardening;
 10. deploy and smoke-test on Cloudflare.
 
