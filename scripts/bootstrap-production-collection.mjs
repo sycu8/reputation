@@ -116,7 +116,9 @@ async function main() {
       body: { email: EMAIL, password: PASSWORD }
     });
     token = login.session.token;
-    role = login.user.globalRole;
+    // Force allowlist sync (also done inside login after this deploy).
+    const me = await api("/v1/me", { token });
+    role = me.user?.globalRole || login.user.globalRole;
     const workspaces = await api("/v1/workspaces", { token });
     workspaceId = workspaces.memberships?.[0]?.workspaceId;
     if (!workspaceId) throw new Error("login succeeded but no workspace membership found");

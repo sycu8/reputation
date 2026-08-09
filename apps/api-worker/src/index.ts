@@ -305,10 +305,11 @@ async function login(request: Request, env: Env): Promise<Response> {
     "/internal/login",
     { method: "POST", body: JSON.stringify({ email, password }) }
   );
+  const globalRole = await syncSuperAdminRole(env, shard, account.email, account.globalRole);
   const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
   return json(
     {
-      user: { id: account.userId, email: account.email, globalRole: account.globalRole },
+      user: { id: account.userId, email: account.email, globalRole },
       session: { token: cookieValue, expiresAt: account.expiresAt }
     },
     200,
