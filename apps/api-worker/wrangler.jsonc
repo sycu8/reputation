@@ -6,14 +6,16 @@
   "vars": {
     "ENVIRONMENT": "development",
     "SESSION_COOKIE_NAME": "reputa_session",
-    "ALLOWED_ORIGINS": "http://localhost:8788"
+    "ALLOWED_ORIGINS": "http://localhost:8788",
+    "BILLING_PROVIDER": "stub"
   },
   "durable_objects": {
     "bindings": [
       { "name": "USER_DIRECTORY", "class_name": "UserDirectoryDO", "script_name": "reputa-state-dev" },
       { "name": "TENANT_DIRECTORY", "class_name": "TenantDirectoryDO", "script_name": "reputa-state-dev" },
       { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-dev" },
-      { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-dev" }
+      { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-dev" },
+      { "name": "TENANT_BUDGET", "class_name": "TenantBudgetDO", "script_name": "reputa-state-dev" }
     ]
   },
   "kv_namespaces": [
@@ -28,13 +30,14 @@
   "env": {
     "staging": {
       "name": "reputa-api-staging",
-      "vars": { "ENVIRONMENT": "staging", "SESSION_COOKIE_NAME": "reputa_session", "ALLOWED_ORIGINS": "https://staging.example.com" },
+      "vars": { "ENVIRONMENT": "staging", "SESSION_COOKIE_NAME": "reputa_session", "ALLOWED_ORIGINS": "https://staging.example.com", "BILLING_PROVIDER": "stub" },
       "durable_objects": {
         "bindings": [
           { "name": "USER_DIRECTORY", "class_name": "UserDirectoryDO", "script_name": "reputa-state-staging" },
           { "name": "TENANT_DIRECTORY", "class_name": "TenantDirectoryDO", "script_name": "reputa-state-staging" },
           { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-staging" },
-          { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-staging" }
+          { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-staging" },
+          { "name": "TENANT_BUDGET", "class_name": "TenantBudgetDO", "script_name": "reputa-state-staging" }
         ]
       },
       "kv_namespaces": [{ "binding": "CONFIG_KV", "id": "00000000000000000000000000000011" }],
@@ -43,13 +46,14 @@
     },
     "production": {
       "name": "reputa-api-production",
-      "vars": { "ENVIRONMENT": "production", "SESSION_COOKIE_NAME": "reputa_session", "ALLOWED_ORIGINS": "https://reputation.orangecloud.vn" },
+      "vars": { "ENVIRONMENT": "production", "SESSION_COOKIE_NAME": "reputa_session", "ALLOWED_ORIGINS": "https://reputation.orangecloud.vn", "BILLING_PROVIDER": "stub" },
       "durable_objects": {
         "bindings": [
           { "name": "USER_DIRECTORY", "class_name": "UserDirectoryDO", "script_name": "reputa-state-production" },
           { "name": "TENANT_DIRECTORY", "class_name": "TenantDirectoryDO", "script_name": "reputa-state-production" },
           { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-production" },
-          { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-production" }
+          { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-production" },
+          { "name": "TENANT_BUDGET", "class_name": "TenantBudgetDO", "script_name": "reputa-state-production" }
         ]
       },
       "kv_namespaces": [{ "binding": "CONFIG_KV", "id": "00000000000000000000000000000021" }],

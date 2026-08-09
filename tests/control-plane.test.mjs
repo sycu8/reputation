@@ -69,6 +69,12 @@ class FakeKV {
   constructor() { this.values = new Map(); }
   async get(key) { return this.values.get(key) ?? null; }
   async put(key, value) { this.values.set(key, value); }
+  async list({ prefix } = {}) {
+    const keys = [...this.values.keys()]
+      .filter((key) => !prefix || key.startsWith(prefix))
+      .map((name) => ({ name }));
+    return { keys };
+  }
 }
 
 class FakeR2 {
@@ -89,7 +95,9 @@ function makeEnv() {
     ENVIRONMENT: "development",
     SESSION_COOKIE_NAME: "reputa_session",
     ALLOWED_ORIGINS: "http://localhost:8788",
-    SUPER_ADMIN_EMAILS: "owner@example.com"
+    SUPER_ADMIN_EMAILS: "owner@example.com",
+    BILLING_PROVIDER: "stub",
+    BILLING_WEBHOOK_SECRET: "billing-test-secret"
   };
 }
 

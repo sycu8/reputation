@@ -1,0 +1,69 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reputa-reports-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "vars": {
+    "ENVIRONMENT": "development"
+  },
+  "r2_buckets": [
+    { "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-dev" },
+    { "binding": "REPORTS", "bucket_name": "reputa-reports-dev" }
+  ],
+  "queues": {
+    "consumers": [
+      {
+        "queue": "reputa-reports-dev",
+        "max_batch_size": 5,
+        "max_batch_timeout": 2,
+        "max_retries": 3,
+        "dead_letter_queue": "reputa-reports-dlq-dev"
+      }
+    ]
+  },
+  "triggers": {
+    "crons": ["0 6 * * *"]
+  },
+  "env": {
+    "staging": {
+      "name": "reputa-reports-staging",
+      "vars": { "ENVIRONMENT": "staging" },
+      "r2_buckets": [
+        { "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-staging" },
+        { "binding": "REPORTS", "bucket_name": "reputa-reports-staging" }
+      ],
+      "queues": {
+        "consumers": [
+          {
+            "queue": "reputa-reports-staging",
+            "max_batch_size": 5,
+            "max_batch_timeout": 2,
+            "max_retries": 3,
+            "dead_letter_queue": "reputa-reports-dlq-staging"
+          }
+        ]
+      },
+      "triggers": { "crons": ["0 6 * * *"] }
+    },
+    "production": {
+      "name": "reputa-reports-production",
+      "vars": { "ENVIRONMENT": "production" },
+      "r2_buckets": [
+        { "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-production" },
+        { "binding": "REPORTS", "bucket_name": "reputa-reports-production" }
+      ],
+      "queues": {
+        "consumers": [
+          {
+            "queue": "reputa-reports-production",
+            "max_batch_size": 5,
+            "max_batch_timeout": 2,
+            "max_retries": 3,
+            "dead_letter_queue": "reputa-reports-dlq-production"
+          }
+        ]
+      },
+      "triggers": { "crons": ["0 6 * * *"] }
+    }
+  }
+}

@@ -4,17 +4,26 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PulseWatch</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <main class="shell">
     <aside class="sidebar">
-      <div class="brand">PulseWatch</div>
-      <div class="tagline">Reputation monitoring</div>
+      <div class="brand-block">
+        <div class="brand">PulseWatch</div>
+        <div class="tagline">Reputation monitoring</div>
+      </div>
       <nav>
         <button data-view="overview" class="nav active">Overview</button>
+        <button data-view="mentions" class="nav">Mentions</button>
+        <button data-view="alerts" class="nav">Alerts</button>
         <button data-view="monitors" class="nav">Monitors</button>
+        <button data-view="reports" class="nav">Reports</button>
         <button data-view="settings" class="nav">Settings</button>
+        <button data-view="source-health" class="nav">Source health</button>
       </nav>
       <div class="sidebar-foot">
         <span id="sessionState">Signed out</span>
@@ -26,60 +35,107 @@
       <header class="topbar">
         <div>
           <h1 id="pageTitle">Overview</h1>
-          <p id="pageSubtitle">Cloudflare-native social listening foundation.</p>
+          <p id="pageSubtitle">Track mentions, alerts, and coverage across your monitors.</p>
         </div>
         <button id="newMonitorBtn" class="primary hidden">New monitor</button>
       </header>
 
       <section id="authPanel" class="auth-grid">
-        <article class="panel">
+        <form id="signupForm" class="auth-form">
           <div class="eyebrow">Create account</div>
           <h2>Start monitoring</h2>
-          <form id="signupForm">
-            <label>Email<input name="email" type="email" required /></label>
-            <label>Password<input name="password" type="password" minlength="10" required /></label>
-            <label>Workspace<input name="workspaceName" required placeholder="Acme Reputation" /></label>
-            <button class="primary" type="submit">Create account</button>
-          </form>
-        </article>
-        <article class="panel">
+          <label>Email<input name="email" type="email" required /></label>
+          <label>Password<input name="password" type="password" minlength="10" required /></label>
+          <label>Workspace<input name="workspaceName" required placeholder="Acme Reputation" /></label>
+          <button class="primary" type="submit">Create account</button>
+        </form>
+        <form id="loginForm" class="auth-form">
           <div class="eyebrow">Welcome back</div>
           <h2>Sign in</h2>
-          <form id="loginForm">
-            <label>Email<input name="email" type="email" required /></label>
-            <label>Password<input name="password" type="password" required /></label>
-            <button class="secondary" type="submit">Sign in</button>
-          </form>
-        </article>
+          <label>Email<input name="email" type="email" required /></label>
+          <label>Password<input name="password" type="password" required /></label>
+          <button class="secondary" type="submit">Sign in</button>
+        </form>
       </section>
 
-      <section id="appPanel" class="hidden">
+      <section id="overviewPanel" class="view-panel hidden">
         <div class="metrics">
-          <article><span>Active monitors</span><strong id="monitorCount">0</strong></article>
-          <article><span>Negative alerts</span><strong>—</strong><small>Phase 9</small></article>
-          <article><span>Mentions today</span><strong>—</strong><small>Phase 8</small></article>
-          <article><span>Coverage</span><strong>Foundation</strong><small>Phase 1</small></article>
+          <div><span>Active monitors</span><strong id="monitorCount">0</strong></div>
+          <div><span>Mentions</span><strong id="mentionCount">0</strong></div>
+          <div><span>Open alerts</span><strong id="alertCount">0</strong></div>
+          <div><span>Source coverage</span><strong id="sourceCoverage">—</strong></div>
         </div>
-
-        <article class="panel">
-          <div class="panel-head">
-            <div>
-              <div class="eyebrow">Workspace</div>
-              <h2 id="workspaceName">No workspace selected</h2>
-            </div>
-            <span id="workspaceRole" class="pill">—</span>
+        <div class="workspace-strip">
+          <div>
+            <div class="eyebrow">Workspace</div>
+            <h2 id="workspaceName">No workspace selected</h2>
           </div>
-          <div id="monitorList" class="monitor-list"></div>
-        </article>
+          <span id="workspaceRole" class="status-chip">—</span>
+        </div>
+        <div id="overviewSourceList" class="source-grid"></div>
       </section>
 
-      <section id="settingsPanel" class="panel hidden">
-        <div class="eyebrow">API configuration</div>
-        <h2>Development endpoint</h2>
-        <form id="apiForm">
+      <section id="mentionsPanel" class="view-panel hidden">
+        <div class="toolbar">
+          <label class="inline">Monitor
+            <select id="mentionMonitorSelect"></select>
+          </label>
+          <label class="inline">Sentiment
+            <select id="mentionSentiment">
+              <option value="">Any</option>
+              <option value="negative">Negative</option>
+              <option value="neutral">Neutral</option>
+              <option value="positive">Positive</option>
+            </select>
+          </label>
+          <label class="inline">Min severity
+            <input id="mentionMinSeverity" type="number" min="0" max="100" value="0" />
+          </label>
+          <label class="inline">Source
+            <input id="mentionSource" placeholder="news, reddit…" />
+          </label>
+          <button id="mentionFilterBtn" class="secondary" type="button">Apply</button>
+        </div>
+        <div class="split-pane">
+          <div id="mentionList" class="list-pane"></div>
+          <div id="mentionDetail" class="detail-pane empty">Select a mention to inspect.</div>
+        </div>
+      </section>
+
+      <section id="alertsPanel" class="view-panel hidden">
+        <div class="toolbar">
+          <label class="inline">Monitor
+            <select id="alertMonitorSelect"></select>
+          </label>
+          <button id="alertRefreshBtn" class="secondary" type="button">Refresh</button>
+        </div>
+        <div id="alertList" class="list-pane tall"></div>
+      </section>
+
+      <section id="monitorsPanel" class="view-panel hidden">
+        <div id="monitorList" class="monitor-list"></div>
+      </section>
+
+      <section id="reportsPanel" class="view-panel hidden">
+        <div class="plain-section">
+          <div class="eyebrow">Reports worker</div>
+          <h2>Daily JSON stubs</h2>
+          <p>Report jobs land in the reports worker queue and write idempotent stubs to R2. Wire monitor aggregates in a later phase.</p>
+        </div>
+      </section>
+
+      <section id="settingsPanel" class="view-panel hidden">
+        <form id="apiForm" class="plain-section">
+          <div class="eyebrow">API configuration</div>
+          <h2>Development endpoint</h2>
           <label>API base URL<input name="apiBase" placeholder="http://localhost:8787" /></label>
+          <p class="hint">Notification channels (email / Telegram) are configured per tenant via <code>NOTIFY_CONFIG</code> KV. Delivery receipts are stored on each alert.</p>
           <button class="secondary" type="submit">Save</button>
         </form>
+      </section>
+
+      <section id="sourceHealthPanel" class="view-panel hidden">
+        <div id="sourceHealthList" class="source-grid"></div>
       </section>
 
       <div id="toast" class="toast hidden"></div>

@@ -1,7 +1,9 @@
 import { hasCapability, isSuperAdminEmail, type Capability } from "../../../packages/auth/src/index.ts";
 import { normalizeBooleanQuery, parseBooleanQuery } from "../../../packages/boolean-query/src/index.ts";
 import { monitorLimitFor } from "../../../packages/auth/src/entitlements.ts";
+import { createBillingProvider, planFromPriceId } from "../../../packages/billing/src/index.ts";
 import { schedulerShardIndex } from "../../../packages/crawler-core/src/index.ts";
+import { SOURCE_CAPABILITY_DEFAULTS } from "../../../packages/source-adapters/src/index.ts";
 import type { AuthContext, GlobalRole, MonitorType, WorkspaceRole } from "../../../packages/types/src/index.ts";
 import { structuredLog } from "../../../packages/observability/src/index.ts";
 
@@ -10,6 +12,7 @@ interface Env {
   TENANT_DIRECTORY: DurableObjectNamespace;
   MONITOR_DO: DurableObjectNamespace;
   SCHEDULER_SHARD: DurableObjectNamespace;
+  TENANT_BUDGET?: DurableObjectNamespace;
   CONFIG_KV: KVNamespace;
   RAW_CONTENT: R2Bucket;
   ANALYTICS?: AnalyticsEngineDataset;
@@ -17,6 +20,8 @@ interface Env {
   ALLOWED_ORIGINS?: string;
   ENVIRONMENT: string;
   SESSION_COOKIE_NAME?: string;
+  BILLING_PROVIDER?: string;
+  BILLING_WEBHOOK_SECRET?: string;
 }
 
 interface RouteContext {
@@ -93,6 +98,26 @@ function tenantStub(env: Env, tenantId: string): DurableObjectStub {
 
 function monitorStub(env: Env, tenantId: string, monitorId: string): DurableObjectStub {
   return env.MONITOR_DO.get(env.MONITOR_DO.idFromName(`${tenantId}:${monitorId}`));
+}
+
+function sourceHealthSnapshot(): { sources: Array<{ source: string; availability: string; capabilities: Record<string, boolean> }> } {
+  return {
+    sources: Object.entries(SOURCE_CAPABILITY_DEFAULTS).map(([source, value]) => ({
+      source,
+      availability: value.availability,
+      capabilities: { ...value.capabilities }
+    }))
+  };
+}
+
+async function registerTenant(env: Env, input: { id: string; name: string; plan?: string; ownerUserId?: string }): Promise<void> {
+  await env.CONFIG_KV.put(`tenant:registry:${input.id}`, JSON.stringify({
+    id: input.id,
+    name: input.name,
+    plan: input.plan ?? "starter",
+    ownerUserId: input.ownerUserId ?? null,
+    createdAt: new Date().toISOString()
+  }));
 }
 
 async function schedulerShard(env: Env, tenantId: string): Promise<DurableObjectStub> {
@@ -208,6 +233,7 @@ async function signup(request: Request, env: Env): Promise<Response> {
     method: "POST",
     body: JSON.stringify({ workspaceId, workspaceName, role: "owner" })
   });
+  await registerTenant(env, { id: workspaceId, name: workspaceName, plan: "starter", ownerUserId: account.userId });
   const cookieName = env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT;
   const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
   return json(
@@ -264,6 +290,7 @@ async function createWorkspace(request: Request, auth: AuthContext, env: Env): P
     method: "POST",
     body: JSON.stringify({ workspaceId, workspaceName: name, role: "owner" })
   });
+  await registerTenant(env, { id: workspaceId, name, plan: "starter", ownerUserId: auth.userId });
   return json({ workspace: { id: workspaceId, name, role: "owner" } }, 201);
 }
 
@@ -529,11 +556,96 @@ async function patchAlert(request: Request, auth: AuthContext, env: Env, workspa
   return json(data);
 }
 
+async function createBillingCheckout(request: Request, auth: AuthContext, env: Env, workspaceId: string): Promise<Response> {
+  const role = await requireWorkspaceCapability(env, auth, workspaceId, "workspace.update");
+  if (role !== "owner" && role !== "admin" && auth.globalRole !== "super_admin") throw new HttpError(403, "forbidden");
+  const body = await readJson(request);
+  const plan = asString(body.plan, "plan");
+  if (!["starter", "pro", "business"].includes(plan)) throw new HttpError(400, "invalid_plan");
+  const successUrl = asString(body.successUrl, "success_url");
+  const cancelUrl = asString(body.cancelUrl, "cancel_url");
+  const provider = createBillingProvider(env.BILLING_PROVIDER ?? "stub");
+  const checkout = await provider.createCheckout({ tenantId: workspaceId, plan, successUrl, cancelUrl });
+  return json({ checkout, provider: env.BILLING_PROVIDER ?? "stub" });
+}
+
+async function billingWebhook(request: Request, env: Env): Promise<Response> {
+  const secret = env.BILLING_WEBHOOK_SECRET;
+  if (!secret) throw new HttpError(503, "billing_webhook_not_configured");
+  const provider = createBillingProvider(env.BILLING_PROVIDER ?? "stub");
+  let event;
+  try {
+    event = await provider.verifyWebhook(request, secret);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid_billing_webhook");
+  }
+
+  const eventKey = `billing:event:${event.eventId}`;
+  const existing = await env.CONFIG_KV.get(eventKey);
+  if (existing) {
+    return json({ ok: true, duplicate: true, eventId: event.eventId });
+  }
+
+  let plan = event.plan ?? null;
+  if (!plan && event.raw && typeof event.raw === "object") {
+    const raw = event.raw as Record<string, unknown>;
+    const data = typeof raw.data === "object" && raw.data !== null ? raw.data as Record<string, unknown> : raw;
+    plan = planFromPriceId(typeof data.priceId === "string" ? data.priceId : typeof raw.priceId === "string" ? raw.priceId : null);
+  }
+  if (event.tenantId && plan) {
+    await doJson(tenantStub(env, event.tenantId), "/internal/workspace/plan", {
+      method: "PATCH",
+      body: JSON.stringify({ plan, actorUserId: "billing_webhook" })
+    });
+    const registryRaw = await env.CONFIG_KV.get(`tenant:registry:${event.tenantId}`);
+    if (registryRaw) {
+      try {
+        const registry = JSON.parse(registryRaw) as Record<string, unknown>;
+        await env.CONFIG_KV.put(`tenant:registry:${event.tenantId}`, JSON.stringify({
+          ...registry,
+          plan,
+          updatedAt: new Date().toISOString()
+        }));
+      } catch {
+        // ignore corrupt registry entries
+      }
+    }
+  }
+
+  await env.CONFIG_KV.put(eventKey, JSON.stringify({
+    eventId: event.eventId,
+    type: event.type,
+    tenantId: event.tenantId ?? null,
+    plan,
+    status: event.status ?? null,
+    processedAt: new Date().toISOString()
+  }));
+  return json({ ok: true, duplicate: false, eventId: event.eventId, plan });
+}
+
+async function listAdminTenants(auth: AuthContext, env: Env): Promise<Response> {
+  if (auth.globalRole !== "super_admin") throw new HttpError(403, "forbidden");
+  const listed = await env.CONFIG_KV.list({ prefix: "tenant:registry:" });
+  const tenants = [];
+  for (const key of listed.keys) {
+    const raw = await env.CONFIG_KV.get(key.name);
+    if (!raw) continue;
+    try {
+      tenants.push(JSON.parse(raw));
+    } catch {
+      tenants.push({ id: key.name.replace(/^tenant:registry:/, ""), raw });
+    }
+  }
+  return json({ tenants, note: "Listed from CONFIG_KV tenant registry keys written on workspace create." });
+}
+
 async function route(request: Request, env: Env, context: RouteContext): Promise<Response> {
   const { pathname } = context.url;
   if (request.method === "GET" && pathname === "/health") return json({ service: "api", status: "ok", environment: env.ENVIRONMENT, requestId: context.requestId });
+  if (request.method === "GET" && pathname === "/v1/source-health") return json(sourceHealthSnapshot());
   if (request.method === "POST" && pathname === "/v1/auth/signup") return signup(request, env);
   if (request.method === "POST" && pathname === "/v1/auth/login") return login(request, env);
+  if (request.method === "POST" && pathname === "/v1/billing/webhook") return billingWebhook(request, env);
   if (request.method === "POST" && pathname === "/v1/queries/validate") {
     const body = await readJson(request);
     const rawQuery = asString(body.rawQuery, "raw_query");
@@ -550,6 +662,11 @@ async function route(request: Request, env: Env, context: RouteContext): Promise
   if (request.method === "GET" && pathname === "/v1/me") return json({ user: { id: auth.userId, email: auth.email, globalRole: auth.globalRole } });
   if (request.method === "GET" && pathname === "/v1/workspaces") return listWorkspaces(auth, env);
   if (request.method === "POST" && pathname === "/v1/workspaces") return createWorkspace(request, auth, env);
+  if (request.method === "GET" && pathname === "/v1/admin/tenants") return listAdminTenants(auth, env);
+  if (request.method === "GET" && pathname === "/v1/admin/source-health") {
+    if (auth.globalRole !== "super_admin") throw new HttpError(403, "forbidden");
+    return json(sourceHealthSnapshot());
+  }
 
   let match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)$/);
   if (match && request.method === "GET") return workspaceDetails(auth, env, match[1] ?? "");
@@ -584,6 +701,9 @@ async function route(request: Request, env: Env, context: RouteContext): Promise
 
   match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)\/alerts\/([^/]+)$/);
   if (match && request.method === "PATCH") return patchAlert(request, auth, env, match[1] ?? "", match[2] ?? "", match[3] ?? "");
+
+  match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/billing\/checkout$/);
+  if (match && request.method === "POST") return createBillingCheckout(request, auth, env, match[1] ?? "");
 
   return errorResponse("not_found", 404, context.requestId);
 }
