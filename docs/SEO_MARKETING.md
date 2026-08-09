@@ -4,6 +4,9 @@ Production site: https://reputation.orangecloud.vn
 
 ## Homepage
 
+Marketing landing: `/` (`apps/dashboard/public/index.html`)  
+Product app: `/app/` (`apps/dashboard/public/app/index.html`)
+
 | Field | Value |
 |---|---|
 | `<title>` | PulseWatch \| Social Listening & Reputation Monitoring by OrangeCloud |

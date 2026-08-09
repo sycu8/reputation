@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PulseWatch | Social Listening &amp; Reputation Monitoring by OrangeCloud</title>
   <meta name="description" content="PulseWatch by OrangeCloud monitors online mentions across the public web and supported social platforms, analyzes sentiment, and alerts you to important negative conversations." />
+  <meta name="keywords" content="social listening tool, online reputation monitoring, brand monitoring tool, reputation monitoring software, negative mention monitoring" />
   <link rel="canonical" href="https://reputation.orangecloud.vn/" />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://reputation.orangecloud.vn/" />
@@ -14,264 +15,211 @@
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Know What's Being Said Before It Spreads | PulseWatch" />
   <meta name="twitter:description" content="Continuous social listening and reputation monitoring for people, professionals and businesses." />
-  <script>
-    (function () {
-      try {
-        var stored = localStorage.getItem("pulsewatch-theme");
-        var theme = stored === "light" || stored === "dark"
-          ? stored
-          : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-        document.documentElement.dataset.theme = theme;
-        document.documentElement.style.colorScheme = theme;
-      } catch (error) {
-        document.documentElement.dataset.theme = "light";
-      }
-    })();
-  </script>
+  <link rel="icon" href="/brand-mark.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
-  <link rel="icon" href="/brand-mark.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/landing.css" />
 </head>
 <body>
-  <main class="shell">
-    <aside class="sidebar">
-      <a class="brand-lockup" href="/" aria-label="PulseWatch by OrangeCloud">
-        <img class="brand-mark" src="/brand-mark.svg" width="40" height="40" alt="" />
-        <span class="brand-text">
-          <span class="brand">PulseWatch</span>
-          <span class="brand-by">by OrangeCloud</span>
-        </span>
-      </a>
-      <p class="tagline">Know what's being said. Before it spreads.</p>
-      <nav>
-        <button data-view="overview" class="nav active">Overview</button>
-        <button data-view="mentions" class="nav">Mentions</button>
-        <button data-view="alerts" class="nav">Alerts</button>
-        <button data-view="monitors" class="nav">Monitors</button>
-        <button data-view="reports" class="nav">Reports</button>
-        <button data-view="settings" class="nav">Settings</button>
-        <button data-view="source-health" class="nav">Source health</button>
-        <button data-view="admin" class="nav hidden" id="adminNavBtn">Admin</button>
-        <a class="nav nav-link" href="/docs/index.html">API docs</a>
-      </nav>
-      <div class="sidebar-foot">
-        <span id="sessionState">Signed out</span>
-        <button id="logoutBtn" class="ghost hidden">Sign out</button>
+  <div class="atmosphere" aria-hidden="true"></div>
+
+  <header class="site-nav">
+    <a class="brand-lockup" href="/" aria-label="PulseWatch by OrangeCloud home">
+      <img src="/brand-mark.svg" width="36" height="36" alt="" />
+      <span class="brand-text">
+        <span class="brand">PulseWatch</span>
+        <span class="brand-by">by OrangeCloud</span>
+      </span>
+    </a>
+    <nav class="nav-links" aria-label="Primary">
+      <a href="#product">Product</a>
+      <a href="#solutions">Solutions</a>
+      <a href="#pricing">Pricing</a>
+      <a href="/docs/index.html">Resources</a>
+    </nav>
+    <div class="nav-actions">
+      <a class="text-link" href="/app/">Sign in</a>
+      <a class="btn btn-primary" href="/app/#signup">Start monitoring</a>
+    </div>
+    <button type="button" class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="mobileNav" aria-label="Open menu">
+      <span></span><span></span>
+    </button>
+  </header>
+
+  <div class="mobile-nav" id="mobileNav" hidden>
+    <a href="#product">Product</a>
+    <a href="#solutions">Solutions</a>
+    <a href="#pricing">Pricing</a>
+    <a href="/docs/index.html">Resources</a>
+    <a href="/app/">Sign in</a>
+    <a class="btn btn-primary" href="/app/#signup">Start monitoring</a>
+  </div>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow reveal">PulseWatch by OrangeCloud</p>
+        <h1 class="reveal">
+          Know what the Internet is saying
+          <span class="accent-text">about you.</span>
+        </h1>
+        <p class="hero-lede reveal">
+          Know what's being said. Before it spreads.
+        </p>
+        <div class="hero-cta reveal">
+          <a class="btn btn-primary btn-lg" href="/app/#signup">Start monitoring</a>
+          <a class="btn btn-ghost btn-lg" href="#product">See how it works</a>
+        </div>
       </div>
-    </aside>
-
-    <section class="content">
-      <header class="topbar" id="appTopbar">
-        <div>
-          <p id="pageTitle" class="page-heading">Overview</p>
-          <p id="pageSubtitle">Track mentions, alerts, and coverage across your monitors.</p>
-        </div>
-        <div class="topbar-actions">
-          <button type="button" id="themeToggle" class="secondary" aria-pressed="false" aria-label="Switch to dark mode" title="Dark mode">
-            <span class="theme-icon" aria-hidden="true">◐</span>
-            <span data-theme-label>Dark</span>
-          </button>
-          <label class="inline workspace-switch hidden" id="workspaceSwitchWrap">
-            Workspace
-            <select id="workspaceSelect" aria-label="Workspace switcher"></select>
-          </label>
-          <button id="newMonitorBtn" class="primary hidden">New monitor</button>
-        </div>
-      </header>
-
-      <section id="authPanel" class="auth-home">
-        <div class="auth-hero">
-          <div class="brand-lockup brand-lockup-hero" aria-hidden="true">
-            <img class="brand-mark" src="/brand-mark.svg" width="56" height="56" alt="" />
-            <span class="brand-text">
-              <span class="brand">PulseWatch</span>
-              <span class="brand-by">by OrangeCloud</span>
-            </span>
+      <div class="hero-visual reveal" aria-hidden="true">
+        <div class="dash-frame">
+          <div class="dash-top">
+            <span></span><span></span><span></span>
+            <strong>PulseWatch</strong>
           </div>
-          <h1 class="auth-h1">Know what the Internet is saying about you.</h1>
-          <p class="auth-lede">Know what's being said. Before it spreads.</p>
-          <p class="auth-support">PulseWatch by OrangeCloud monitors public-web and supported social mentions, scores sentiment, and alerts you to important negative conversations.</p>
-        </div>
-        <div class="auth-grid">
-          <form id="signupForm" class="auth-form">
-            <div class="eyebrow">Create account</div>
-            <h2>Start monitoring</h2>
-            <label>Email<input name="email" type="email" required autocomplete="email" /></label>
-            <label>Password<input name="password" type="password" minlength="10" required autocomplete="new-password" /></label>
-            <label>Workspace<input name="workspaceName" required placeholder="Acme Listening" autocomplete="organization" /></label>
-            <button class="primary" type="submit">Create account</button>
-          </form>
-          <form id="loginForm" class="auth-form">
-            <div class="eyebrow">Welcome back</div>
-            <h2>Sign in to PulseWatch</h2>
-            <label>Email<input name="email" type="email" required autocomplete="email" /></label>
-            <label>Password<input name="password" type="password" required autocomplete="current-password" /></label>
-            <button class="secondary" type="submit">Sign in</button>
-          </form>
-        </div>
-      </section>
-
-      <section id="overviewPanel" class="view-panel hidden">
-        <div class="metrics">
-          <div><span>Active monitors</span><strong id="monitorCount">0</strong></div>
-          <div><span>Mentions</span><strong id="mentionCount">0</strong></div>
-          <div><span>Open alerts</span><strong id="alertCount">0</strong></div>
-          <div><span>Source coverage</span><strong id="sourceCoverage">—</strong></div>
-        </div>
-        <div class="workspace-strip">
-          <div>
-            <div class="eyebrow">Workspace</div>
-            <h2 id="workspaceName">No workspace selected</h2>
+          <div class="dash-body">
+            <aside class="dash-side">
+              <i></i><i></i><i class="on"></i><i></i>
+            </aside>
+            <div class="dash-main">
+              <div class="metric-row">
+                <article><small>Mentions</small><b>1,284</b><em class="up">+12%</em></article>
+                <article><small>Positive</small><b class="pos">642</b><em class="up">+8%</em></article>
+                <article><small>Neutral</small><b>411</b><em>—</em></article>
+                <article><small>Negative</small><b class="neg">231</b><em class="down">+3%</em></article>
+              </div>
+              <div class="attention">
+                <header>What needs your attention</header>
+                <div class="attn-row"><span class="sev high">High</span><p>Refund complaint trending on news forums</p></div>
+                <div class="attn-row"><span class="sev med">Med</span><p>Neutral review cluster around product launch</p></div>
+                <div class="attn-row"><span class="sev high">High</span><p>Negative sentiment spike — brand monitor</p></div>
+              </div>
+              <div class="ai-box">
+                <span class="spark"></span>
+                <p>AI summary: Negative mentions rose on support threads; prioritize refund and outage narratives.</p>
+              </div>
+            </div>
           </div>
-          <span id="workspaceRole" class="status-chip">—</span>
         </div>
-        <div id="overviewSourceList" class="source-grid"></div>
-      </section>
+      </div>
+    </section>
 
-      <section id="mentionsPanel" class="view-panel hidden">
-        <div class="toolbar">
-          <label class="inline">Monitor
-            <select id="mentionMonitorSelect"></select>
-          </label>
-          <label class="inline">Sentiment
-            <select id="mentionSentiment">
-              <option value="">Any</option>
-              <option value="negative">Negative</option>
-              <option value="neutral">Neutral</option>
-              <option value="positive">Positive</option>
-            </select>
-          </label>
-          <label class="inline">Min severity
-            <input id="mentionMinSeverity" type="number" min="0" max="100" value="0" />
-          </label>
-          <label class="inline">Source
-            <input id="mentionSource" placeholder="news, reddit…" />
-          </label>
-          <button id="mentionFilterBtn" class="secondary" type="button">Apply</button>
-        </div>
-        <div class="split-pane">
-          <div id="mentionList" class="list-pane"></div>
-          <div id="mentionDetail" class="detail-pane empty">Select a mention to inspect.</div>
-        </div>
-      </section>
+    <section class="feature-bar" id="product" aria-label="Product pillars">
+      <article class="reveal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 14v-3M12 14V8M17 14v-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <p>One monitor. Many sources.</p>
+      </article>
+      <article class="reveal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 12h8M12 8v8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <p>Less noise. More signal.</p>
+      </article>
+      <article class="reveal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12a6 6 0 0 1 12 0" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 12v5M9 18h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <p>Know early.</p>
+      </article>
+      <article class="reveal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 13c1.2 1.5 2.5 2 4 2s2.8-.5 4-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="9" cy="10" r="1" fill="currentColor"/><circle cx="15" cy="10" r="1" fill="currentColor"/></svg>
+        <p>Understand what matters.</p>
+      </article>
+      <article class="reveal">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18V9a6 6 0 0 1 12 0v9" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4 18h16M10 21h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <p>See what needs your attention.</p>
+      </article>
+    </section>
 
-      <section id="alertsPanel" class="view-panel hidden">
-        <div class="toolbar">
-          <label class="inline">Monitor
-            <select id="alertMonitorSelect"></select>
-          </label>
-          <button id="alertRefreshBtn" class="secondary" type="button">Refresh</button>
-        </div>
-        <div id="alertList" class="list-pane tall"></div>
-      </section>
+    <section class="section solutions" id="solutions">
+      <div class="section-head reveal">
+        <p class="eyebrow">Solutions</p>
+        <h2>Built for people, professionals, and businesses</h2>
+        <p>Track names, brands, and products across the public web and supported social platforms — then act on what matters.</p>
+      </div>
+      <div class="solution-grid">
+        <article class="reveal">
+          <h3>Individuals &amp; professionals</h3>
+          <p>Watch your name and personal brand. Catch inaccurate or harmful mentions before they define you.</p>
+        </article>
+        <article class="reveal">
+          <h3>Brands &amp; companies</h3>
+          <p>Monitor products, campaigns, and competitors with Boolean queries and sentiment aimed at your entity.</p>
+        </article>
+        <article class="reveal">
+          <h3>Operators &amp; teams</h3>
+          <p>Route high-severity negatives to alerts, review mentions together, and keep a live pulse on coverage.</p>
+        </article>
+      </div>
+    </section>
 
-      <section id="monitorsPanel" class="view-panel hidden">
-        <div id="monitorList" class="monitor-list"></div>
-      </section>
+    <section class="section pricing" id="pricing">
+      <div class="section-head reveal">
+        <p class="eyebrow">Pricing</p>
+        <h2>PulseWatch plans</h2>
+        <p>Start with the capacity you need. Upgrade as monitors and mentions grow.</p>
+      </div>
+      <div class="price-grid">
+        <article class="price-card reveal">
+          <h3>PulseWatch Starter</h3>
+          <p class="price"><span>$29</span><small>/mo</small></p>
+          <p class="audience">For individuals</p>
+          <ul>
+            <li>3 monitors</li>
+            <li>10K mentions / month</li>
+            <li>1 user</li>
+            <li>Email alerts</li>
+            <li>Basic reports</li>
+          </ul>
+          <a class="btn btn-ghost" href="/app/#signup">Start monitoring</a>
+        </article>
+        <article class="price-card recommended reveal">
+          <p class="badge">Recommended</p>
+          <h3>PulseWatch Pro</h3>
+          <p class="price"><span>$49</span><small>/mo</small></p>
+          <p class="audience">For professionals &amp; SMBs</p>
+          <ul>
+            <li>10 monitors</li>
+            <li>50K mentions / month</li>
+            <li>3 users</li>
+            <li>Priority alerts</li>
+            <li>Advanced reports</li>
+          </ul>
+          <a class="btn btn-primary" href="/app/#signup">Start monitoring</a>
+        </article>
+        <article class="price-card reveal">
+          <h3>PulseWatch Business</h3>
+          <p class="price"><span>$99</span><small>/mo</small></p>
+          <p class="audience">For teams</p>
+          <ul>
+            <li>25 monitors</li>
+            <li>150K mentions / month</li>
+            <li>10 users</li>
+            <li>Priority support</li>
+            <li>Advanced reports + API access</li>
+          </ul>
+          <a class="btn btn-ghost" href="/app/#signup">Start monitoring</a>
+        </article>
+      </div>
+    </section>
 
-      <section id="reportsPanel" class="view-panel hidden">
-        <div class="toolbar">
-          <button id="reportRefreshBtn" class="secondary" type="button">Refresh aggregates</button>
-        </div>
-        <div class="metrics" id="reportMetrics">
-          <div><span>Mentions scanned</span><strong id="reportMentionTotal">0</strong></div>
-          <div><span>Negative</span><strong id="reportNegative">0</strong></div>
-          <div><span>Open alerts</span><strong id="reportOpenAlerts">0</strong></div>
-          <div><span>Monitors</span><strong id="reportMonitorTotal">0</strong></div>
-        </div>
-        <div class="plain-section">
-          <div class="eyebrow">Live workspace rollup</div>
-          <h2>Sentiment &amp; sources</h2>
-          <p class="hint">Aggregated from current monitor mention and alert APIs (not the reports-worker R2 stubs).</p>
-          <div id="reportSentimentBars" class="bar-list"></div>
-          <div id="reportSourceBars" class="bar-list"></div>
-          <div id="reportMonitorBreakdown" class="monitor-list"></div>
-        </div>
-      </section>
-
-      <section id="settingsPanel" class="view-panel hidden">
-        <form id="apiForm" class="plain-section">
-          <div class="eyebrow">API configuration</div>
-          <h2>Development endpoint</h2>
-          <label>API base URL<input name="apiBase" placeholder="https://reputa-api-production.sycu-lee.workers.dev" /></label>
-          <p class="hint">Notification channels (email / Telegram) are configured per tenant via <code>NOTIFY_CONFIG</code> KV. Delivery receipts are stored on each alert.</p>
-          <button class="secondary" type="submit">Save</button>
-        </form>
-        <form id="billingForm" class="plain-section hidden">
-          <div class="eyebrow">Billing</div>
-          <h2>Plan checkout</h2>
-          <p class="hint">Owners and admins can start a stub checkout. Viewer roles cannot. Super Admin is not a customer plan.</p>
-          <label>Plan
-            <select name="plan" required>
-              <option value="starter">PulseWatch Starter</option>
-              <option value="pro" selected>PulseWatch Pro</option>
-              <option value="business">PulseWatch Business</option>
-            </select>
-          </label>
-          <button class="primary" type="submit">Start checkout</button>
-          <div id="billingCheckoutResult" class="hint"></div>
-        </form>
-      </section>
-
-      <section id="sourceHealthPanel" class="view-panel hidden">
-        <div id="sourceHealthList" class="source-grid"></div>
-      </section>
-
-      <section id="adminPanel" class="view-panel hidden">
-        <div class="toolbar">
-          <button id="adminRefreshBtn" class="secondary" type="button">Refresh tenants</button>
-        </div>
-        <div class="plain-section">
-          <div class="eyebrow">Super admin</div>
-          <h2>Tenant registry</h2>
-          <p class="hint">Listed from <code>CONFIG_KV</code> registry keys written on workspace create.</p>
-          <div id="adminTenantList" class="monitor-list"></div>
-        </div>
-        <div class="plain-section">
-          <div class="eyebrow">Platform</div>
-          <h2>Admin source health</h2>
-          <div id="adminSourceHealthList" class="source-grid"></div>
-        </div>
-      </section>
-
-      <footer class="site-footer">
-        <div class="brand-lockup brand-lockup-footer">
-          <img class="brand-mark" src="/brand-mark.svg" width="28" height="28" alt="" />
-          <span class="brand-text">
-            <span class="brand">PulseWatch</span>
-            <span class="brand-by">by OrangeCloud</span>
-          </span>
-        </div>
-        <p>Know what's being said. Before it spreads. · <a href="https://reputation.orangecloud.vn/">reputation.orangecloud.vn</a></p>
-      </footer>
-
-      <div id="toast" class="toast hidden"></div>
+    <section class="section cta-band">
+      <div class="reveal">
+        <h2>Know what's being said. Before it spreads.</h2>
+        <p>Open PulseWatch and create your first monitor in minutes.</p>
+        <a class="btn btn-primary btn-lg" href="/app/#signup">Start monitoring</a>
+      </div>
     </section>
   </main>
 
-  <dialog id="monitorDialog">
-    <form id="monitorForm">
-      <div class="eyebrow">New monitor</div>
-      <h2>Create monitor</h2>
-      <label>Name<input name="name" required placeholder="Acme Company" autocomplete="off" /></label>
-      <label>Type
-        <select name="type" required>
-          <option value="company" selected>Company</option>
-          <option value="brand">Brand</option>
-          <option value="person">Person</option>
-          <option value="product">Product</option>
-        </select>
-      </label>
-      <label>Initial keyword / Boolean query<input name="query" required placeholder='"Acme" AND NOT "Acme School"' autocomplete="off" /></label>
-      <div class="dialog-actions">
-        <button type="button" id="cancelMonitor" class="ghost">Cancel</button>
-        <button type="submit" class="primary">Create</button>
-      </div>
-    </form>
-  </dialog>
+  <footer class="site-footer">
+    <a class="brand-lockup" href="/">
+      <img src="/brand-mark.svg" width="28" height="28" alt="" />
+      <span class="brand-text">
+        <span class="brand">PulseWatch</span>
+        <span class="brand-by">by OrangeCloud</span>
+      </span>
+    </a>
+    <p>© <span id="year"></span> OrangeCloud · <a href="https://reputation.orangecloud.vn/">reputation.orangecloud.vn</a> · <a href="/docs/index.html">API docs</a> · <a href="/app/">App</a></p>
+  </footer>
 
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/landing.js"></script>
 </body>
 </html>

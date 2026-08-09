@@ -243,8 +243,8 @@ test("D-shape: monitor directory fields usable by dashboard selects", async () =
 
 test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", async () => {
   const { readFileSync } = await import("node:fs");
-  const html = readFileSync(new URL("../apps/dashboard/public/index.html", import.meta.url), "utf8");
-  const js = readFileSync(new URL("../apps/dashboard/public/app.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../apps/dashboard/public/app/index.html", import.meta.url), "utf8");
+  const js = readFileSync(new URL("../apps/dashboard/public/app/app.js", import.meta.url), "utf8");
   assert.match(html, /id="billingForm"/);
   assert.match(html, /id="adminPanel"/);
   assert.match(html, /id="adminNavBtn"/);
@@ -257,18 +257,35 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /not_relevant/);
   assert.match(js, /resolveDefaultApiBase/);
   assert.match(js, /reputa-api-production\.sycu-lee\.workers\.dev/);
-  assert.match(html, /PulseWatch \| Social Listening/);
   assert.match(html, /PulseWatch by OrangeCloud/);
-  assert.match(html, /Know what the Internet is saying about you/);
   assert.match(html, /PulseWatch Starter/);
   assert.match(html, /PulseWatch Pro/);
   assert.match(html, /PulseWatch Business/);
-  assert.match(html, /og:title/);
   assert.match(html, /brand-mark\.svg/);
   assert.doesNotMatch(html, /OrangeCloud Reputation/);
   assert.doesNotMatch(html, /option value="starter">Starter</);
 });
 
+test("marketing landing page uses PulseWatch brand guide surfaces", async () => {
+  const { readFileSync } = await import("node:fs");
+  const html = readFileSync(new URL("../apps/dashboard/public/index.html", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../apps/dashboard/public/landing.css", import.meta.url), "utf8");
+  const js = readFileSync(new URL("../apps/dashboard/public/landing.js", import.meta.url), "utf8");
+  assert.match(html, /PulseWatch \| Social Listening/);
+  assert.match(html, /Know what the Internet is saying/);
+  assert.match(html, /about you\./);
+  assert.match(html, /PulseWatch by OrangeCloud/);
+  assert.match(html, /id="pricing"/);
+  assert.match(html, /PulseWatch Starter/);
+  assert.match(html, /PulseWatch Pro/);
+  assert.match(html, /PulseWatch Business/);
+  assert.match(html, /href="\/app\/"/);
+  assert.match(html, /og:title/);
+  assert.match(css, /#F97316/);
+  assert.match(css, /#0B1220/);
+  assert.match(js, /IntersectionObserver/);
+  assert.doesNotMatch(html, /OrangeCloud Reputation/);
+});
 test("password hashing stays within Workers PBKDF2 iteration limit", async () => {
   const { readFileSync } = await import("node:fs");
   const state = readFileSync(new URL("../workers/state/src/index.ts", import.meta.url), "utf8");
@@ -307,9 +324,9 @@ test("D13 API docs page documents core v1 surfaces", async () => {
 test("theme helper and dashboard expose light/dark mode toggle", async () => {
   const { readFileSync } = await import("node:fs");
   const theme = readFileSync(new URL("../apps/dashboard/public/theme.js", import.meta.url), "utf8");
-  const html = readFileSync(new URL("../apps/dashboard/public/index.html", import.meta.url), "utf8");
-  const css = readFileSync(new URL("../apps/dashboard/public/styles.css", import.meta.url), "utf8");
-  const app = readFileSync(new URL("../apps/dashboard/public/app.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../apps/dashboard/public/app/index.html", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../apps/dashboard/public/app/styles.css", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../apps/dashboard/public/app/app.js", import.meta.url), "utf8");
   assert.match(theme, /pulsewatch-theme/);
   assert.match(theme, /initTheme/);
   assert.match(html, /id="themeToggle"/);

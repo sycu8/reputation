@@ -96,10 +96,16 @@ async function main() {
       const url = new URL(req.url || "/", `http://127.0.0.1:${WEB_PORT}`);
       let pathname = decodeURIComponent(url.pathname);
       if (pathname === "/") pathname = "/index.html";
+      if (pathname === "/app" || pathname === "/app/") pathname = "/app/index.html";
       const safe = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
       const filePath = join(DASHBOARD_DIR, safe);
       if (!filePath.startsWith(DASHBOARD_DIR) || !existsSync(filePath)) {
-        // SPA fallback
+        // Directory index or SPA/marketing fallback
+        const asDirIndex = join(DASHBOARD_DIR, safe, "index.html");
+        if (existsSync(asDirIndex) && asDirIndex.startsWith(DASHBOARD_DIR)) {
+          const index = readFileSync(asDirIndex);
+          return send(res, 200, index, { "content-type": "text/html; charset=utf-8" });
+        }
         const index = readFileSync(join(DASHBOARD_DIR, "index.html"));
         return send(res, 200, index, { "content-type": "text/html; charset=utf-8" });
       }

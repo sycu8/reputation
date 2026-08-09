@@ -6,6 +6,7 @@
 - Endorsed brand: **PulseWatch by OrangeCloud**
 - Production URL: https://reputation.orangecloud.vn
 - Tagline: *Know what's being said. Before it spreads.*
+- Marketing landing: `/` · App: `/app/` · API docs: `/docs/index.html`
 
 Brand and SEO copy: [`docs/BRAND_KIT.md`](docs/BRAND_KIT.md), [`docs/SEO_MARKETING.md`](docs/SEO_MARKETING.md), [`docs/MARKETING_COPY_BANK.md`](docs/MARKETING_COPY_BANK.md).
 

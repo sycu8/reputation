@@ -752,4 +752,9 @@ for (const button of document.querySelectorAll(".nav")) {
 
 $("#apiForm").querySelector('[name="apiBase"]').value = state.apiBase;
 initTheme();
-bootstrap();
+bootstrap().finally(() => {
+  if (location.hash === "#signup") {
+    $("#signupForm")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    $("#signupForm")?.querySelector('input[name="email"]')?.focus();
+  }
+});
