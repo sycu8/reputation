@@ -569,7 +569,7 @@ async function listMentions(request: Request, auth: AuthContext, env: Env, works
   await requireWorkspaceCapability(env, auth, workspaceId, "monitor.read");
   const input = new URL(request.url);
   const params = new URLSearchParams();
-  for (const key of ["limit", "sentiment", "minSeverity", "source"]) {
+  for (const key of ["limit", "sentiment", "minSeverity", "source", "from", "to"]) {
     const value = input.searchParams.get(key);
     if (value) params.set(key, value);
   }
