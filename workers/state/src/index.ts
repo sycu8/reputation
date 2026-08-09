@@ -573,7 +573,8 @@ export class MonitorDO extends SqliteObject {
     const name = asString(body.name, "monitor_name");
     const type = asString(body.type, "monitor_type") as MonitorType;
     const defaultLanguage = typeof body.defaultLanguage === "string" ? body.defaultLanguage : null;
-    const scanIntervalSec = typeof body.scanIntervalSec === "number" ? Math.max(300, Math.floor(body.scanIntervalSec)) : 900;
+    // Floor 60s so ops/super_admin can request fast scans; API still enforces plan mins for customers.
+    const scanIntervalSec = typeof body.scanIntervalSec === "number" ? Math.max(60, Math.floor(body.scanIntervalSec)) : 900;
     const alertThreshold = typeof body.alertThreshold === "number" ? Math.min(100, Math.max(0, Math.floor(body.alertThreshold))) : 60;
     const ts = nowIso();
     const nextScanAt = typeof body.nextScanAt === "string" && body.nextScanAt.trim() ? body.nextScanAt.trim() : ts;
@@ -619,7 +620,7 @@ export class MonitorDO extends SqliteObject {
     const type = typeof body.type === "string" ? body.type as MonitorType : current.type;
     const status = body.status === "active" || body.status === "paused" || body.status === "archived" ? body.status : current.status;
     const defaultLanguage = typeof body.defaultLanguage === "string" ? body.defaultLanguage : current.defaultLanguage;
-    const scanIntervalSec = typeof body.scanIntervalSec === "number" ? Math.max(300, Math.floor(body.scanIntervalSec)) : current.scanIntervalSec;
+    const scanIntervalSec = typeof body.scanIntervalSec === "number" ? Math.max(60, Math.floor(body.scanIntervalSec)) : current.scanIntervalSec;
     const alertThreshold = typeof body.alertThreshold === "number" ? Math.min(100, Math.max(0, Math.floor(body.alertThreshold))) : current.alertThreshold;
     const nextScanAt = typeof body.nextScanAt === "string" && body.nextScanAt.trim()
       ? body.nextScanAt.trim()

@@ -175,7 +175,9 @@ test("deploy defaults SUPER_ADMIN_EMAILS to sycu.lee@gmail.com", async () => {
   const { readFileSync } = await import("node:fs");
   const deploy = readFileSync(new URL("../scripts/deploy-cloudspace.mjs", import.meta.url), "utf8");
   assert.match(deploy, /sycu\.lee@gmail\.com/);
+  assert.match(deploy, /collector@pulsewatch\.orangecloud\.vn/);
   assert.match(deploy, /SUPER_ADMIN_EMAILS/);
+  assert.match(deploy, /resolveSuperAdminEmails/);
 });
 
 test("A13/A15 billing checkout and admin gate", async () => {

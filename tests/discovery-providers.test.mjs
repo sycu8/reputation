@@ -101,6 +101,8 @@ test("federated list includes brave when key set", () => {
   assert.equal(withoutKey.some((p) => p.id === "brave-web"), false);
   assert.ok(withoutKey.some((p) => p.id === "public-news-rss"), "free public news RSS must always be enabled");
   assert.ok(withoutKey.some((p) => p.id === "public-reddit-rss"), "free public Reddit RSS must always be enabled");
+  assert.ok(withoutKey.some((p) => p.id === "hn-algolia"), "HN Algolia must always be enabled");
+  assert.ok(withoutKey.some((p) => p.id === "public-tag-feeds"), "DEV/Medium tag feeds must always be enabled");
 
   const withFeeds = createFederatedDiscoveryProviders({
     RSS_FEED_URLS: "https://example.com/feed.xml",
@@ -145,7 +147,9 @@ test("public Reddit RSS keeps post permalinks and simplifies queries", async () 
   const {
     PublicRedditRssDiscoveryProvider,
     resolveRedditPublicUrl,
-    simplifyPublicSearchQuery
+    simplifyPublicSearchQuery,
+    publicFeedTagsFromQuery,
+    HackerNewsAlgoliaDiscoveryProvider
   } = await import("../packages/source-adapters/src/index.ts");
 
   assert.equal(
@@ -155,6 +159,7 @@ test("public Reddit RSS keeps post permalinks and simplifies queries", async () 
   assert.equal(resolveRedditPublicUrl("https://www.reddit.com/r/CloudFlare/"), null);
   assert.equal(simplifyPublicSearchQuery("\"AI agent\" OR ChatGPT"), "\"AI agent\" OR ChatGPT");
   assert.equal(simplifyPublicSearchQuery("Cloudflare OR Workers"), "Cloudflare OR Workers");
+  assert.deepEqual(publicFeedTagsFromQuery("\"Cloudflare Workers\" OR R2"), ["cloudflare-workers", "r2"]);
 
   const provider = new PublicRedditRssDiscoveryProvider();
   assert.equal(provider.availability, "public-web");
@@ -171,10 +176,29 @@ test("public Reddit RSS keeps post permalinks and simplifies queries", async () 
   }
   if (!results.length) {
     console.warn("public reddit live probe returned 0 candidates — skipping strict asserts");
+  } else {
+    assert.ok(results.every((item) => item.source === "reddit"));
+    assert.ok(results.every((item) => /reddit\.com\/r\/[^/]+\/comments\//i.test(item.url)));
+  }
+
+  const hn = new HackerNewsAlgoliaDiscoveryProvider();
+  let hnResults = [];
+  try {
+    hnResults = await hn.discover({
+      query: "Cloudflare",
+      ast: { type: "term", value: "Cloudflare", phrase: false },
+      limit: 5
+    });
+  } catch (error) {
+    console.warn("hn algolia live probe skipped:", error instanceof Error ? error.message : error);
     return;
   }
-  assert.ok(results.every((item) => item.source === "reddit"));
-  assert.ok(results.every((item) => /reddit\.com\/r\/[^/]+\/comments\//i.test(item.url)));
+  if (!hnResults.length) {
+    console.warn("hn algolia live probe returned 0 — skipping strict asserts");
+    return;
+  }
+  assert.ok(hnResults.every((item) => item.source === "web"));
+  assert.ok(hnResults.every((item) => /^https?:\/\//i.test(item.url)));
 });
 
 test("social stubs return empty without credentials", async () => {
