@@ -76,9 +76,9 @@ export const SOURCE_CAPABILITY_DEFAULTS: Record<SourceType, { availability: Sour
   youtube: { availability: "native-api", capabilities: { keywordSearch: true, booleanSearch: true, historicalSearch: true, comments: true, engagement: true, renderMayBeRequired: false } },
   reddit: { availability: "contract-required", capabilities: { keywordSearch: true, booleanSearch: false, historicalSearch: true, comments: true, engagement: true, renderMayBeRequired: false } },
   x: { availability: "native-api", capabilities: { keywordSearch: true, booleanSearch: true, historicalSearch: false, comments: true, engagement: true, renderMayBeRequired: false } },
-  facebook: { availability: "degraded", capabilities: { keywordSearch: false, booleanSearch: false, historicalSearch: false, comments: false, engagement: false, renderMayBeRequired: true } },
-  tiktok: { availability: "degraded", capabilities: { keywordSearch: false, booleanSearch: false, historicalSearch: false, comments: false, engagement: true, renderMayBeRequired: true } },
-  linkedin: { availability: "degraded", capabilities: { keywordSearch: false, booleanSearch: false, historicalSearch: false, comments: false, engagement: false, renderMayBeRequired: true } }
+  facebook: { availability: "public-web", capabilities: { keywordSearch: true, booleanSearch: false, historicalSearch: false, comments: false, engagement: false, renderMayBeRequired: true } },
+  tiktok: { availability: "public-web", capabilities: { keywordSearch: true, booleanSearch: false, historicalSearch: false, comments: false, engagement: true, renderMayBeRequired: true } },
+  linkedin: { availability: "public-web", capabilities: { keywordSearch: true, booleanSearch: false, historicalSearch: false, comments: false, engagement: false, renderMayBeRequired: true } }
 };
 
 function decodeXmlEntities(value: string): string {
@@ -866,8 +866,8 @@ export class FacebookDiscoveryProvider implements DiscoveryProvider {
   readonly availability: SourceAvailability = SOURCE_CAPABILITY_DEFAULTS.facebook.availability;
   readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.facebook.capabilities;
 
-  async discover(_input: DiscoveryInput): Promise<DiscoveryResult[]> {
-    return [];
+  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
+    return discoverPublicSocialSiteMentions("facebook", input);
   }
 }
 
@@ -877,8 +877,8 @@ export class TikTokDiscoveryProvider implements DiscoveryProvider {
   readonly availability: SourceAvailability = SOURCE_CAPABILITY_DEFAULTS.tiktok.availability;
   readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.tiktok.capabilities;
 
-  async discover(_input: DiscoveryInput): Promise<DiscoveryResult[]> {
-    return [];
+  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
+    return discoverPublicSocialSiteMentions("tiktok", input);
   }
 }
 
@@ -888,9 +888,82 @@ export class LinkedInDiscoveryProvider implements DiscoveryProvider {
   readonly availability: SourceAvailability = SOURCE_CAPABILITY_DEFAULTS.linkedin.availability;
   readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.linkedin.capabilities;
 
-  async discover(_input: DiscoveryInput): Promise<DiscoveryResult[]> {
-    return [];
+  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
+    return discoverPublicSocialSiteMentions("linkedin", input);
   }
+}
+
+/** Hosts treated as first-party for public social site discovery. */
+export const PUBLIC_SOCIAL_SITE_HOSTS: Record<"facebook" | "tiktok" | "linkedin", string[]> = {
+  facebook: ["facebook.com", "fb.com", "fb.watch"],
+  tiktok: ["tiktok.com"],
+  linkedin: ["linkedin.com", "lnkd.in"]
+};
+
+export function isPublicSocialSiteHost(source: "facebook" | "tiktok" | "linkedin", hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^www\./, "");
+  return PUBLIC_SOCIAL_SITE_HOSTS[source].some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+/**
+ * Free discovery for Facebook / TikTok / LinkedIn via public Bing + Google News RSS
+ * with site: filters. Does not fabricate posts — only indexed public URLs.
+ */
+export async function discoverPublicSocialSiteMentions(
+  source: "facebook" | "tiktok" | "linkedin",
+  input: DiscoveryInput
+): Promise<DiscoveryResult[]> {
+  const q = simplifyPublicSearchQuery(input.query) || input.query.trim();
+  if (!q) return [];
+  const hosts = PUBLIC_SOCIAL_SITE_HOSTS[source];
+  const siteClause = hosts.slice(0, 2).map((host) => `site:${host}`).join(" OR ");
+  const encoded = encodeURIComponent(`(${siteClause}) ${q}`);
+  const templates = [
+    `https://www.bing.com/news/search?q=${encoded}&format=rss`,
+    `https://www.bing.com/search?q=${encoded}&format=rss`,
+    `https://news.google.com/rss/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`,
+    `https://news.google.com/rss/search?q=${encoded}&hl=vi&gl=VN&ceid=VN:vi`
+  ];
+  const out: DiscoveryResult[] = [];
+  const seen = new Set<string>();
+  const batches = await Promise.all(templates.map(async (feedUrl) => {
+    try {
+      const xml = await fetchText(feedUrl, {
+        headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" }
+      });
+      return { feedUrl, items: parseRssOrAtom(xml, feedUrl) };
+    } catch {
+      return { feedUrl, items: [] as DiscoveryResult[] };
+    }
+  }));
+  for (const { feedUrl, items } of batches) {
+    for (const item of items) {
+      const resolved = resolvePublicNewsUrl(item.url);
+      if (!resolved) continue;
+      let hostname = "";
+      try {
+        hostname = new URL(resolved).hostname;
+      } catch {
+        continue;
+      }
+      if (!isPublicSocialSiteHost(source, hostname)) continue;
+      const key = resolved.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const parsed = toResult({
+        source,
+        url: resolved,
+        title: item.title,
+        snippet: item.snippet,
+        publishedAt: item.publishedAt,
+        metadata: { ...(item.metadata ?? {}), provider: `public-${source}-site-rss`, feedUrl }
+      });
+      if (!parsed) continue;
+      out.push(parsed);
+      if (out.length >= input.limit) return out;
+    }
+  }
+  return out;
 }
 
 export function createFederatedDiscoveryProviders(env: {

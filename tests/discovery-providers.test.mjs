@@ -201,16 +201,63 @@ test("public Reddit RSS keeps post permalinks and simplifies queries", async () 
   assert.ok(hnResults.every((item) => /^https?:\/\//i.test(item.url)));
 });
 
-test("social stubs return empty without credentials", async () => {
+test("credentialed social providers return empty without credentials", async () => {
   const providers = createSocialDiscoveryProviders({});
   const input = { query: "Acme", ast: { type: "term", value: "Acme", phrase: false }, limit: 10 };
   for (const provider of providers) {
+    if (provider.id === "facebook" || provider.id === "tiktok" || provider.id === "linkedin") continue;
     const results = await provider.discover(input);
     assert.deepEqual(results, []);
   }
-  assert.deepEqual(await new FacebookDiscoveryProvider().discover(input), []);
-  assert.deepEqual(await new TikTokDiscoveryProvider().discover(input), []);
-  assert.deepEqual(await new LinkedInDiscoveryProvider().discover(input), []);
+});
+
+test("facebook/tiktok/linkedin use public-web site discovery instead of degraded stubs", async () => {
+  const {
+    FacebookDiscoveryProvider,
+    TikTokDiscoveryProvider,
+    LinkedInDiscoveryProvider,
+    isPublicSocialSiteHost,
+    SOURCE_CAPABILITY_DEFAULTS
+  } = await import("../packages/source-adapters/src/index.ts");
+
+  assert.equal(SOURCE_CAPABILITY_DEFAULTS.facebook.availability, "public-web");
+  assert.equal(SOURCE_CAPABILITY_DEFAULTS.tiktok.availability, "public-web");
+  assert.equal(SOURCE_CAPABILITY_DEFAULTS.linkedin.availability, "public-web");
+  assert.equal(new FacebookDiscoveryProvider().availability, "public-web");
+  assert.equal(new TikTokDiscoveryProvider().availability, "public-web");
+  assert.equal(new LinkedInDiscoveryProvider().availability, "public-web");
+
+  assert.equal(isPublicSocialSiteHost("facebook", "www.facebook.com"), true);
+  assert.equal(isPublicSocialSiteHost("facebook", "m.facebook.com"), true);
+  assert.equal(isPublicSocialSiteHost("facebook", "example.com"), false);
+  assert.equal(isPublicSocialSiteHost("tiktok", "www.tiktok.com"), true);
+  assert.equal(isPublicSocialSiteHost("linkedin", "www.linkedin.com"), true);
+  assert.equal(isPublicSocialSiteHost("linkedin", "lnkd.in"), true);
+
+  const sampleRss = `<?xml version="1.0"?><rss version="2.0"><channel>
+    <item><title>FB post</title><link>https://www.facebook.com/acme/posts/1</link><description>Acme mention</description></item>
+    <item><title>Other</title><link>https://example.com/not-social</link><description>noise</description></item>
+  </channel></rss>`;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("format=rss") || url.includes("news.google.com")) {
+      return new Response(sampleRss, { status: 200, headers: { "content-type": "application/rss+xml" } });
+    }
+    return new Response("nope", { status: 404 });
+  };
+  try {
+    const results = await new FacebookDiscoveryProvider().discover({
+      query: "Acme",
+      ast: { type: "term", value: "Acme", phrase: false },
+      limit: 5
+    });
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.source, "facebook");
+    assert.equal(results[0]?.url, "https://www.facebook.com/acme/posts/1");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("youtube/x/reddit providers report correct availability", () => {
@@ -224,9 +271,9 @@ test("youtube/x/reddit providers report correct availability", () => {
   assert.equal(reddit.availability, SOURCE_CAPABILITY_DEFAULTS.reddit.availability);
   assert.equal(reddit.availability, "contract-required");
 
-  assert.equal(new FacebookDiscoveryProvider().availability, "degraded");
-  assert.equal(new TikTokDiscoveryProvider().availability, "degraded");
-  assert.equal(new LinkedInDiscoveryProvider().availability, "degraded");
+  assert.equal(new FacebookDiscoveryProvider().availability, "public-web");
+  assert.equal(new TikTokDiscoveryProvider().availability, "public-web");
+  assert.equal(new LinkedInDiscoveryProvider().availability, "public-web");
 
   const snapshot = sourceHealthSnapshot([youtube, x, reddit]);
   assert.deepEqual(snapshot, [
