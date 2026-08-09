@@ -1,6 +1,6 @@
 import { assertPublicHttpUrl, createJob, normalizeUrl, sha256Hex, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
-import { structuredLog } from "../../../packages/observability/src/index.ts";
+import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -203,6 +203,10 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
 }
 
 export default {
+  async fetch(): Promise<Response> {
+    return workerHealthResponse("crawler-fetch");
+  },
+
   async queue(batch: MessageBatch<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
     for (const message of batch.messages) {
       try {

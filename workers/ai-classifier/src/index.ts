@@ -2,7 +2,7 @@ import { idempotencyKey, type JobEnvelope } from "../../../packages/crawler-core
 import { calculateSeverity, severityBand, type Sentiment } from "../../../packages/severity/src/index.ts";
 import { shouldClusterAlert } from "../../../packages/virality/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
-import { structuredLog } from "../../../packages/observability/src/index.ts";
+import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 
 interface AiCandidatePayload {
   source: SourceType;
@@ -251,6 +251,10 @@ async function processMessage(message: Message<JobEnvelope<AiCandidatePayload>>,
 }
 
 export default {
+  async fetch(): Promise<Response> {
+    return workerHealthResponse("ai-classifier");
+  },
+
   async queue(batch: MessageBatch<JobEnvelope<AiCandidatePayload>>, env: Env): Promise<void> {
     for (const message of batch.messages) {
       try {

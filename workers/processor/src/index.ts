@@ -7,7 +7,7 @@ import {
   type VectorizeDedupeAdapter
 } from "../../../packages/dedupe/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
-import { structuredLog } from "../../../packages/observability/src/index.ts";
+import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 
 interface ProcessPayload {
   source: SourceType;
@@ -181,6 +181,10 @@ async function processMessage(message: Message<JobEnvelope<ProcessPayload>>, env
 }
 
 export default {
+  async fetch(): Promise<Response> {
+    return workerHealthResponse("processor");
+  },
+
   async queue(batch: MessageBatch<JobEnvelope<ProcessPayload>>, env: Env): Promise<void> {
     for (const message of batch.messages) {
       try {

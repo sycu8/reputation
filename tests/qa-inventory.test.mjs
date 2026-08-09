@@ -269,6 +269,23 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.doesNotMatch(html, /option value="starter">Starter</);
 });
 
+test("password hashing stays within Workers PBKDF2 iteration limit", async () => {
+  const { readFileSync } = await import("node:fs");
+  const state = readFileSync(new URL("../workers/state/src/index.ts", import.meta.url), "utf8");
+  assert.match(state, /PASSWORD_ITERATIONS = 100_000/);
+  assert.doesNotMatch(state, /PASSWORD_ITERATIONS = 210_000/);
+  assert.match(state, /MAX_PASSWORD_ITERATIONS = 100_000/);
+});
+
+test("queue workers export fetch health handlers", async () => {
+  const { readFileSync } = await import("node:fs");
+  for (const service of ["processor", "discovery", "crawler-fetch", "crawler-browser", "alerts", "ai-classifier"]) {
+    const src = readFileSync(new URL(`../workers/${service}/src/index.ts`, import.meta.url), "utf8");
+    assert.match(src, /async fetch\(/);
+    assert.match(src, /workerHealthResponse/);
+  }
+});
+
 test("D13 API docs page documents core v1 surfaces", async () => {
   const { readFileSync } = await import("node:fs");
   const html = readFileSync(new URL("../apps/dashboard/public/docs/index.html", import.meta.url), "utf8");

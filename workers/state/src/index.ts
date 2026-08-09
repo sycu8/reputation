@@ -54,9 +54,15 @@ async function sha256(value: string): Promise<string> {
   return b64url(new Uint8Array(digest));
 }
 
-const PASSWORD_ITERATIONS = 210_000;
+// Cloudflare Workers Web Crypto rejects PBKDF2 iteration counts above 100_000.
+const PASSWORD_ITERATIONS = 100_000;
+const MAX_PASSWORD_ITERATIONS = 100_000;
 
 async function derivePassword(password: string, salt: Uint8Array, iterations = PASSWORD_ITERATIONS): Promise<string> {
+  if (!Number.isFinite(iterations) || iterations < 1) throw new Error("invalid_password_iterations");
+  if (iterations > MAX_PASSWORD_ITERATIONS) {
+    throw new Error("password_iterations_unsupported_on_workers");
+  }
   const material = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(password),
