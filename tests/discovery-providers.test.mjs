@@ -100,6 +100,7 @@ test("federated list includes brave when key set", () => {
   const withoutKey = createFederatedDiscoveryProviders({});
   assert.equal(withoutKey.some((p) => p.id === "brave-web"), false);
   assert.ok(withoutKey.some((p) => p.id === "public-news-rss"), "free public news RSS must always be enabled");
+  assert.ok(withoutKey.some((p) => p.id === "public-reddit-rss"), "free public Reddit RSS must always be enabled");
 
   const withFeeds = createFederatedDiscoveryProviders({
     RSS_FEED_URLS: "https://example.com/feed.xml",
@@ -138,6 +139,42 @@ test("public news RSS resolves Bing apiclick to publisher URLs", async () => {
   assert.ok(results.every((item) => item.source === "news"));
   assert.ok(results.every((item) => /^https?:\/\//i.test(item.url)));
   assert.ok(results.every((item) => !/news\.google\.com/i.test(item.url)));
+});
+
+test("public Reddit RSS keeps post permalinks and simplifies queries", async () => {
+  const {
+    PublicRedditRssDiscoveryProvider,
+    resolveRedditPublicUrl,
+    simplifyPublicSearchQuery
+  } = await import("../packages/source-adapters/src/index.ts");
+
+  assert.equal(
+    resolveRedditPublicUrl("https://www.reddit.com/r/Cloudflare/comments/abc123/hello_world/"),
+    "https://www.reddit.com/r/Cloudflare/comments/abc123/hello_world/"
+  );
+  assert.equal(resolveRedditPublicUrl("https://www.reddit.com/r/CloudFlare/"), null);
+  assert.equal(simplifyPublicSearchQuery("\"AI agent\" OR ChatGPT"), "\"AI agent\" OR ChatGPT");
+  assert.equal(simplifyPublicSearchQuery("Cloudflare OR Workers"), "Cloudflare OR Workers");
+
+  const provider = new PublicRedditRssDiscoveryProvider();
+  assert.equal(provider.availability, "public-web");
+  let results = [];
+  try {
+    results = await provider.discover({
+      query: "Cloudflare",
+      ast: { type: "term", value: "Cloudflare", phrase: false },
+      limit: 8
+    });
+  } catch (error) {
+    console.warn("public reddit live probe skipped:", error instanceof Error ? error.message : error);
+    return;
+  }
+  if (!results.length) {
+    console.warn("public reddit live probe returned 0 candidates — skipping strict asserts");
+    return;
+  }
+  assert.ok(results.every((item) => item.source === "reddit"));
+  assert.ok(results.every((item) => /reddit\.com\/r\/[^/]+\/comments\//i.test(item.url)));
 });
 
 test("social stubs return empty without credentials", async () => {

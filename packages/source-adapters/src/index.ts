@@ -208,14 +208,39 @@ function splitCsvUrls(value: string | undefined): string[] {
   return value.split(",").map((part) => part.trim()).filter(Boolean);
 }
 
+const DISCOVERY_USER_AGENT = "reputa-discovery/0.1 (+https://reputation.orangecloud.vn; PulseWatch collector)";
+
 async function fetchText(url: string, init?: RequestInit): Promise<string> {
   const safe = assertPublicHttpUrl(url);
+  const headers = new Headers(init?.headers);
+  if (!headers.has("user-agent")) headers.set("user-agent", DISCOVERY_USER_AGENT);
   const response = await fetch(safe.toString(), {
     ...init,
+    headers,
     signal: init?.signal ?? AbortSignal.timeout(8000)
   });
   if (!response.ok) throw new Error(`fetch_http_${response.status}`);
   return response.text();
+}
+
+/** Reddit's public search prefers simpler text than full Boolean AST strings. */
+export function simplifyPublicSearchQuery(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const phrases = [...trimmed.matchAll(/"([^"]{2,80})"/g)].map((match) => match[1]!.trim()).filter(Boolean);
+  const remainder = trimmed
+    .replace(/"([^"]{2,80})"/g, " ")
+    .replace(/[()]/g, " ")
+    .replace(/\b(OR|AND|NOT)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const bareTerms = remainder.split(" ").map((term) => term.trim()).filter((term) => term.length >= 2).slice(0, 4);
+  const parts = [
+    ...phrases.slice(0, 3).map((phrase) => `"${phrase}"`),
+    ...bareTerms
+  ].slice(0, 4);
+  if (parts.length === 0) return trimmed.slice(0, 120);
+  return parts.join(" OR ").slice(0, 160);
 }
 
 export class BraveWebDiscoveryProvider implements DiscoveryProvider {
@@ -402,6 +427,83 @@ export function resolvePublicNewsUrl(raw: string): string | null {
       if (nested) return assertPublicHttpUrl(nested).toString();
     }
     return assertPublicHttpUrl(raw).toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Free Reddit discovery via public search Atom/RSS (no OAuth).
+ * Prefer post permalinks; skip bare subreddit index pages.
+ */
+export class PublicRedditRssDiscoveryProvider implements DiscoveryProvider {
+  readonly id = "public-reddit-rss";
+  readonly source: SourceType = "reddit";
+  readonly availability: SourceAvailability = "public-web";
+  readonly capabilities: SourceCapabilities = {
+    keywordSearch: true,
+    booleanSearch: false,
+    historicalSearch: false,
+    comments: true,
+    engagement: false,
+    renderMayBeRequired: false
+  };
+
+  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
+    const q = simplifyPublicSearchQuery(input.query);
+    if (!q) return [];
+    const templates = [
+      `https://www.reddit.com/search.rss?q=${encodeURIComponent(q)}&sort=new&limit=25`,
+      `https://old.reddit.com/search.rss?q=${encodeURIComponent(q)}&sort=new&limit=25`
+    ];
+    const out: DiscoveryResult[] = [];
+    const seen = new Set<string>();
+    for (const feedUrl of templates) {
+      try {
+        const xml = await fetchText(feedUrl, {
+          headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" }
+        });
+        for (const item of parseRssOrAtom(xml, feedUrl)) {
+          const url = resolveRedditPublicUrl(item.url);
+          if (!url) continue;
+          const key = url.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const parsed = toResult({
+            source: "reddit",
+            url,
+            title: item.title,
+            snippet: item.snippet,
+            author: item.author,
+            publishedAt: item.publishedAt,
+            metadata: { ...(item.metadata ?? {}), provider: "public-reddit-rss", feedUrl }
+          });
+          if (!parsed) continue;
+          out.push(parsed);
+          if (out.length >= input.limit) return out;
+        }
+      } catch {
+        // Skip failing Reddit endpoints; OAuth provider remains available when configured.
+      }
+    }
+    return out;
+  }
+}
+
+/** Accept Reddit post/comment permalinks; reject bare subreddit hubs. */
+export function resolveRedditPublicUrl(raw: string): string | null {
+  try {
+    const url = assertPublicHttpUrl(raw);
+    const host = url.hostname.replace(/^www\./i, "").toLowerCase();
+    if (host !== "reddit.com" && host !== "old.reddit.com" && host !== "np.reddit.com") return null;
+    const path = url.pathname.replace(/\/+$/, "");
+    // Prefer posts: /r/{sub}/comments/{id}/...
+    if (/^\/r\/[^/]+\/comments\/[a-z0-9]+/i.test(path)) {
+      url.hostname = "www.reddit.com";
+      url.hash = "";
+      return url.toString();
+    }
+    return null;
   } catch {
     return null;
   }
@@ -656,7 +758,8 @@ export function createFederatedDiscoveryProviders(env: {
 }): DiscoveryProvider[] {
   const providers: DiscoveryProvider[] = [
     // Always-on free discovery so production collects without paid API keys.
-    new PublicNewsRssDiscoveryProvider()
+    new PublicNewsRssDiscoveryProvider(),
+    new PublicRedditRssDiscoveryProvider()
   ];
   if (env.BRAVE_SEARCH_API_KEY) {
     providers.push(new BraveWebDiscoveryProvider(env.BRAVE_SEARCH_API_KEY));
@@ -679,6 +782,7 @@ export function createSocialDiscoveryProviders(env: {
   return [
     new YouTubeDiscoveryProvider(env.YOUTUBE_API_KEY),
     new XDiscoveryProvider(env.X_BEARER_TOKEN),
+    // OAuth Reddit when approved credentials exist; free public RSS is always in federated list.
     new RedditDiscoveryProvider(env.REDDIT_ACCESS_TOKEN, env.REDDIT_CLIENT_ID, env.REDDIT_CLIENT_SECRET),
     new FacebookDiscoveryProvider(),
     new TikTokDiscoveryProvider(),

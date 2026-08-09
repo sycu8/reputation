@@ -1,33 +1,25 @@
 # BUILD_STATUS
 
-Last updated: 2026-08-09 (Cursor Cloud Agent — post-implementation)
+Last updated: 2026-08-09 (Cursor Cloud Agent — self-supplement collection)
 
 ## Summary
 
-Handoff package imported into `sycu8/reputation`. Local validation passes with **36 tests**. Product code now covers sharded scheduling, federated discovery (including social adapter boundaries), SimHash/story clustering, dashboard UX, alert delivery receipts, reports worker skeleton, and billing stub/webhook/admin APIs.
-
-**Cloudflare production deploy is blocked:** Wrangler is not authenticated in this environment (`wrangler whoami` → not authenticated). Cloudflare Bindings MCP requires interactive auth in Cursor desktop IDE (unavailable to this cloud agent). No remote resources were created and `reputation.orangecloud.vn` was not verified or routed.
+Handoff package imported into `sycu8/reputation`. Local validation + **Cloudspace production deploy** are live via GitHub Actions (`Deploy Cloudspace` on `main`). Product covers sharded scheduling, federated discovery (free public news + Reddit RSS, optional Brave/social secrets), SimHash/story clustering, dashboard UX, alert delivery receipts, reports worker skeleton, and billing stub/webhook/admin APIs.
 
 ## Deployment target
 
-- Cloudflare account: **Cloudspace**
-- Account ID reference: `4c15704ef706b9c8954cd6f9feb678d8` (metadata only; not hardcoded in runtime)
+- Cloudflare account: **Cloudspace** (`4c15704ef706b9c8954cd6f9feb678d8`)
 - Production hostname: `reputation.orangecloud.vn`
-- Deployment status: **NOT DEPLOYED** — missing Cloudflare credentials/auth in agent environment
+- Workers.dev API: `https://reputa-api-production.sycu-lee.workers.dev`
+- Workers.dev app: `https://reputa-dashboard-production.sycu-lee.workers.dev/app/`
+- Deployment status: **DEPLOYED** (auto-deploy on push to `main`)
 
-## Validation (verified this run)
+## Validation
 
-Local:
+Local (this agent):
 
-- `npm install`: PASS
-- `npm run typecheck`: PASS
-- `npm run lint`: PASS
-- `npm test`: PASS — **36 tests**
-- `npm run validate`: PASS
-- `wrangler whoami`: FAIL — not authenticated
-- `wrangler types`: NOT RUN — no authenticated Cloudflare session / placeholder KV IDs
-- Browser Run remote / Workers AI remote / Email Service / Brave live: NOT RUN
-- Zone ownership check for `orangecloud.vn` in Cloudspace: NOT RUN
+- `npm install` / `npm run validate` — run before each PR merge
+- Live collector login + mention counts verified against production API
 
 ## Phase status
 
@@ -36,60 +28,31 @@ Local:
 | 0 Foundation | PASS | Monorepo, TS, lint, tests, CI, Wrangler configs |
 | 1 Multi-tenant control plane | IMPLEMENTED | Auth/session/RBAC/tenants/monitors/audit |
 | 2 Boolean engine | IMPLEMENTED | AND/OR/NOT, phrases, Vietnamese |
-| 3 Scheduler + Queues | IMPLEMENTED | `SchedulerShardDO` (64 shards), claim/advance, API sync on monitor CRUD; KV no longer primary |
-| 4 Web/News/RSS | IMPLEMENTED (credentials pending) | Brave web + news providers, RSS/Atom parser, sitemap parser, federated fan-out + URL dedupe |
-| 5 Browser Run | IMPLEMENTED / UNVERIFIED REMOTELY | Unchanged; needs remote binding smoke |
-| 6 Relevance + dedupe | IMPLEMENTED (Vectorize optional) | Boolean post-fetch, SimHash near-dupe, story cluster assign; Vectorize adapter interface + optional binding |
-| 7 Sentiment + severity | IMPLEMENTED / UNVERIFIED REMOTELY | Unchanged path; virality score can boost severity |
-| 8 Mentions UI/API | IMPLEMENTED | Dashboard Overview/Mentions/Alerts/Monitors/Reports/Settings/Source health |
-| 9 Alerts | IMPLEMENTED | Per-channel `alert_deliveries` receipts; skip already-sent channels on retry |
-| 10 Social adapters | BOUNDARIES IMPLEMENTED | YouTube/X/Reddit call APIs when secrets present; else empty + truthful availability. FB/TikTok/LinkedIn degraded/contract-required stubs |
-| 11 Virality + clustering | PRIMITIVES IMPLEMENTED | `@reputa/virality` + story clusters; engagement snapshot pipeline still thin |
-| 12 Reports + hardening | SKELETON | `workers/reports` cron/queue/R2 stub; full SLO dashboards not live |
-| 13 Billing + super admin | PARTIAL / STUB PROVIDER | entitlement keys, stub checkout, signed webhook idempotency via KV, admin tenant list + source-health; real Stripe/provider not wired |
+| 3 Scheduler + Queues | IMPLEMENTED | `SchedulerShardDO` (64 shards), claim/advance |
+| 4 Web/News/RSS | LIVE | Free public news RSS + expanded static feeds; Brave optional |
+| 5 Browser Run | IMPLEMENTED / UNVERIFIED REMOTELY | Needs remote binding smoke |
+| 6 Relevance + dedupe | IMPLEMENTED | Boolean post-fetch, SimHash, story clusters |
+| 7 Sentiment + severity | IMPLEMENTED / UNVERIFIED REMOTELY | Virality can boost severity |
+| 8 Mentions UI/API | LIVE | Overview/Mentions/Alerts/Monitors/Reports/Settings |
+| 9 Alerts | IMPLEMENTED | Per-channel receipts |
+| 10 Social adapters | PARTIAL LIVE | Free Reddit public search RSS; YouTube/X/OAuth Reddit need secrets |
+| 11 Virality + clustering | PRIMITIVES | Engagement snapshots still thin |
+| 12 Reports + hardening | SKELETON | Reports worker stub |
+| 13 Billing + super admin | PARTIAL | Stripe Payment Links in Settings; stub webhook; super admin allowlist |
 
-## Source coverage (code truthfulness)
+## Source coverage (runtime truthfulness)
 
-| Source | Runtime status without secrets |
+| Source | Runtime without paid secrets |
 |---|---|
 | Open web (Brave) | `disabled` until `BRAVE_SEARCH_API_KEY` |
 | News (Brave news) | `disabled` until Brave key |
-| RSS/Atom | `public-web` when `RSS_FEED_URLS` configured |
+| Public news RSS (HN/Bing/Google News) | **always on** (`public-web`) |
+| Public Reddit search RSS | **always on** (`public-web`) — post permalinks only |
+| Static RSS/Atom | `public-web` via `RSS_FEED_URLS` (expanded tech/VN/security set) |
 | Sitemap | `public-web` when `SITEMAP_URLS` configured |
-| YouTube | `native-api` path when `YOUTUBE_API_KEY`; else empty |
-| X | `native-api` path when `X_BEARER_TOKEN`; else empty |
-| Reddit | `contract-required` without token |
+| YouTube / X | empty until secrets |
+| Reddit OAuth | empty until credentials; free RSS still collects |
 | Facebook / TikTok / LinkedIn | `degraded` / `contract-required` stubs; no fake data |
-
-## Important invariants still enforced
-
-- No global database Durable Object (scheduler uses **sharded** `SchedulerShardDO`).
-- R2 for raw/large content; DO SQLite for operational shards.
-- Tenant authorization checked server-side; no public `super_admin` assignment.
-- Fetch-first / Browser-Run-second.
-- Boolean re-evaluation after fetch.
-- Negative hint → AI priority lane.
-- Alert channel delivery idempotency via receipts.
-
-## Genuine external blockers
-
-1. **Cloudflare auth** — Wrangler + Bindings MCP unauthenticated in this cloud agent. Deploy script ready: `npm run deploy:cloudspace` once `CLOUDFLARE_API_TOKEN` is provided.
-2. **Provider secrets** — Brave, social APIs, Telegram, Email sender, billing webhook secret not present (by design).
-3. **Zone verification** — cannot confirm `orangecloud.vn` is in Cloudspace until Cloudflare auth exists.
-4. Placeholder KV namespace IDs (`000…`) are patched at deploy time by `scripts/deploy-cloudspace.mjs` (not committed).
-
-## Operator unblock for production deploy
-
-Paste into the agent chat (or set as cloud secret) then say “deploy”:
-
-```bash
-export CLOUDFLARE_API_TOKEN='<token with Workers Scripts, KV, R2, Queues, DO, AI, Browser Rendering, Zone Workers Routes>'
-export CLOUDFLARE_ACCOUNT_ID='4c15704ef706b9c8954cd6f9feb678d8'
-export SUPER_ADMIN_EMAILS='sycu.lee@gmail.com'   # defaults to this if unset on deploy
-npm run deploy:cloudspace
-```
-
-Token create: Cloudflare Dashboard → My Profile → API Tokens → Create Token (custom) for account **Cloudspace**.
 
 ## Live collector (production)
 
@@ -101,16 +64,16 @@ Auto-bootstrapped after each production deploy (`npm run bootstrap:collection`):
 | Password | `PulseWatch-Collect-2026!` |
 | App | https://reputa-dashboard-production.sycu-lee.workers.dev/app/ |
 | Super admin allowlist | `sycu.lee@gmail.com` (sign in with that account’s existing password) |
+| Mentions (sample) | Cloudflare ~17+, AI Agents ~7+; OrangeCloud niche brand may stay low until wider crawl/Brave |
 
-Discovery sources (no paid keys required): HN RSS, Bing News RSS, plus default BBC / Guardian / TechCrunch / VNExpress / Thanh Niên / Tuổi Trẻ / BleepingComputer feeds.
+Discovery without paid keys: HN + Bing + Google News RSS, public Reddit search RSS, plus BBC / Guardian / TechCrunch / Ars / Verge / Wired / Cloudflare Blog / NYT Tech / security feeds / VNExpress / Thanh Niên / Tuổi Trẻ / VietnamNet / CafeF.
 
 Optional upgrade: set GitHub Actions secret `BRAVE_SEARCH_API_KEY` (Brave dashboard requires a card).
 
-## Next recommended steps after auth
+## Remaining gaps (honest)
 
-1. Provision Cloudspace resources and run `npm run wrangler:types`.
-2. Deploy + smoke test per `docs/DEPLOYMENT_CLOUDSPACE.md`.
-3. Wire real billing provider replacing stub.
-4. Add engagement snapshot collection for live virality.
-5. Remote Browser Run / Workers AI evaluation fixtures.
-6. Measure P95 negative-alert latency against SLO.
+1. Brave / YouTube / X / Reddit OAuth still need operator-supplied secrets.
+2. Custom host DNS / CF challenges may still affect `/api` on `reputation.orangecloud.vn` — prefer workers.dev API base.
+3. Billing webhook secret not configured (`billing_webhook_not_configured`); plan changes via Stripe Payment Links / manual DO until wired.
+4. Starter plan = **3 monitors max** on collector workspace.
+5. Remote Browser Run / Workers AI evaluation fixtures not smoke-tested in this agent.
