@@ -16,6 +16,13 @@ npm run validate
 
 The repository uses zero runtime dependencies. `typescript` and `wrangler` are declared as development dependencies for normal CI/Cloudflare environments.
 
+## HTTP API documentation
+
+Interactive reference (auth, RBAC, plans, every `/v1` route):
+
+- Dashboard nav **API docs**, or open `/docs/`
+- Written guide: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)
+
 ## Cloudflare resources
 
 Deploy order:
