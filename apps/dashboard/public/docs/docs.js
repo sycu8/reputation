@@ -27,7 +27,7 @@ function resolveDefaultBase() {
   if (host.endsWith(".workers.dev")) {
     return "https://reputa-api-production.sycu-lee.workers.dev";
   }
-  return "https://reputation.orangecloud.vn/api";
+  return `${location.origin}/api`;
 }
 
 const defaultBase = resolveDefaultBase();

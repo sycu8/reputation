@@ -133,7 +133,7 @@
       "vars": {
         "ENVIRONMENT": "production",
         "SESSION_COOKIE_NAME": "reputa_session",
-        "ALLOWED_ORIGINS": "https://reputation.orangecloud.vn",
+        "ALLOWED_ORIGINS": "https://reputation.orangecloud.vn,https://reputa-dashboard-production.sycu-lee.workers.dev",
         "BILLING_PROVIDER": "stub"
       },
       "durable_objects": {

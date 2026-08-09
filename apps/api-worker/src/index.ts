@@ -69,11 +69,15 @@ function parseCookies(request: Request): Map<string, string> {
 }
 
 function sessionCookie(name: string, value: string, expiresAt: string, secure: boolean): string {
-  return `${name}=${value}; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Lax; Expires=${new Date(expiresAt).toUTCString()}`;
+  // Secure cookies use SameSite=None so credentialed CORS works across
+  // workers.dev dashboard ↔ API hosts (workers.dev is on the public suffix list).
+  const sameSite = secure ? "None" : "Lax";
+  return `${name}=${value}; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=${sameSite}; Expires=${new Date(expiresAt).toUTCString()}`;
 }
 
 function clearCookie(name: string, secure: boolean): string {
-  return `${name}=; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Lax; Max-Age=0`;
+  const sameSite = secure ? "None" : "Lax";
+  return `${name}=; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=${sameSite}; Max-Age=0`;
 }
 
 function useSecureCookies(env: Env): boolean {

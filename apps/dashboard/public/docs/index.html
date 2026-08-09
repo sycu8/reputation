@@ -131,11 +131,11 @@ curl -sS -b cookies.txt "$API/v1/me"</code></pre>
         <ul>
           <li>Cookie name: <code>reputa_session</code> (overridable via <code>SESSION_COOKIE_NAME</code>)</li>
           <li>Value shape: <code>&lt;userShard&gt;.&lt;sessionId&gt;.&lt;sessionSecret&gt;</code></li>
-          <li>Flags: <code>HttpOnly</code>, <code>SameSite=Lax</code>, <code>Path=/</code>; <code>Secure</code> only on <code>production</code> / <code>staging</code></li>
+          <li>Flags: <code>HttpOnly</code>, <code>Path=/</code>; <code>Secure</code> + <code>SameSite=None</code> on <code>production</code> / <code>staging</code> (cross-origin workers.dev); <code>SameSite=Lax</code> on local QA</li>
           <li>Clients must send <code>credentials: "include"</code> (browser) or <code>-b / -c</code> cookie jars (curl)</li>
         </ul>
         <h3>CORS</h3>
-        <p>Credentialed CORS is allowed only for origins listed in <code>ALLOWED_ORIGINS</code> (comma-separated). Preflight: <code>OPTIONS</code> with <code>Access-Control-Allow-Credentials: true</code>. Disallowed origins do not receive ACAO.</p>
+        <p>Credentialed CORS is allowed only for origins listed in <code>ALLOWED_ORIGINS</code> (comma-separated). Production includes <code>https://reputation.orangecloud.vn</code> and the workers.dev dashboard origin. Preflight: <code>OPTIONS</code> with <code>Access-Control-Allow-Credentials: true</code>. Disallowed origins do not receive ACAO.</p>
         <pre class="code-block" data-lang="javascript"><code>await fetch(`${apiBase}/v1/me`, {
   credentials: "include",
   headers: { "content-type": "application/json" }

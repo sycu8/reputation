@@ -189,6 +189,35 @@ test("viewer membership includes Acme and insecure cookies for local-qa", async 
   });
   const setCookie = login.headers.get("set-cookie") || "";
   assert.equal(setCookie.includes("Secure"), false);
+  assert.match(setCookie, /SameSite=Lax/i);
+});
+
+test("production auth cookies are Secure + SameSite=None for cross-origin dashboard", async () => {
+  const world = await buildSeededEnv({ mentionsPerMonitor: 1 });
+  world.env.ENVIRONMENT = "production";
+  world.env.ALLOWED_ORIGINS = "https://reputa-dashboard-production.sycu-lee.workers.dev,https://reputation.orangecloud.vn";
+
+  const preflight = await api.fetch(
+    new Request("http://localhost/v1/auth/login", {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://reputa-dashboard-production.sycu-lee.workers.dev",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type"
+      }
+    }),
+    world.env
+  );
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("access-control-allow-origin"), "https://reputa-dashboard-production.sycu-lee.workers.dev");
+
+  const login = await apiCall(api, world.env, "POST", "/v1/auth/login", {
+    email: world.accounts.owner.email,
+    password: QA_PASSWORD
+  });
+  const setCookie = login.headers.get("set-cookie") || "";
+  assert.match(setCookie, /Secure/i);
+  assert.match(setCookie, /SameSite=None/i);
 });
 
 test("shardFromSessionCookie strips cookie name prefix", () => {
@@ -226,6 +255,9 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /billing\/checkout/);
   assert.match(js, /\/v1\/admin\/tenants/);
   assert.match(js, /not_relevant/);
+  assert.match(js, /resolveDefaultApiBase/);
+  assert.match(js, /reputa-api-production\.sycu-lee\.workers\.dev/);
+  assert.match(js, /location\.origin\}\/api/);
 });
 
 test("D13 API docs page documents core v1 surfaces", async () => {

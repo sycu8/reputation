@@ -80,7 +80,7 @@ Data: sanitized fixtures from `scripts/seed-local-qa.mjs` (fake brands/emails on
 | BUG-6 | Medium | Settings UX | Owner opens Settings | Billing checkout UI | Checkout API only; no Settings form | inventory gap | **Fixed** — plan select + stub checkout link |
 | BUG-7 | Medium | Admin UX | Ops opens Admin | Tenant registry UI | Admin APIs only; no nav/panel | inventory gap | **Fixed** — Admin nav for `super_admin` |
 | BUG-8 | Low | Reports UX | Nav Reports | Live aggregates | Stub copy only | inventory gap | **Fixed** — sentiment/source/monitor rollups |
-| BUG-9 | Low | RBAC UX | Viewer on Monitors | New monitor hidden | Button visible; create 403 | inventory gap | **Fixed** — role-aware New monitor + billing visibility |
+| BUG-10 | Critical | Prod login | Open workers.dev dashboard and sign in | Login reaches production API | `Failed to fetch` — default API was `http://host:8787`, CORS missing workers.dev origin, Secure cookies used `SameSite=Lax` | curl CORS 403 + code inspection | **Fixed** — production API base defaults, ALLOWED_ORIGINS, SameSite=None |
 
 ## Regression
 
