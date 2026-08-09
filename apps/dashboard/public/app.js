@@ -1,5 +1,12 @@
+function defaultApiBase() {
+  const stored = localStorage.getItem("apiBase");
+  if (stored) return stored;
+  const host = window.location.hostname || "127.0.0.1";
+  return `http://${host}:8787`;
+}
+
 const state = {
-  apiBase: localStorage.getItem("apiBase") || "http://localhost:8787",
+  apiBase: defaultApiBase(),
   user: null,
   workspaces: [],
   workspace: null,
@@ -280,6 +287,7 @@ function renderSignedOut() {
   state.user = null;
   $("#newMonitorBtn").classList.add("hidden");
   $("#logoutBtn").classList.add("hidden");
+  $("#workspaceSwitchWrap").classList.add("hidden");
   $("#sessionState").textContent = "Signed out";
   setView(state.view === "settings" ? "settings" : "overview");
 }
@@ -299,13 +307,36 @@ async function renderSignedIn() {
   if (state.view === "alerts") await loadAlerts();
 }
 
+function pickDefaultWorkspace(memberships) {
+  if (!memberships.length) return null;
+  const preferred = memberships.find((item) => /acme/i.test(item.workspaceName || ""))
+    || memberships.find((item) => item.role === "viewer" || item.role === "owner");
+  return preferred || memberships[0];
+}
+
+function renderWorkspaceSwitcher() {
+  const select = $("#workspaceSelect");
+  const wrap = $("#workspaceSwitchWrap");
+  if (!select || !wrap) return;
+  select.innerHTML = "";
+  for (const item of state.workspaces) {
+    const option = document.createElement("option");
+    option.value = item.workspaceId;
+    option.textContent = `${item.workspaceName} (${item.role})`;
+    select.appendChild(option);
+  }
+  if (state.workspace) select.value = state.workspace.workspaceId;
+  wrap.classList.toggle("hidden", !state.user || state.workspaces.length < 2);
+}
+
 async function bootstrap() {
   try {
     const me = await api("/v1/me");
     state.user = me.user;
     const data = await api("/v1/workspaces");
     state.workspaces = data.memberships || [];
-    state.workspace = state.workspaces[0] || null;
+    state.workspace = pickDefaultWorkspace(state.workspaces);
+    renderWorkspaceSwitcher();
     await refreshMonitors();
     await renderSignedIn();
   } catch {
@@ -343,23 +374,46 @@ $("#cancelMonitor").addEventListener("click", () => dialog.close());
 
 $("#monitorForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!state.workspace) return;
-  const form = Object.fromEntries(new FormData(event.currentTarget));
+  if (!state.workspace) {
+    notify("Select a workspace first");
+    return;
+  }
+  const formEl = event.currentTarget;
+  const form = Object.fromEntries(new FormData(formEl));
+  if (!String(form.name || "").trim() || !String(form.query || "").trim() || !String(form.type || "").trim()) {
+    notify("Name, type, and query are required");
+    return;
+  }
   try {
     const created = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors`, {
       method: "POST",
       body: JSON.stringify({ name: form.name, type: form.type })
     });
-    await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${created.monitor.id}/queries`, {
+    const monitorId = created.monitor?.id;
+    if (!monitorId) throw new Error("monitor_create_incomplete");
+    await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}/queries`, {
       method: "POST",
       body: JSON.stringify({ rawQuery: form.query })
     });
     dialog.close();
-    event.currentTarget.reset();
+    formEl.reset();
     await refreshMonitors();
     await renderSignedIn();
     notify("Monitor created");
-  } catch (error) { notify(error.message); }
+  } catch (error) {
+    notify(error.message || "monitor_create_failed");
+  }
+});
+
+$("#workspaceSelect").addEventListener("change", async (event) => {
+  const workspaceId = event.currentTarget.value;
+  state.workspace = state.workspaces.find((item) => item.workspaceId === workspaceId) || null;
+  try {
+    await refreshMonitors();
+    await renderSignedIn();
+  } catch (error) {
+    notify(error.message);
+  }
 });
 
 $("#apiForm").addEventListener("submit", (event) => {

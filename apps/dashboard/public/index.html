@@ -37,7 +37,13 @@
           <h1 id="pageTitle">Overview</h1>
           <p id="pageSubtitle">Track mentions, alerts, and coverage across your monitors.</p>
         </div>
-        <button id="newMonitorBtn" class="primary hidden">New monitor</button>
+        <div class="topbar-actions">
+          <label class="inline workspace-switch hidden" id="workspaceSwitchWrap">
+            Workspace
+            <select id="workspaceSelect" aria-label="Workspace switcher"></select>
+          </label>
+          <button id="newMonitorBtn" class="primary hidden">New monitor</button>
+        </div>
       </header>
 
       <section id="authPanel" class="auth-grid">
@@ -143,19 +149,19 @@
   </main>
 
   <dialog id="monitorDialog">
-    <form id="monitorForm" method="dialog">
+    <form id="monitorForm">
       <div class="eyebrow">New monitor</div>
       <h2>Create monitor</h2>
-      <label>Name<input name="name" required placeholder="Acme Company" /></label>
+      <label>Name<input name="name" required placeholder="Acme Company" autocomplete="off" /></label>
       <label>Type
-        <select name="type">
-          <option value="company">Company</option>
+        <select name="type" required>
+          <option value="company" selected>Company</option>
           <option value="brand">Brand</option>
           <option value="person">Person</option>
           <option value="product">Product</option>
         </select>
       </label>
-      <label>Initial keyword / Boolean query<input name="query" required placeholder='"Acme" AND NOT "Acme School"' /></label>
+      <label>Initial keyword / Boolean query<input name="query" required placeholder='"Acme" AND NOT "Acme School"' autocomplete="off" /></label>
       <div class="dialog-actions">
         <button type="button" id="cancelMonitor" class="ghost">Cancel</button>
         <button type="submit" class="primary">Create</button>

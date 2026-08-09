@@ -76,6 +76,10 @@ function clearCookie(name: string, secure: boolean): string {
   return `${name}=; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Lax; Max-Age=0`;
 }
 
+function useSecureCookies(env: Env): boolean {
+  return env.ENVIRONMENT === "production" || env.ENVIRONMENT === "staging";
+}
+
 function base64url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
@@ -239,7 +243,7 @@ async function signup(request: Request, env: Env): Promise<Response> {
   return json(
     { user: { id: account.userId, email: account.email, globalRole: account.globalRole }, workspace: { id: workspaceId, name: workspaceName, role: "owner" } },
     201,
-    { "set-cookie": sessionCookie(cookieName, cookieValue, account.expiresAt, env.ENVIRONMENT !== "development") }
+    { "set-cookie": sessionCookie(cookieName, cookieValue, account.expiresAt, useSecureCookies(env)) }
   );
 }
 
@@ -257,7 +261,7 @@ async function login(request: Request, env: Env): Promise<Response> {
   return json(
     { user: { id: account.userId, email: account.email, globalRole: account.globalRole } },
     200,
-    { "set-cookie": sessionCookie(env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT, cookieValue, account.expiresAt, env.ENVIRONMENT !== "development") }
+    { "set-cookie": sessionCookie(env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT, cookieValue, account.expiresAt, useSecureCookies(env)) }
   );
 }
 
@@ -267,7 +271,7 @@ async function logout(request: Request, env: Env): Promise<Response> {
     method: "POST",
     body: JSON.stringify({ sessionId: auth.sessionId })
   });
-  return json({ ok: true }, 200, { "set-cookie": clearCookie(env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT, env.ENVIRONMENT !== "development") });
+  return json({ ok: true }, 200, { "set-cookie": clearCookie(env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT, useSecureCookies(env)) });
 }
 
 async function listWorkspaces(auth: AuthContext, env: Env): Promise<Response> {

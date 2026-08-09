@@ -18,7 +18,10 @@
     "wrangler:types:state": "wrangler types --config workers/state/wrangler.jsonc",
     "wrangler:types:api": "wrangler types --config apps/api-worker/wrangler.jsonc",
     "wrangler:types:browser": "wrangler types --config workers/crawler-browser/wrangler.jsonc",
-    "deploy:cloudspace": "node scripts/deploy-cloudspace.mjs"
+    "deploy:cloudspace": "node scripts/deploy-cloudspace.mjs",
+    "qa:seed": "node --experimental-strip-types scripts/seed-local-qa.mjs",
+    "qa:local": "node --experimental-strip-types scripts/local-qa-server.mjs",
+    "qa:inventory": "node --experimental-strip-types --test tests/qa-inventory.test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.8.3",
