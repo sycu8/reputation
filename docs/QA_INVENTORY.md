@@ -24,7 +24,7 @@ Data: sanitized fixtures from `scripts/seed-local-qa.mjs` (fake brands/emails on
 | D4 | Alerts | nav Alerts | monitor, Refresh, Ack, Resolve | Lists alerts; Ack/Resolve update state |
 | D5 | Monitors | nav Monitors | New monitor dialog | Lists seeded monitors; create adds row |
 | D6 | Reports | nav Reports | Refresh aggregates | Live sentiment/source bars + per-monitor rollup from mention/alert APIs |
-| D7 | Settings | nav Settings | API base URL, billing plan | Persists API base; owner can start stub checkout; viewer hides billing |
+| D7 | Settings | nav Settings | API base URL, billing plan | Persists API base; owner opens Stripe payment link; viewer hides billing |
 | D8 | Source health | nav Source health | — | Shows ≥9 sources with availability chips |
 | D9 | New monitor modal | New monitor | name, type, query, Cancel/Create | Valid create succeeds; Cancel closes; invalid query errors; hidden for viewers |
 | D10 | Sign out | Sign out | — | Returns to auth; /v1/me unauthorized |

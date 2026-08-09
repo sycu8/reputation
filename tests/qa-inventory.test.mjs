@@ -269,7 +269,10 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /href="\/docs\/index\.html"/);
   assert.match(js, /FEEDBACK_ACTIONS/);
   assert.match(js, /canManageMonitors/);
-  assert.match(js, /billing\/checkout/);
+  assert.match(js, /STRIPE_PAYMENT_LINKS/);
+  assert.match(js, /buy\.stripe\.com\/8x200j4O2674e5U8aUcZa02/);
+  assert.match(js, /buy\.stripe\.com\/6oU7sLgwKgLI0f4cracZa03/);
+  assert.match(js, /buy\.stripe\.com\/8x29ATfsGfHE1j8dvecZa04/);
   assert.match(js, /\/v1\/admin\/tenants/);
   assert.match(js, /not_relevant/);
   assert.match(js, /resolveDefaultApiBase/);
@@ -281,6 +284,7 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /PulseWatch Starter/);
   assert.match(html, /PulseWatch Pro/);
   assert.match(html, /PulseWatch Business/);
+  assert.match(html, /Pay with Stripe/);
   assert.match(html, /brand-mark\.svg/);
   assert.doesNotMatch(html, /OrangeCloud Reputation/);
   assert.doesNotMatch(html, /option value="starter">Starter</);
@@ -299,6 +303,9 @@ test("marketing landing page uses PulseWatch brand guide surfaces", async () => 
   assert.match(html, /PulseWatch Starter/);
   assert.match(html, /PulseWatch Pro/);
   assert.match(html, /PulseWatch Business/);
+  assert.match(html, /buy\.stripe\.com\/8x200j4O2674e5U8aUcZa02/);
+  assert.match(html, /buy\.stripe\.com\/6oU7sLgwKgLI0f4cracZa03/);
+  assert.match(html, /buy\.stripe\.com\/8x29ATfsGfHE1j8dvecZa04/);
   assert.match(html, /href="\/app\/"/);
   assert.match(html, /og:title/);
   assert.match(css, /#F97316/);
