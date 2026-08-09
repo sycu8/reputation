@@ -84,7 +84,7 @@ const titles = {
   overview: ["Overview", "Hear what the market is saying about you — across monitors and channels."],
   mentions: ["Mentions", "Filter by time, channel, and sentiment. Inspect every story clearly."],
   insights: ["Insights", "Brand sentiment, audience mix, and competitor listening side-by-side."],
-  alerts: ["Alerts", "Newest published stories first. Filter, open the source, then Ack or Resolve."],
+  alerts: ["Alerts", "Not resolved stories only by default. Newest first — open the source, then Ack or Resolve."],
   monitors: ["Monitors", "Manage brand and competitor monitors, including official website and social pages."],
   reports: ["Reports", "Presentation-ready listening rollups for stakeholders."],
   settings: ["Settings", "API endpoint, plan comparison, and Stripe upgrade."],
@@ -1146,7 +1146,7 @@ async function loadAlerts() {
   const to = $("#alertTo")?.value;
   const minSeverity = $("#alertMinSeverity")?.value;
   const severity = $("#alertSeverity")?.value;
-  const stateFilter = $("#alertState")?.value;
+  const stateFilter = $("#alertState")?.value ?? "open";
   if (from) params.set("from", from);
   if (to) params.set("to", to);
   if (minSeverity) params.set("minSeverity", minSeverity);

@@ -925,7 +925,11 @@ export class MonitorDO extends SqliteObject {
       clauses.push("a.severity = ?");
       params.push(severity);
     }
-    if (state && ["pending", "sent", "acknowledged", "resolved", "failed"].includes(state)) {
+    if (state === "open" || state === "unresolved") {
+      // Default triage queue: everything except resolved.
+      clauses.push("a.state != ?");
+      params.push("resolved");
+    } else if (state && ["pending", "sent", "acknowledged", "resolved", "failed"].includes(state)) {
       clauses.push("a.state = ?");
       params.push(state);
     }

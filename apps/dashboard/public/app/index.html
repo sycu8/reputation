@@ -277,7 +277,7 @@
         <div class="listening-hero alerts-guide">
           <div class="eyebrow">How to use Alerts</div>
           <h2>Triage risk stories fast</h2>
-          <p>Choose a monitor, narrow by date / score / severity / state, then Apply. Stories are listed by <strong>newest publication time</strong> first. Open source to read the original, Ack while reviewing, Resolve when done.</p>
+          <p>Choose a monitor, then triage <strong>not resolved</strong> stories (default). Narrow by date / score / severity / state, then Apply. Listed by <strong>newest publication time</strong>. Open source to read, Ack while reviewing, Resolve when done — resolved items leave this queue.</p>
         </div>
         <div class="toolbar">
           <label class="inline">Monitor
@@ -303,6 +303,7 @@
           </label>
           <label class="inline">State
             <select id="alertState">
+              <option value="open" selected>Not resolved</option>
               <option value="">Any</option>
               <option value="pending">Pending</option>
               <option value="failed">Failed</option>
