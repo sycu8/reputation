@@ -348,24 +348,28 @@ export class RssFeedDiscoveryProvider implements DiscoveryProvider {
 
   async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
     const out: DiscoveryResult[] = [];
-    for (const feedUrl of this.feedUrls) {
+    const batches = await Promise.all(this.feedUrls.map(async (feedUrl) => {
       try {
         const xml = await fetchText(feedUrl, { headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" } });
-        for (const item of parseRssOrAtom(xml, feedUrl)) {
+        return parseRssOrAtom(xml, feedUrl).filter((item) => {
           const haystack = `${item.title ?? ""} ${item.snippet ?? ""}`;
-          if (!evaluateBooleanAst(input.ast, haystack)) continue;
-          out.push(item);
-          if (out.length >= input.limit) return out;
-        }
+          return evaluateBooleanAst(input.ast, haystack);
+        });
       } catch {
-        // Skip failing feeds; federation continues with remaining providers.
+        return [] as DiscoveryResult[];
+      }
+    }));
+    for (const batch of batches) {
+      for (const item of batch) {
+        out.push(item);
+        if (out.length >= input.limit) return out;
       }
     }
     return out.slice(0, input.limit);
   }
 }
 
-/** Free query-scoped public news RSS (HN + Bing). No API key required. */
+/** Free query-scoped public news RSS (HN + Bing + Yahoo + Google News). No API key required. */
 export class PublicNewsRssDiscoveryProvider implements DiscoveryProvider {
   readonly id = "public-news-rss";
   readonly source: SourceType = "news";
@@ -373,49 +377,184 @@ export class PublicNewsRssDiscoveryProvider implements DiscoveryProvider {
   readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.news.capabilities;
 
   async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
-    const q = input.query.trim();
+    const q = simplifyPublicSearchQuery(input.query) || input.query.trim();
     if (!q) return [];
+    const encoded = encodeURIComponent(q);
     const templates = [
-      `https://hnrss.org/newest?q=${encodeURIComponent(q)}`,
-      `https://hnrss.org/newest?q=${encodeURIComponent(q)}&points=20`,
-      `https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss`,
-      `https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss&qft=interval%3d%227%22`,
-      `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`,
-      `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=vi&gl=VN&ceid=VN:vi`
+      `https://hnrss.org/newest?q=${encoded}`,
+      `https://hnrss.org/newest?q=${encoded}&points=20`,
+      `https://www.bing.com/news/search?q=${encoded}&format=rss`,
+      `https://www.bing.com/news/search?q=${encoded}&format=rss&qft=interval%3d%227%22`,
+      `https://www.bing.com/news/search?q=${encoded}&format=rss&cc=vn`,
+      `https://news.yahoo.com/rss/search?p=${encoded}`,
+      `https://news.google.com/rss/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`,
+      `https://news.google.com/rss/search?q=${encoded}&hl=vi&gl=VN&ceid=VN:vi`
     ];
     const out: DiscoveryResult[] = [];
     const seen = new Set<string>();
-    for (const feedUrl of templates) {
+    const batches = await Promise.all(templates.map(async (feedUrl) => {
       try {
         const xml = await fetchText(feedUrl, {
           headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" }
         });
-        for (const item of parseRssOrAtom(xml, feedUrl)) {
-          const resolved = resolvePublicNewsUrl(item.url);
-          if (!resolved) continue;
-          const key = resolved.toLowerCase();
-          if (seen.has(key)) continue;
-          seen.add(key);
-          // Prefer publisher URLs — skip Google News interstitial pages that do not redirect.
-          if (/^https?:\/\/news\.google\.com\//i.test(resolved)) continue;
-          const parsed = toResult({
-            source: "news",
-            url: resolved,
-            title: item.title,
-            snippet: item.snippet,
-            publishedAt: item.publishedAt,
-            metadata: { ...(item.metadata ?? {}), provider: "public-news-rss", feedUrl }
-          });
-          if (!parsed) continue;
-          out.push(parsed);
-          if (out.length >= input.limit) return out;
-        }
+        return { feedUrl, items: parseRssOrAtom(xml, feedUrl) };
       } catch {
-        // Skip failing feeds.
+        return { feedUrl, items: [] as DiscoveryResult[] };
+      }
+    }));
+    for (const { feedUrl, items } of batches) {
+      for (const item of items) {
+        const resolved = resolvePublicNewsUrl(item.url);
+        if (!resolved) continue;
+        const key = resolved.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        // Prefer publisher URLs — skip Google News interstitial pages that do not redirect.
+        if (/^https?:\/\/news\.google\.com\//i.test(resolved)) continue;
+        const parsed = toResult({
+          source: "news",
+          url: resolved,
+          title: item.title,
+          snippet: item.snippet,
+          publishedAt: item.publishedAt,
+          metadata: { ...(item.metadata ?? {}), provider: "public-news-rss", feedUrl }
+        });
+        if (!parsed) continue;
+        out.push(parsed);
+        if (out.length >= input.limit) return out;
       }
     }
     return out;
   }
+}
+
+/** High-yield Hacker News discovery via Algolia public API (no key). */
+export class HackerNewsAlgoliaDiscoveryProvider implements DiscoveryProvider {
+  readonly id = "hn-algolia";
+  readonly source: SourceType = "web";
+  readonly availability: SourceAvailability = "public-web";
+  readonly capabilities: SourceCapabilities = {
+    keywordSearch: true,
+    booleanSearch: false,
+    historicalSearch: true,
+    comments: false,
+    engagement: true,
+    renderMayBeRequired: false
+  };
+
+  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
+    const q = simplifyPublicSearchQuery(input.query) || input.query.trim();
+    if (!q) return [];
+    const url = new URL("https://hn.algolia.com/api/v1/search_by_date");
+    url.searchParams.set("query", q);
+    url.searchParams.set("tags", "story");
+    url.searchParams.set("hitsPerPage", String(Math.min(50, Math.max(1, input.limit))));
+    const response = await fetch(url, {
+      headers: { accept: "application/json", "user-agent": DISCOVERY_USER_AGENT },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) throw new Error(`hn_algolia_http_${response.status}`);
+    const data = await response.json() as {
+      hits?: Array<{
+        objectID?: string;
+        title?: string;
+        url?: string | null;
+        author?: string;
+        created_at?: string;
+        story_text?: string | null;
+        points?: number;
+      }>;
+    };
+    const out: DiscoveryResult[] = [];
+    for (const hit of data.hits ?? []) {
+      const external = typeof hit.url === "string" && hit.url.trim() ? hit.url.trim() : null;
+      const fallback = hit.objectID ? `https://news.ycombinator.com/item?id=${hit.objectID}` : null;
+      const candidateUrl = external ?? fallback;
+      if (!candidateUrl) continue;
+      const parsed = toResult({
+        source: "web",
+        url: candidateUrl,
+        nativeId: hit.objectID,
+        title: hit.title,
+        snippet: typeof hit.story_text === "string" ? hit.story_text : undefined,
+        author: hit.author,
+        publishedAt: hit.created_at,
+        metadata: {
+          provider: "hn-algolia",
+          points: hit.points,
+          hnItem: hit.objectID ? `https://news.ycombinator.com/item?id=${hit.objectID}` : undefined
+        }
+      });
+      if (!parsed) continue;
+      out.push(parsed);
+      if (out.length >= input.limit) break;
+    }
+    return out;
+  }
+}
+
+/** Tag/topic feeds on DEV.to + Medium derived from the primary keyword. */
+export class PublicTagFeedDiscoveryProvider implements DiscoveryProvider {
+  readonly id = "public-tag-feeds";
+  readonly source: SourceType = "rss";
+  readonly availability: SourceAvailability = "public-web";
+  readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.rss.capabilities;
+
+  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
+    const tags = publicFeedTagsFromQuery(input.query);
+    if (!tags.length) return [];
+    const templates = tags.flatMap((tag) => [
+      `https://dev.to/feed/tag/${encodeURIComponent(tag)}`,
+      `https://medium.com/feed/tag/${encodeURIComponent(tag)}`
+    ]);
+    const out: DiscoveryResult[] = [];
+    const seen = new Set<string>();
+    const batches = await Promise.all(templates.map(async (feedUrl) => {
+      try {
+        const xml = await fetchText(feedUrl, {
+          headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" }
+        });
+        return parseRssOrAtom(xml, feedUrl);
+      } catch {
+        return [] as DiscoveryResult[];
+      }
+    }));
+    for (const items of batches) {
+      for (const item of items) {
+        const haystack = `${item.title ?? ""} ${item.snippet ?? ""}`;
+        if (!evaluateBooleanAst(input.ast, haystack)) continue;
+        const key = item.url.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          ...item,
+          metadata: { ...(item.metadata ?? {}), provider: "public-tag-feeds" }
+        });
+        if (out.length >= input.limit) return out;
+      }
+    }
+    return out;
+  }
+}
+
+/** Map Boolean queries to safe public tag slugs (alphanumeric + hyphen). */
+export function publicFeedTagsFromQuery(raw: string): string[] {
+  const phrases = [...raw.matchAll(/"([^"]{2,80})"/g)]
+    .map((match) => match[1]!.trim().toLowerCase())
+    .map((phrase) => phrase.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter((tag) => tag.length >= 3 && tag.length <= 40);
+  const remainder = raw
+    .replace(/"([^"]{2,80})"/g, " ")
+    .replace(/[()]/g, " ")
+    .replace(/\b(OR|AND|NOT)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const bare = remainder
+    .split(" ")
+    .map((token) => token.trim().toLowerCase())
+    .map((token) => token.replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, ""))
+    .filter((token) => token.length >= 2 && token.length <= 40);
+  return [...new Set([...phrases, ...bare])].slice(0, 3);
 }
 
 /** Prefer publisher URLs when feeds wrap clicks (e.g. Bing News apiclick). */
@@ -453,37 +592,40 @@ export class PublicRedditRssDiscoveryProvider implements DiscoveryProvider {
     const q = simplifyPublicSearchQuery(input.query);
     if (!q) return [];
     const templates = [
-      `https://www.reddit.com/search.rss?q=${encodeURIComponent(q)}&sort=new&limit=25`,
+      `https://www.reddit.com/search.rss?q=${encodeURIComponent(q)}&sort=new&type=link&limit=25`,
       `https://old.reddit.com/search.rss?q=${encodeURIComponent(q)}&sort=new&limit=25`
     ];
     const out: DiscoveryResult[] = [];
     const seen = new Set<string>();
-    for (const feedUrl of templates) {
+    const batches = await Promise.all(templates.map(async (feedUrl) => {
       try {
         const xml = await fetchText(feedUrl, {
           headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" }
         });
-        for (const item of parseRssOrAtom(xml, feedUrl)) {
-          const url = resolveRedditPublicUrl(item.url);
-          if (!url) continue;
-          const key = url.toLowerCase();
-          if (seen.has(key)) continue;
-          seen.add(key);
-          const parsed = toResult({
-            source: "reddit",
-            url,
-            title: item.title,
-            snippet: item.snippet,
-            author: item.author,
-            publishedAt: item.publishedAt,
-            metadata: { ...(item.metadata ?? {}), provider: "public-reddit-rss", feedUrl }
-          });
-          if (!parsed) continue;
-          out.push(parsed);
-          if (out.length >= input.limit) return out;
-        }
+        return { feedUrl, items: parseRssOrAtom(xml, feedUrl) };
       } catch {
-        // Skip failing Reddit endpoints; OAuth provider remains available when configured.
+        return { feedUrl, items: [] as ReturnType<typeof parseRssOrAtom> };
+      }
+    }));
+    for (const { feedUrl, items } of batches) {
+      for (const item of items) {
+        const url = resolveRedditPublicUrl(item.url);
+        if (!url) continue;
+        const key = url.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const parsed = toResult({
+          source: "reddit",
+          url,
+          title: item.title,
+          snippet: item.snippet,
+          author: item.author,
+          publishedAt: item.publishedAt,
+          metadata: { ...(item.metadata ?? {}), provider: "public-reddit-rss", feedUrl }
+        });
+        if (!parsed) continue;
+        out.push(parsed);
+        if (out.length >= input.limit) return out;
       }
     }
     return out;
@@ -759,7 +901,9 @@ export function createFederatedDiscoveryProviders(env: {
   const providers: DiscoveryProvider[] = [
     // Always-on free discovery so production collects without paid API keys.
     new PublicNewsRssDiscoveryProvider(),
-    new PublicRedditRssDiscoveryProvider()
+    new HackerNewsAlgoliaDiscoveryProvider(),
+    new PublicRedditRssDiscoveryProvider(),
+    new PublicTagFeedDiscoveryProvider()
   ];
   if (env.BRAVE_SEARCH_API_KEY) {
     providers.push(new BraveWebDiscoveryProvider(env.BRAVE_SEARCH_API_KEY));

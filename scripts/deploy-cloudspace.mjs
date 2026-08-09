@@ -9,7 +9,7 @@
  * Optional:
  *   DEPLOY_ENV=production|staging|dev  (default production)
  *   SKIP_ROUTES=1                      (skip DNS/route changes)
- *   SUPER_ADMIN_EMAILS=sycu.lee@gmail.com   (defaults to sycu.lee@gmail.com if unset)
+ *   SUPER_ADMIN_EMAILS=sycu.lee@gmail.com,collector@...  (defaults include owner + live collector)
  *   BRAVE_SEARCH_API_KEY=...
  *   TELEGRAM_BOT_TOKEN=...
  *   BILLING_WEBHOOK_SECRET=...
@@ -183,6 +183,16 @@ async function putSecret(configPath, name, value) {
   if (result.status !== 0) die(`secret put ${name} failed`);
 }
 
+/** Always keep owner + live collector on the allowlist; merge any extra env emails. */
+function resolveSuperAdminEmails(raw) {
+  const required = ["sycu.lee@gmail.com", "collector@pulsewatch.orangecloud.vn"];
+  const extra = String(raw || "")
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean);
+  return [...new Set([...required, ...extra])].join(",");
+}
+
 async function main() {
   if (!TOKEN) {
     die(
@@ -263,7 +273,7 @@ async function main() {
   await putSecret(
     "apps/api-worker/wrangler.jsonc",
     "SUPER_ADMIN_EMAILS",
-    (process.env.SUPER_ADMIN_EMAILS || "").trim() || "sycu.lee@gmail.com"
+    resolveSuperAdminEmails(process.env.SUPER_ADMIN_EMAILS)
   );
   await putSecret("apps/api-worker/wrangler.jsonc", "BILLING_WEBHOOK_SECRET", process.env.BILLING_WEBHOOK_SECRET);
   await putSecret("workers/discovery/wrangler.jsonc", "BRAVE_SEARCH_API_KEY", process.env.BRAVE_SEARCH_API_KEY);

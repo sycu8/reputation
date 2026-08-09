@@ -22,7 +22,7 @@ The exact limits are product defaults, not hard-coded pricing. Store plan defini
 
 ## 3. Super Admin
 
-Production operator allowlist is configured via Worker secret `SUPER_ADMIN_EMAILS` (comma-separated). Deploy defaults to `sycu.lee@gmail.com` when the secret/env is unset.
+Production operator allowlist is configured via Worker secret `SUPER_ADMIN_EMAILS` (comma-separated). Deploy defaults to `sycu.lee@gmail.com,collector@pulsewatch.orangecloud.vn` when the secret/env is unset (owner + live collection ops account).
 
 Matching emails receive role `super_admin` at signup. Existing accounts are promoted/demoted on authenticated requests so allowlist changes apply without re-signup. `super_admin` is never assignable through a public request body.
 

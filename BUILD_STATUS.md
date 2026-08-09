@@ -62,11 +62,12 @@ Auto-bootstrapped after each production deploy (`npm run bootstrap:collection`):
 |---|---|
 | Email | `collector@pulsewatch.orangecloud.vn` |
 | Password | `PulseWatch-Collect-2026!` |
+| Role | `super_admin` (ops allowlist — unlocks more monitors + ~120s scans) |
 | App | https://reputa-dashboard-production.sycu-lee.workers.dev/app/ |
-| Super admin allowlist | `sycu.lee@gmail.com` (sign in with that account’s existing password) |
-| Mentions (sample) | Cloudflare ~17+, AI Agents ~7+; OrangeCloud niche brand may stay low until wider crawl/Brave |
+| Monitors | Cloudflare, OrangeCloud, AI Agents, Cybersecurity, Vietnam Tech |
+| Super admin allowlist | `sycu.lee@gmail.com` + collector (always merged on deploy) |
 
-Discovery without paid keys: HN + Bing + Google News RSS, public Reddit search RSS, plus BBC / Guardian / TechCrunch / Ars / Verge / Wired / Cloudflare Blog / NYT Tech / security feeds / VNExpress / Thanh Niên / Tuổi Trẻ / VietnamNet / CafeF.
+Always-on free discovery: HN RSS + Algolia, Bing/Yahoo/Google News RSS, Reddit search RSS, DEV.to/Medium tag feeds, plus expanded static RSS (BBC/Guardian/TechCrunch/Ars/Verge/Wired/CF Blog/security/VN…).
 
 Optional upgrade: set GitHub Actions secret `BRAVE_SEARCH_API_KEY` (Brave dashboard requires a card).
 
