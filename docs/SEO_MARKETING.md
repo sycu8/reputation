@@ -26,9 +26,11 @@ Product app: `/app/` (`apps/dashboard/public/app/index.html`) — sign-in for wo
 
 ## Plan naming (public)
 
-- PulseWatch Starter — https://buy.stripe.com/8x200j4O2674e5U8aUcZa02
-- PulseWatch Pro — https://buy.stripe.com/6oU7sLgwKgLI0f4cracZa03
-- PulseWatch Business — https://buy.stripe.com/8x29ATfsGfHE1j8dvecZa04
+- PulseWatch Starter
+- PulseWatch Pro
+- PulseWatch Business
+
+Stripe Payment Links are used only inside the signed-in app (Settings → Billing), not on the marketing homepage.
 
 Never index or promote Super Admin as a customer plan.
 

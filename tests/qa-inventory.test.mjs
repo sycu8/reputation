@@ -333,6 +333,7 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /PulseWatch Pro/);
   assert.match(html, /PulseWatch Business/);
   assert.match(html, /Pay with Stripe/);
+  assert.match(html, /Upgrade with Stripe/);
   assert.match(html, /brand-mark\.svg/);
   assert.doesNotMatch(html, /OrangeCloud Reputation/);
   assert.doesNotMatch(html, /option value="starter">Starter</);
@@ -351,16 +352,18 @@ test("marketing landing page uses PulseWatch brand guide surfaces", async () => 
   assert.match(html, /PulseWatch Starter/);
   assert.match(html, /PulseWatch Pro/);
   assert.match(html, /PulseWatch Business/);
-  assert.match(html, /buy\.stripe\.com\/8x200j4O2674e5U8aUcZa02/);
-  assert.match(html, /buy\.stripe\.com\/6oU7sLgwKgLI0f4cracZa03/);
-  assert.match(html, /buy\.stripe\.com\/8x29ATfsGfHE1j8dvecZa04/);
+  assert.match(html, /href="\/app\/#signup"/);
+  assert.match(html, /Open PulseWatch/);
+  assert.match(html, /Create account/);
   assert.match(html, /href="\/app\/"/);
-  assert.match(html, /No account needed to browse this page/);
+  assert.match(html, /product showcase/);
   assert.match(html, /og:title/);
   assert.match(css, /#F97316/);
   assert.match(css, /#0B1220/);
   assert.match(js, /IntersectionObserver/);
   assert.doesNotMatch(html, /OrangeCloud Reputation/);
+  assert.doesNotMatch(html, /buy\.stripe\.com/);
+  assert.doesNotMatch(html, /Subscribe with Stripe/);
   assert.doesNotMatch(html, /id="signupForm"|id="loginForm"|\/v1\/auth\//);
 });
 
