@@ -1216,26 +1216,45 @@ function renderSignedOut() {
   setView(state.view === "settings" ? "settings" : "overview");
 }
 
-async function renderSignedIn() {
+async function renderSignedIn(preferredView = "overview") {
   document.body.classList.remove("is-signed-out");
-  $("#logoutBtn").classList.remove("hidden");
+  $("#logoutBtn")?.classList.remove("hidden");
   $("#sessionState").textContent = state.user?.email || "Signed in";
   $("#workspaceName").textContent = state.workspace?.workspaceName || "Workspace";
   $("#workspaceRole").textContent = state.workspace?.role || "—";
-  await refreshWorkspaceDetails();
   updateRoleChrome();
-  renderMonitors();
-  await refreshSourceHealth();
-  renderSourceGrid($("#sourceHealthList"), state.sourceHealth);
-  await loadOverviewStats();
-  setView(state.view);
-  if (state.view === "mentions") await loadMentions();
-  if (state.view === "alerts") await loadAlerts();
-  if (state.view === "insights") await loadInsights();
-  if (state.view === "reports") {
-    renderReports();
+  renderWorkspaceSwitcher();
+  // Switch chrome immediately so login never leaves the auth form on screen.
+  const view = preferredView || "overview";
+  setView(view);
+  try {
+    await refreshWorkspaceDetails();
+    $("#workspaceName").textContent = state.workspace?.workspaceName || "Workspace";
+    $("#workspaceRole").textContent = state.workspace?.role || "—";
+    updateRoleChrome();
+    renderMonitors();
+    await refreshSourceHealth();
+    renderSourceGrid($("#sourceHealthList"), state.sourceHealth);
+    if (view === "overview") await loadOverviewStats();
+    if (view === "mentions") await loadMentions();
+    if (view === "alerts") await loadAlerts();
+    if (view === "insights") await loadInsights();
+    if (view === "reports") await loadReports();
+    if (view === "admin") await loadAdmin();
+  } catch (error) {
+    notify(error.message || "workspace_load_failed");
   }
-  if (state.view === "admin") await loadAdmin();
+}
+
+function clearAuthHash() {
+  if (!location.hash) return;
+  history.replaceState(null, "", `${location.pathname}${location.search}`);
+}
+
+async function enterAppAfterAuth(message) {
+  clearAuthHash();
+  await goToView("overview");
+  notify(message);
 }
 
 function pickDefaultWorkspace(memberships) {
@@ -1260,7 +1279,8 @@ function renderWorkspaceSwitcher() {
   wrap.classList.toggle("hidden", !state.user || state.workspaces.length < 2);
 }
 
-async function bootstrap() {
+async function bootstrap(options = {}) {
+  const clearOnFailure = options.clearOnFailure !== false;
   try {
     const me = await api("/v1/me");
     state.user = me.user;
@@ -1269,9 +1289,9 @@ async function bootstrap() {
     state.workspace = pickDefaultWorkspace(state.workspaces);
     renderWorkspaceSwitcher();
     await refreshMonitors();
-    await renderSignedIn();
+    await renderSignedIn(options.view || "overview");
   } catch (error) {
-    renderSignedOut();
+    if (clearOnFailure) renderSignedOut();
     throw error;
   }
 }
@@ -1279,24 +1299,35 @@ async function bootstrap() {
 $("#signupForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
+  const submit = event.currentTarget.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = true;
   try {
     rememberSession(await api("/v1/auth/signup", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
-    await bootstrap();
-    notify("Account created");
+    await bootstrap({ clearOnFailure: false, view: "overview" });
+    await enterAppAfterAuth("Account created");
   } catch (error) {
+    if (!state.user) renderSignedOut();
     notify(error.message || "signup_failed");
+  } finally {
+    if (submit) submit.disabled = false;
   }
 });
 
 $("#loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
+  const submit = event.currentTarget.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = true;
   try {
-    rememberSession(await api("/v1/auth/login", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
-    await bootstrap();
-    notify("Signed in");
+    const session = rememberSession(await api("/v1/auth/login", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
+    if (session?.user) state.user = session.user;
+    await bootstrap({ clearOnFailure: false, view: "overview" });
+    await enterAppAfterAuth("Signed in");
   } catch (error) {
+    if (!state.user) renderSignedOut();
     notify(error.message || "login_failed");
+  } finally {
+    if (submit) submit.disabled = false;
   }
 });
 

@@ -38,9 +38,12 @@
       <a href="#pricing">Pricing</a>
       <a href="/docs/index.html">Resources</a>
     </nav>
-    <div class="nav-actions">
-      <a class="text-link" href="/app/">Sign in</a>
-      <a class="btn btn-primary" href="/app/#signup">Open app</a>
+    <div class="nav-actions" data-auth-nav>
+      <a class="text-link" data-auth-guest href="/app/">Sign in</a>
+      <a class="btn btn-primary" data-auth-guest href="/app/#signup">Open app</a>
+      <span class="nav-account hidden" data-auth-user hidden></span>
+      <a class="text-link hidden" data-auth-user href="/app/" hidden>Dashboard</a>
+      <a class="btn btn-primary hidden" data-auth-user href="/app/" hidden>Open workspace</a>
     </div>
     <button type="button" class="nav-toggle" id="navToggle" aria-expanded="false" aria-controls="mobileNav" aria-label="Open menu">
       <span></span><span></span>
@@ -52,8 +55,10 @@
     <a href="#solutions">Solutions</a>
     <a href="#pricing">Pricing</a>
     <a href="/docs/index.html">Resources</a>
-    <a href="/app/">Sign in</a>
-    <a class="btn btn-primary" href="/app/#signup">Open app</a>
+    <a data-auth-guest href="/app/">Sign in</a>
+    <a class="btn btn-primary" data-auth-guest href="/app/#signup">Open app</a>
+    <a class="hidden" data-auth-user href="/app/" hidden>Dashboard</a>
+    <a class="btn btn-primary hidden" data-auth-user href="/app/" hidden>Open workspace</a>
   </div>
 
   <main>

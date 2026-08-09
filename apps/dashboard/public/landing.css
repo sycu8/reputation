@@ -84,6 +84,15 @@ button { font: inherit; color: inherit; cursor: pointer; background: none; borde
 }
 .nav-links a:hover, .text-link:hover { color: var(--cloud); }
 .nav-actions { display: flex; align-items: center; gap: 14px; }
+.nav-account {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted, #94a3b8);
+  font-size: 0.9rem;
+}
+.hidden { display: none !important; }
 .nav-toggle {
   display: none;
   width: 42px;
