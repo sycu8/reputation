@@ -353,7 +353,23 @@ test("D-shape: monitor directory fields usable by dashboard selects", async () =
     const id = monitor.monitor_id || monitor.id;
     assert.ok(id, "monitor id missing for dashboard select");
     assert.ok(monitor.name);
+    assert.equal(typeof monitor.profile, "object");
   }
+});
+
+test("monitor profile normalization keeps public http(s) links", async () => {
+  const { normalizeMonitorProfile, monitorProfileUrls } = await import("../packages/types/src/index.ts");
+  const profile = normalizeMonitorProfile({
+    website: "acme.example",
+    facebook: "https://www.facebook.com/acme",
+    x: "not a url",
+    notes: "  Official pages  "
+  });
+  assert.equal(profile.website, "https://acme.example/");
+  assert.equal(profile.facebook, "https://www.facebook.com/acme");
+  assert.equal(profile.x, undefined);
+  assert.equal(profile.notes, "Official pages");
+  assert.deepEqual(monitorProfileUrls(profile).map((item) => item.key), ["website", "facebook"]);
 });
 
 test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", async () => {
@@ -373,6 +389,12 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /id="mentionFrom"/);
   assert.match(html, /id="mentionTo"/);
   assert.match(html, /Hear what the market is saying about you/);
+  assert.match(html, /Profile pages to collect/);
+  assert.match(html, /name="website"/);
+  assert.match(html, /name="facebook"/);
+  assert.match(html, /name="linkedin"/);
+  assert.match(js, /monitorProfileLinks/);
+  assert.match(js, /profile\s*[,}]/);
   assert.match(html, /Print \/ export report/);
   assert.match(js, /mentionTagsHtml/);
   assert.match(js, /sentiment-negative/);

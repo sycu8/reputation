@@ -82,7 +82,7 @@ const titles = {
   mentions: ["Mentions", "Filter by time, channel, and sentiment. Inspect every story clearly."],
   insights: ["Insights", "Brand sentiment, audience mix, and competitor listening side-by-side."],
   alerts: ["Alerts", "Open the source story for every alert. Filter by date and severity score."],
-  monitors: ["Monitors", "Manage brand and competitor keyword / Boolean monitors."],
+  monitors: ["Monitors", "Manage brand and competitor monitors, including official website and social pages."],
   reports: ["Reports", "Presentation-ready listening rollups for stakeholders."],
   settings: ["Settings", "API endpoint and billing checkout."],
   "source-health": ["Source health", "Availability matrix for discovery sources."],
@@ -646,19 +646,53 @@ async function loadReports() {
   renderReports();
 }
 
+function monitorProfileLinks(profile) {
+  if (!profile || typeof profile !== "object") return [];
+  const labels = {
+    website: "Website",
+    facebook: "Facebook",
+    x: "X",
+    linkedin: "LinkedIn",
+    youtube: "YouTube",
+    tiktok: "TikTok",
+    instagram: "Instagram",
+    reddit: "Reddit"
+  };
+  return Object.entries(labels)
+    .filter(([key]) => typeof profile[key] === "string" && profile[key])
+    .map(([key, label]) => ({ key, label, url: profile[key] }));
+}
+
 function renderMonitors() {
   const list = $("#monitorList");
   list.innerHTML = "";
   if (!state.monitors.length) {
     list.innerHTML = canManageMonitors()
-      ? '<div class="empty">No monitors yet. Create the first keyword or Boolean monitor.</div>'
+      ? '<div class="empty">No monitors yet. Create one with keywords plus optional website / social pages.</div>'
       : '<div class="empty">No monitors in this workspace yet.</div>';
     return;
   }
   for (const monitor of state.monitors) {
     const row = document.createElement("div");
     row.className = "monitor-row";
-    row.innerHTML = `<div><strong>${escapeHtml(monitor.name || "Unnamed")}</strong><small>${escapeHtml(monitor.type || "monitor")} · ${escapeHtml(monitor.status || "unknown")}</small></div><span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>`;
+    const links = monitorProfileLinks(monitor.profile);
+    const linkHtml = links.length
+      ? `<div class="monitor-profile-links">${links.map((item) =>
+        `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.label)}</a>`
+      ).join("")}</div>`
+      : `<div class="monitor-profile-links muted">No website / social pages yet</div>`;
+    const notes = typeof monitor.profile?.notes === "string" && monitor.profile.notes
+      ? `<p class="monitor-notes">${escapeHtml(monitor.profile.notes)}</p>`
+      : "";
+    row.innerHTML = `
+      <div>
+        <strong>${escapeHtml(monitor.name || "Unnamed")}</strong>
+        <small>${escapeHtml(monitor.type || "monitor")} · ${escapeHtml(monitor.status || "unknown")}</small>
+        ${linkHtml}
+        ${notes}
+      </div>
+      <span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>
+    `;
     list.appendChild(row);
   }
 }
@@ -1020,9 +1054,20 @@ $("#monitorForm").addEventListener("submit", async (event) => {
     return;
   }
   try {
+    const profile = {
+      website: form.website || "",
+      facebook: form.facebook || "",
+      x: form.x || "",
+      linkedin: form.linkedin || "",
+      youtube: form.youtube || "",
+      tiktok: form.tiktok || "",
+      instagram: form.instagram || "",
+      reddit: form.reddit || "",
+      notes: form.notes || ""
+    };
     const created = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors`, {
       method: "POST",
-      body: JSON.stringify({ name: form.name, type: form.type })
+      body: JSON.stringify({ name: form.name, type: form.type, profile })
     });
     const monitorId = created.monitor?.id;
     if (!monitorId) throw new Error("monitor_create_incomplete");

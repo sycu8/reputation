@@ -326,7 +326,47 @@ dialog {
   box-shadow: 0 24px 80px rgba(11, 18, 32, .28); background: var(--surface); color: var(--ink);
 }
 dialog::backdrop { background: rgba(11, 18, 32, .55); }
-dialog form { padding: 24px; }
+dialog form { padding: 24px; max-height: min(85vh, 900px); overflow: auto; }
+.profile-fields {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-soft);
+}
+.profile-fields .eyebrow { margin-bottom: 0; }
+.monitor-profile-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.monitor-profile-links a {
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.monitor-profile-links a:hover { text-decoration: underline; }
+.monitor-profile-links.muted { color: var(--muted); font-size: 12px; }
+.monitor-notes {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--ink);
+  outline: none;
+  resize: vertical;
+  font: inherit;
+}
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .feedback-block { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
 .feedback-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }

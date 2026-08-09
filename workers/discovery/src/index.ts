@@ -8,6 +8,7 @@ import {
   type DiscoveryResult,
   type SourceType
 } from "../../../packages/source-adapters/src/index.ts";
+import { monitorProfileUrls, type MonitorProfile } from "../../../packages/types/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 
 interface DiscoveryPayload {
@@ -56,6 +57,32 @@ async function getQueries(env: Env, tenantId: string, monitorId: string): Promis
   if (!response.ok) throw new Error("monitor_queries_unavailable");
   const data = await response.json() as { queries: Array<{ id: string; rawQuery: string; enabled: boolean }> };
   return data.queries.filter((query) => query.enabled);
+}
+
+async function getMonitorProfile(env: Env, tenantId: string, monitorId: string): Promise<MonitorProfile> {
+  try {
+    const response = await monitorStub(env, tenantId, monitorId).fetch("https://do.internal/internal/monitor");
+    if (!response.ok) return {};
+    const data = await response.json() as { monitor?: { profile?: MonitorProfile } };
+    return data.monitor?.profile ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function profileSourceFor(key: string): SourceType {
+  if (key === "facebook" || key === "tiktok" || key === "linkedin" || key === "youtube" || key === "reddit" || key === "x") return key;
+  return "web";
+}
+
+function profileCandidates(profile: MonitorProfile): DiscoveryResult[] {
+  return monitorProfileUrls(profile).map(({ key, url }) => ({
+    source: profileSourceFor(key),
+    url,
+    title: `Official ${key}`,
+    snippet: `Configured monitor profile page (${key})`,
+    metadata: { provider: "monitor-profile", profileKey: key }
+  }));
 }
 
 function buildProviders(env: Env): DiscoveryProvider[] {
@@ -110,9 +137,11 @@ async function processMessage(message: Message<JobEnvelope<DiscoveryPayload>>, e
   const queries = await getQueries(env, job.tenantId, job.monitorId);
   const providers = buildProviders(env);
   const health = sourceHealthSnapshot(providers);
+  const profile = await getMonitorProfile(env, job.tenantId, job.monitorId);
   let candidateCount = 0;
+  const profileSeeds = profileCandidates(profile);
   for (const query of queries) {
-    const candidates = await discoverAll(query.rawQuery, providers);
+    const candidates = dedupeByUrl([...profileSeeds, ...await discoverAll(query.rawQuery, providers)]);
     candidateCount += candidates.length;
     for (const candidate of candidates.slice(0, 80)) {
       const discoveryKey = await idempotencyKey([job.monitorId, candidate.source, candidate.url]);
