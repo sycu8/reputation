@@ -85,6 +85,20 @@ function looksLikeCloudflareChallenge(raw) {
   return /just a moment|cf-chl|challenge-platform|cloudflare/i.test(raw || "");
 }
 
+function requestMethod(options = {}) {
+  return String(options.method || "GET").toUpperCase();
+}
+
+function isSafeApiMethod(method) {
+  return method === "GET" || method === "HEAD";
+}
+
+function switchAwayFromChallengedApiBase() {
+  if (isLocalDashboardHost() || state.apiBase === PRODUCTION_API_BASE) return false;
+  persistApiBase(PRODUCTION_API_BASE, { notifyUser: true });
+  return true;
+}
+
 const FEEDBACK_ACTIONS = [
   { action: "relevant", label: "Relevant" },
   { action: "not_relevant", label: "Not relevant" },
@@ -527,6 +541,14 @@ function setSessionToken(token) {
   }
 }
 
+function getSessionEmail() {
+  try {
+    return sessionStorage.getItem(SESSION_EMAIL_KEY) || localStorage.getItem(SESSION_EMAIL_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
 function setSessionEmail(email) {
   try {
     if (email) {
@@ -568,6 +590,7 @@ async function api(path, options = {}, allowChallengeRetry = true) {
   if (token && !headers.authorization && !headers.Authorization) {
     headers.authorization = `Bearer ${token}`;
   }
+  const method = requestMethod(options);
   let response;
   try {
     response = await fetch(`${state.apiBase}${path}`, {
@@ -578,11 +601,15 @@ async function api(path, options = {}, allowChallengeRetry = true) {
   } catch {
     if (
       allowChallengeRetry
+      && isSafeApiMethod(method)
       && !isLocalDashboardHost()
       && isChallengedCustomApiBase(state.apiBase)
+      && switchAwayFromChallengedApiBase()
     ) {
-      persistApiBase(PRODUCTION_API_BASE, { notifyUser: true });
       return api(path, options, false);
+    }
+    if (allowChallengeRetry && !isSafeApiMethod(method) && switchAwayFromChallengedApiBase()) {
+      throw new Error("API base switched after network failure. Retry the action once — mutating requests are not auto-replayed.");
     }
     throw new Error(`Failed to reach API at ${state.apiBase}. Check Settings → API base URL.`);
   }
@@ -594,11 +621,13 @@ async function api(path, options = {}, allowChallengeRetry = true) {
     if (looksLikeCloudflareChallenge(raw)) {
       if (
         allowChallengeRetry
-        && !isLocalDashboardHost()
-        && state.apiBase !== PRODUCTION_API_BASE
+        && isSafeApiMethod(method)
+        && switchAwayFromChallengedApiBase()
       ) {
-        persistApiBase(PRODUCTION_API_BASE, { notifyUser: true });
         return api(path, options, false);
+      }
+      if (allowChallengeRetry && !isSafeApiMethod(method) && switchAwayFromChallengedApiBase()) {
+        throw new Error("Cloudflare challenged the API host. Switched to workers.dev — click Create again (POST is not auto-retried to avoid duplicates).");
       }
       throw new Error(
         `API blocked by Cloudflare challenge. Using ${PRODUCTION_API_BASE} (Settings → API base URL), then retry.`
@@ -712,8 +741,28 @@ function fillMonitorSelects() {
 async function refreshMonitors() {
   if (!state.workspace) return;
   const data = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors`);
-  state.monitors = data.monitors || [];
+  const seen = new Set();
+  state.monitors = (data.monitors || []).filter((monitor) => {
+    const id = monitor.monitor_id || monitor.id;
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
   fillMonitorSelects();
+}
+
+async function deleteMonitorById(monitorId) {
+  if (!state.workspace || !monitorId) return;
+  if (!canManageMonitors()) {
+    notify("forbidden");
+    return;
+  }
+  const label = state.monitors.find((item) => (item.monitor_id || item.id) === monitorId)?.name || monitorId;
+  if (!window.confirm(`Delete monitor “${label}”? This cannot be undone.`)) return;
+  await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}`, { method: "DELETE" });
+  await refreshMonitors();
+  renderMonitors();
+  notify("Monitor deleted");
 }
 
 async function refreshSourceHealth() {
@@ -1066,6 +1115,7 @@ function renderMonitors() {
   for (const monitor of state.monitors) {
     const row = document.createElement("div");
     row.className = "monitor-row";
+    const monitorId = monitor.monitor_id || monitor.id || "";
     const links = monitorProfileLinks(monitor.profile);
     const linkHtml = links.length
       ? `<div class="monitor-profile-links">${links.map((item) =>
@@ -1075,6 +1125,12 @@ function renderMonitors() {
     const notes = typeof monitor.profile?.notes === "string" && monitor.profile.notes
       ? `<p class="monitor-notes">${escapeHtml(monitor.profile.notes)}</p>`
       : "";
+    const actions = canManageMonitors()
+      ? `<div class="monitor-row-actions">
+          <span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>
+          <button type="button" class="ghost danger-btn" data-delete-monitor="${escapeHtml(monitorId)}">Delete</button>
+        </div>`
+      : `<span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>`;
     row.innerHTML = `
       <div>
         <strong>${escapeHtml(monitor.name || "Unnamed")}</strong>
@@ -1082,7 +1138,7 @@ function renderMonitors() {
         ${linkHtml}
         ${notes}
       </div>
-      <span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>
+      ${actions}
     `;
     list.appendChild(row);
   }
@@ -1528,10 +1584,16 @@ $("#monitorForm").addEventListener("submit", async (event) => {
     return;
   }
   const formEl = event.currentTarget;
+  const submit = formEl.querySelector('button[type="submit"]');
+  if (submit?.disabled) return;
   const form = Object.fromEntries(new FormData(formEl));
   if (!String(form.name || "").trim() || !String(form.query || "").trim() || !String(form.type || "").trim()) {
     notify("Name, type, and query are required");
     return;
+  }
+  if (submit) {
+    submit.disabled = true;
+    submit.classList.add("is-busy");
   }
   try {
     const profile = {
@@ -1558,10 +1620,26 @@ $("#monitorForm").addEventListener("submit", async (event) => {
     dialog.close();
     formEl.reset();
     await refreshMonitors();
-    await renderSignedIn();
+    renderMonitors();
     notify("Monitor created");
   } catch (error) {
     notify(error.message || "monitor_create_failed");
+  } finally {
+    if (submit) {
+      submit.disabled = false;
+      submit.classList.remove("is-busy");
+    }
+  }
+});
+
+$("#monitorList")?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-delete-monitor]");
+  if (!button) return;
+  event.preventDefault();
+  try {
+    await deleteMonitorById(button.getAttribute("data-delete-monitor"));
+  } catch (error) {
+    notify(error.message || "monitor_delete_failed");
   }
 });
 
@@ -1661,9 +1739,21 @@ document.addEventListener("click", (event) => {
 
 $("#apiForm").querySelector('[name="apiBase"]').value = state.apiBase;
 initTheme();
+
+// If a session token already exists, leave the auth form immediately on refresh.
+const bootToken = getSessionToken();
+if (bootToken) {
+  const cachedEmail = getSessionEmail();
+  state.user = { email: cachedEmail || "Signed in" };
+  document.body.classList.add("is-booting");
+  applySignedInChrome(cachedEmail);
+  setView(state.view || "overview");
+}
+
 bootstrap().catch(() => {
-  /* signed-out on first paint is normal */
+  /* signed-out on first paint is normal when no valid session */
 }).finally(() => {
+  document.body.classList.remove("is-booting");
   if (location.hash === "#signup") {
     $("#signupForm")?.scrollIntoView({ behavior: "smooth", block: "center" });
     $("#signupForm")?.querySelector('input[name="email"]')?.focus();

@@ -466,6 +466,13 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /looksLikeCloudflareChallenge/);
   assert.match(js, /persistApiBase/);
   assert.match(js, /isChallengedCustomApiBase/);
+  assert.match(js, /isSafeApiMethod/);
+  assert.match(js, /data-delete-monitor/);
+  assert.match(js, /deleteMonitorById/);
+  assert.match(js, /is-booting/);
+  assert.match(js, /Restoring session|getSessionEmail/);
+  assert.match(css, /is-booting/);
+  assert.match(css, /danger-btn/);
   assert.match(js, /pulsewatch-session/);
   assert.match(js, /Bearer/);
   assert.match(js, /rememberSession/);

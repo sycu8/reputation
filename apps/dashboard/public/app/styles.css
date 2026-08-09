@@ -372,6 +372,31 @@ html[data-theme="dark"] .avail.licensed-provider { background: rgba(34, 197, 94,
   display: grid; gap: 6px; padding: 14px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft);
 }
 .monitor-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.monitor-row-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.danger-btn {
+  color: #fecaca !important;
+  border-color: rgba(239, 68, 68, 0.35) !important;
+}
+.danger-btn:hover {
+  color: #fff !important;
+  background: rgba(239, 68, 68, 0.18) !important;
+  border-color: rgba(239, 68, 68, 0.55) !important;
+}
+body.is-booting #authPanel { display: none !important; }
+body.is-booting .content::before {
+  content: "Restoring session…";
+  display: block;
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  animation: riseIn 420ms ease;
+}
 .monitor-row strong, .list-item strong, .source-item strong { display: block; color: var(--ink); }
 .monitor-row small, .list-item small, .source-item small, .hint { color: var(--muted); }
 .list-item { cursor: pointer; transition: border-color 140ms ease, transform 140ms ease; text-align: left; width: 100%; background: var(--surface-list); }
