@@ -5,14 +5,15 @@ function isLocalDashboardHost() {
   return location.port === "8788" || host === "localhost" || host === "127.0.0.1";
 }
 
+/** Dedicated API worker — avoids custom-host /api Cloudflare challenges and route quirks. */
+const PRODUCTION_API_BASE = "https://reputa-api-production.sycu-lee.workers.dev";
+
 function resolveDefaultApiBase() {
-  const host = window.location.hostname || "127.0.0.1";
-  if (isLocalDashboardHost()) return `http://${host}:8787`;
-  if (host.endsWith(".workers.dev")) {
-    return "https://reputa-api-production.sycu-lee.workers.dev";
+  if (isLocalDashboardHost()) {
+    const host = window.location.hostname || "127.0.0.1";
+    return `http://${host}:8787`;
   }
-  // Same-origin Workers route on the custom hostname.
-  return `${location.origin}/api`;
+  return PRODUCTION_API_BASE;
 }
 
 function isUsableApiBase(value) {
@@ -20,7 +21,7 @@ function isUsableApiBase(value) {
     const url = new URL(value);
     if (location.protocol === "https:" && url.protocol === "http:") return false;
     if (!isLocalDashboardHost() && url.port === "8787") return false;
-    // Same-origin bases must use the /api Workers route prefix.
+    // Same-origin /api still works after path-prefix strip, but prefer dedicated API by default.
     if (url.hostname === location.hostname) {
       const path = url.pathname.replace(/\/$/, "");
       if (path !== "/api") return false;
@@ -35,7 +36,19 @@ function isUsableApiBase(value) {
 
 function defaultApiBase() {
   const stored = localStorage.getItem("apiBase");
-  if (stored && isUsableApiBase(stored)) return stored.replace(/\/$/, "");
+  if (stored && isUsableApiBase(stored)) {
+    try {
+      const url = new URL(stored);
+      // Migrate custom-host /api bases to the dedicated API worker for reliability.
+      if (!isLocalDashboardHost() && url.pathname.replace(/\/$/, "") === "/api") {
+        localStorage.removeItem("apiBase");
+        return PRODUCTION_API_BASE;
+      }
+    } catch {
+      /* fall through */
+    }
+    return stored.replace(/\/$/, "");
+  }
   if (stored) localStorage.removeItem("apiBase");
   return resolveDefaultApiBase();
 }
@@ -134,8 +147,11 @@ function setSessionToken(token) {
 
 function rememberSession(data) {
   const token = data?.session?.token;
-  if (typeof token === "string" && token.split(".").length >= 3) setSessionToken(token);
-  return data;
+  if (typeof token === "string" && token.split(".").length >= 3) {
+    setSessionToken(token);
+    return data;
+  }
+  throw new Error("missing_session_token");
 }
 
 async function api(path, options = {}) {
@@ -154,8 +170,26 @@ async function api(path, options = {}) {
   } catch {
     throw new Error(`Failed to reach API at ${state.apiBase}. Check Settings → API base URL.`);
   }
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  const raw = await response.text();
+  let data = {};
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch {
+    if (/just a moment|cf-chl|challenge-platform|cloudflare/i.test(raw)) {
+      throw new Error("API blocked by Cloudflare challenge. Set API base to the workers.dev API in Settings, then retry.");
+    }
+    throw new Error(`HTTP ${response.status}`);
+  }
+  if (!response.ok) {
+    const message = data.error || `HTTP ${response.status}`;
+    if (message === "authentication_required" && !token && !path.startsWith("/v1/auth/")) {
+      throw new Error("authentication_required");
+    }
+    if (message === "authentication_required") {
+      throw new Error("authentication_required — sign in again (hard-refresh if this persists)");
+    }
+    throw new Error(message);
+  }
   return data;
 }
 
