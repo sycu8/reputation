@@ -238,5 +238,21 @@ test("D13 API docs page documents core v1 surfaces", async () => {
   assert.match(html, /billing\/checkout/);
   assert.match(html, /\/v1\/admin\/tenants/);
   assert.match(html, /Boolean query language/);
+  assert.match(html, /id="themeToggle"/);
   assert.match(css, /--accent/);
+  assert.match(css, /data-theme="light"/);
+});
+
+test("theme helper and dashboard expose light/dark mode toggle", async () => {
+  const { readFileSync } = await import("node:fs");
+  const theme = readFileSync(new URL("../apps/dashboard/public/theme.js", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../apps/dashboard/public/index.html", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../apps/dashboard/public/styles.css", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../apps/dashboard/public/app.js", import.meta.url), "utf8");
+  assert.match(theme, /pulsewatch-theme/);
+  assert.match(theme, /initTheme/);
+  assert.match(html, /id="themeToggle"/);
+  assert.match(html, /pulsewatch-theme/);
+  assert.match(css, /data-theme="dark"/);
+  assert.match(app, /initTheme/);
 });

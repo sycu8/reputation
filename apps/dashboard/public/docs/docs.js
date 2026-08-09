@@ -1,3 +1,5 @@
+import { initTheme } from "../theme.js";
+
 const toast = document.querySelector("#toast");
 const copyBtn = document.querySelector("#copyBaseBtn");
 
@@ -61,3 +63,4 @@ function syncToc() {
 
 window.addEventListener("scroll", syncToc, { passive: true });
 syncToc();
+initTheme();
