@@ -26,6 +26,11 @@ test("A1 health and A2 source-health", async () => {
   assert.ok(body.sources.length >= 9);
   const reddit = body.sources.find((item) => item.source === "reddit");
   assert.equal(reddit.availability, "contract-required");
+  for (const key of ["facebook_group", "telegram", "zalo", "discord"]) {
+    const closed = body.sources.find((item) => item.source === key);
+    assert.ok(closed, `missing closed-group source ${key}`);
+    assert.equal(closed.availability, "contract-required");
+  }
 });
 
 test("A3/A4/A5/A6 auth session lifecycle", async () => {
@@ -372,6 +377,13 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /params\.set\("minSeverity"/);
   assert.match(html, /id="mentionFrom"/);
   assert.match(html, /id="mentionTo"/);
+  assert.match(html, /facebook_group/);
+  assert.match(html, /Including closed groups/);
+  assert.match(html, /value="telegram"/);
+  assert.match(html, /value="zalo"/);
+  assert.match(html, /value="discord"/);
+  assert.match(js, /facebook_group/);
+  assert.match(js, /closed group — authorized access only/);
   assert.match(html, /Hear what the market is saying about you/);
   assert.match(html, /data-go-view="mentions"/);
   assert.match(html, /data-go-view="insights"/);

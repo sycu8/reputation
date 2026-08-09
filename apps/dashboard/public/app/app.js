@@ -85,7 +85,7 @@ const titles = {
   monitors: ["Monitors", "Manage brand and competitor keyword / Boolean monitors."],
   reports: ["Reports", "Presentation-ready listening rollups for stakeholders."],
   settings: ["Settings", "API endpoint, plan comparison, and Stripe upgrade."],
-  "source-health": ["Source health", "Availability matrix for discovery sources."],
+  "source-health": ["Source health", "Public and authorized channels — closed groups stay contract-required until access is granted."],
   admin: ["Admin", "Tenant registry and platform source health."]
 };
 
@@ -98,7 +98,11 @@ const CONTENT_TYPE_LABELS = {
   x: "X post",
   facebook: "Facebook",
   tiktok: "TikTok video",
-  linkedin: "LinkedIn"
+  linkedin: "LinkedIn",
+  facebook_group: "Facebook group",
+  telegram: "Telegram group",
+  zalo: "Zalo group",
+  discord: "Discord server"
 };
 
 const CHANNEL_LABELS = {
@@ -110,7 +114,11 @@ const CHANNEL_LABELS = {
   x: "X",
   facebook: "Facebook",
   tiktok: "TikTok",
-  linkedin: "LinkedIn"
+  linkedin: "LinkedIn",
+  facebook_group: "Facebook groups",
+  telegram: "Telegram",
+  zalo: "Zalo",
+  discord: "Discord"
 };
 
 const toast = $("#toast");
@@ -581,7 +589,11 @@ function renderSourceGrid(target, sources) {
   for (const source of sources) {
     const item = document.createElement("div");
     item.className = "source-item";
-    item.innerHTML = `<strong>${escapeHtml(source.source)}</strong><span class="avail ${escapeHtml(source.availability)}">${escapeHtml(source.availability)}</span><small>keyword ${source.capabilities?.keywordSearch ? "yes" : "no"} · boolean ${source.capabilities?.booleanSearch ? "yes" : "no"}</small>`;
+    const label = channelLabel(source.source);
+    const closedNote = ["facebook_group", "telegram", "zalo", "discord"].includes(String(source.source))
+      ? " · closed group — authorized access only"
+      : "";
+    item.innerHTML = `<strong>${escapeHtml(label)}</strong><span class="avail ${escapeHtml(source.availability)}">${escapeHtml(source.availability)}</span><small>keyword ${source.capabilities?.keywordSearch ? "yes" : "no"} · boolean ${source.capabilities?.booleanSearch ? "yes" : "no"}${escapeHtml(closedNote)}</small>`;
     target.appendChild(item);
   }
 }
