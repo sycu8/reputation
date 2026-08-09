@@ -3,6 +3,9 @@
   "name": "reputa-discovery-dev",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-01",
+  // Optional secrets (wrangler secret put): BRAVE_SEARCH_API_KEY, YOUTUBE_API_KEY, X_BEARER_TOKEN,
+  // REDDIT_ACCESS_TOKEN, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
+  // Optional plain vars: RSS_FEED_URLS, SITEMAP_URLS (comma-separated public HTTPS URLs)
   "durable_objects": {
     "bindings": [
       { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-dev" }
