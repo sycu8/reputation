@@ -46,7 +46,7 @@ Local:
 | 10 Social adapters | BOUNDARIES IMPLEMENTED | YouTube/X/Reddit call APIs when secrets present; else empty + truthful availability. FB/TikTok/LinkedIn degraded/contract-required stubs |
 | 11 Virality + clustering | PRIMITIVES IMPLEMENTED | `@reputa/virality` + story clusters; engagement snapshot pipeline still thin |
 | 12 Reports + hardening | SKELETON | `workers/reports` cron/queue/R2 stub; full SLO dashboards not live |
-| 13 Billing + super admin | PARTIAL / STUB PROVIDER | `$29/$49/$99` entitlements, stub checkout, signed webhook idempotency via KV, admin tenant list + source-health; real Stripe/provider not wired |
+| 13 Billing + super admin | PARTIAL / STUB PROVIDER | entitlement keys, stub checkout, signed webhook idempotency via KV, admin tenant list + source-health; real Stripe/provider not wired |
 
 ## Source coverage (code truthfulness)
 

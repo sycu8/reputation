@@ -2,17 +2,16 @@ export type CustomerPlan = "starter" | "pro" | "business";
 
 export interface PlanEntitlements {
   plan: CustomerPlan;
-  priceUsdMonthly: number;
   monitorMaxActive: number;
   mentionMonthlyIncluded: number;
   scanMinIntervalSeconds: number;
   teamMaxSeats: number;
 }
 
+/** Technical entitlement tiers. Commercial pricing is not stored in-repo. */
 export const PLAN_ENTITLEMENTS: Record<CustomerPlan, PlanEntitlements> = {
   starter: {
     plan: "starter",
-    priceUsdMonthly: 29,
     monitorMaxActive: 3,
     mentionMonthlyIncluded: 10_000,
     scanMinIntervalSeconds: 900,
@@ -20,7 +19,6 @@ export const PLAN_ENTITLEMENTS: Record<CustomerPlan, PlanEntitlements> = {
   },
   pro: {
     plan: "pro",
-    priceUsdMonthly: 49,
     monitorMaxActive: 10,
     mentionMonthlyIncluded: 50_000,
     scanMinIntervalSeconds: 600,
@@ -28,7 +26,6 @@ export const PLAN_ENTITLEMENTS: Record<CustomerPlan, PlanEntitlements> = {
   },
   business: {
     plan: "business",
-    priceUsdMonthly: 99,
     monitorMaxActive: 30,
     mentionMonthlyIncluded: 200_000,
     scanMinIntervalSeconds: 300,

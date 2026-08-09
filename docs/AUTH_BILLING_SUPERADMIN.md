@@ -8,16 +8,16 @@ The application runtime and persistent product state remain Cloudflare-native. P
 
 ## 2. Plans
 
-Canonical monthly plans:
+Canonical monthly plan keys (technical entitlements only — commercial pricing is not stored in this repository):
 
-| Plan | Price | Target | Monitors | Included relevant mentions/month | Default scan interval | Team seats |
-|---|---:|---|---:|---:|---|---:|
-| Starter | USD 29/month | individual / small brand | 3 | 10,000 | 15 min | 1 |
-| Pro | USD 49/month | professional / creator / SMB | 10 | 50,000 | 10 min | 5 |
-| Business | USD 99/month | business / agency-light | 30 | 200,000 | 5 min on active sources, adaptive otherwise | 15 |
-| Super Admin | Internal only | owner/operator | unlimited logical entitlements | unlimited logical entitlements | operator-controlled | unlimited |
+| Plan key | Target | Monitors | Included relevant mentions/month | Default scan interval | Team seats |
+|---|---|---:|---:|---|---:|
+| Starter | individual / small brand | 3 | 10,000 | 15 min | 1 |
+| Pro | professional / creator / SMB | 10 | 50,000 | 10 min | 5 |
+| Business | business / agency-light | 30 | 200,000 | 5 min on active sources, adaptive otherwise | 15 |
+| Super Admin | Internal only | unlimited logical entitlements | unlimited logical entitlements | operator-controlled | unlimited |
 
-The exact limits are product defaults, not hard-coded constants. Store plan definitions as versioned configuration so they can change without migrations.
+The exact limits are product defaults, not hard-coded pricing. Store plan definitions as versioned configuration so they can change without migrations. Billing provider price IDs map to these keys outside the public docs.
 
 ## 3. Super Admin
 
@@ -235,4 +235,4 @@ Billing:
 
 ## 14. Pricing-product principle
 
-The $29/$49/$99 plans should be profitable because the system uses shared discovery, crawl-once/match-many, fetch-first/browser-second, cheap-first AI, adaptive scheduling, and source-level cache reuse. Plan quotas are economic safety rails, not the primary user experience.
+Plan quotas are economic safety rails, not the primary user experience. Shared discovery, crawl-once/match-many, fetch-first/browser-second, cheap-first AI, adaptive scheduling, and source-level cache reuse keep unit costs manageable.

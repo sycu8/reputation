@@ -11,6 +11,6 @@ alwaysApply: true
 - Production deployment target: Cloudflare account **Cloudspace**. Never hardcode account IDs in runtime source.
 - Core user outcome: newest relevant mentions plus fast, high-precision negative alerts.
 - Core SLO: P95 important supported-source negative alert < 15 minutes.
-- Plans: $29 / $49 / $99 monthly; explicit internal `super_admin` bypasses commercial quotas only.
+- Plans: technical entitlement keys only (`starter` / `pro` / `business`); commercial pricing is not stored in-repo. Explicit internal `super_admin` bypasses commercial quotas only.
 - Never fake unavailable platform/source coverage.
 - Prefer small, reviewable patches and preserve existing conventions.

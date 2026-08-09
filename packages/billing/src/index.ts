@@ -33,10 +33,7 @@ const PRICE_TO_PLAN: Record<string, CustomerPlan> = {
   price_business: "business",
   stub_price_starter: "starter",
   stub_price_pro: "pro",
-  stub_price_business: "business",
-  "price_usd_29": "starter",
-  "price_usd_49": "pro",
-  "price_usd_99": "business"
+  stub_price_business: "business"
 };
 
 export function planFromPriceId(priceId: string | undefined | null): CustomerPlan | null {

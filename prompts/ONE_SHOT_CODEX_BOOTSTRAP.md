@@ -32,7 +32,7 @@ Then inspect the repository, package manager, scripts, configs, and current impl
 Build a multi-tenant professional social listening SaaS that:
 
 - lets individuals/businesses register and log in,
-- supports Starter USD 29, Pro USD 49, Business USD 99 monthly subscriptions,
+- supports starter/pro/business entitlement keys with billing-provider pricing outside the repo,
 - gives the internal `super_admin` account unlimited product entitlements while retaining platform safety controls,
 - lets a tenant create keyword/Boolean monitors,
 - discovers public mentions across supported web/news/RSS/social sources,

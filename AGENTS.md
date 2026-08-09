@@ -83,7 +83,7 @@ Never claim or implement "full coverage" by silently substituting brittle scrapi
 After every implementation phase, use `prompts/UNIVERSAL_PHASE_REVIEW_PROMPT.md`. A phase is not complete until that review returns PASS or PASS WITH FIXES and all blocker/high findings are resolved.
 
 ## Authentication, billing, and admin invariant
-Read `docs/AUTH_BILLING_SUPERADMIN.md` before modifying auth, plans, subscriptions, quota, usage metering, or admin behavior. Canonical customer plans are USD 29 / USD 49 / USD 99 per month. The internal `super_admin` has unlimited commercial entitlements but never bypasses platform safety, source policy, SSRF, domain politeness, or Cloudflare hard limits.
+Read `docs/AUTH_BILLING_SUPERADMIN.md` before modifying auth, plans, subscriptions, quota, usage metering, or admin behavior. Customer plan keys are technical entitlement tiers (`starter` / `pro` / `business`); commercial pricing is not published in this repository. The internal `super_admin` has unlimited commercial entitlements but never bypasses platform safety, source policy, SSRF, domain politeness, or Cloudflare hard limits.
 
 ## Discovery invariant
 Read `docs/SOURCE_DISCOVERY_ENGINE.md` before changing URL discovery, provider federation, query fan-out, ranking/fusion, freshness scheduling, source coverage metrics, or historical discovery. Never claim absolute Internet coverage or perfect accuracy; expose measured precision/recall and source availability truthfully.

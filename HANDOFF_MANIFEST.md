@@ -40,7 +40,7 @@ All historical implementation prompts are retained under `prompts/`, including p
 
 - Cloudflare account: Cloudspace
 - Production hostname: `reputation.orangecloud.vn`
-- Plans: $29 / $49 / $99 monthly
+- Entitlements: technical plan keys with monitor/mention quotas; commercial pricing not published in-repo
 - Goal: broad public Internet/social coverage with source-health transparency and high-precision negative alerts, not a false claim of 100% Internet coverage.
 
 ## Agent progress (2026-08-09)

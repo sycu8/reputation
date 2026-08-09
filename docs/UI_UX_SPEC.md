@@ -479,7 +479,7 @@ Never expose stack traces, raw tokens, or internal IDs unnecessarily.
 - Workspace creation/join
 - Plan selection
 
-Plan cards must show exactly USD 29 / USD 49 / USD 99 monthly defaults from server-provided plan data. Never duplicate entitlement truth only in frontend constants.
+Plan cards must show server-provided plan data only. Never hardcode commercial pricing or entitlement truth in frontend constants.
 
 ## Billing settings
 

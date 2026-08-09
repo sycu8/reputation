@@ -47,7 +47,7 @@
       <a href="#conventions">Conventions</a>
       <a href="#errors">Errors</a>
       <a href="#rbac">Roles &amp; capabilities</a>
-      <a href="#plans">Plans &amp; limits</a>
+      <a href="#entitlements">Entitlements</a>
       <a href="#health">Health &amp; sources</a>
       <a href="#auth-endpoints">Auth</a>
       <a href="#workspaces">Workspaces</a>
@@ -189,22 +189,23 @@ curl -sS -b cookies.txt "$API/v1/me"</code></pre>
         </div>
       </section>
 
-      <section id="plans">
-        <h2>Plans &amp; limits</h2>
+      <section id="entitlements">
+        <h2>Entitlements</h2>
+        <p>Workspaces carry a technical plan key (<code>starter</code> | <code>pro</code> | <code>business</code>) that gates monitor counts and related quotas. Commercial pricing is not published in this repository — checkout uses the billing provider catalog.</p>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Plan</th><th>Price</th><th>Active monitors</th><th>Default scan floor</th></tr>
+              <tr><th>Plan key</th><th>Active monitors</th><th>Default scan floor</th></tr>
             </thead>
             <tbody>
-              <tr><td><code>starter</code></td><td>$29</td><td>3</td><td>≥ 300s (5 min) for customers</td></tr>
-              <tr><td><code>pro</code></td><td>$49</td><td>10</td><td>≥ 300s</td></tr>
-              <tr><td><code>business</code></td><td>$99</td><td>30</td><td>≥ 300s</td></tr>
-              <tr><td><code>super_admin</code></td><td>—</td><td>unlimited</td><td>≥ 60s allowed</td></tr>
+              <tr><td><code>starter</code></td><td>3</td><td>≥ 300s (5 min) for customers</td></tr>
+              <tr><td><code>pro</code></td><td>10</td><td>≥ 300s</td></tr>
+              <tr><td><code>business</code></td><td>30</td><td>≥ 300s</td></tr>
+              <tr><td><code>super_admin</code></td><td>unlimited</td><td>≥ 60s allowed</td></tr>
             </tbody>
           </table>
         </div>
-        <p>Creating a monitor beyond the plan limit returns <strong>402</strong> <code>monitor_plan_limit_reached</code>. New workspaces start on <code>starter</code> until billing webhooks update the plan.</p>
+        <p>Creating a monitor beyond the entitlement limit returns <strong>402</strong> <code>monitor_plan_limit_reached</code>. New workspaces start on <code>starter</code> until billing webhooks update the plan key.</p>
       </section>
 
       <section id="endpoints">
