@@ -1,0 +1,11 @@
+# PulseWatch HTTP API Reference
+
+Canonical interactive documentation ships with the dashboard:
+
+- Local: `http://127.0.0.1:8788/api.html`
+- Production: `https://reputation.orangecloud.vn/api.html`
+- workers.dev: `https://reputa-dashboard-production.sycu-lee.workers.dev/api.html`
+
+The page documents authentication (session cookies), RBAC capabilities, plans/limits, Boolean queries, and every public `/v1` route implemented by `apps/api-worker`.
+
+Internal Durable Object paths (`/internal/*`) are not part of the public contract.
