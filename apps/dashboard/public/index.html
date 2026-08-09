@@ -24,6 +24,7 @@
         <button data-view="reports" class="nav">Reports</button>
         <button data-view="settings" class="nav">Settings</button>
         <button data-view="source-health" class="nav">Source health</button>
+        <button data-view="admin" class="nav hidden" id="adminNavBtn">Admin</button>
       </nav>
       <div class="sidebar-foot">
         <span id="sessionState">Signed out</span>
@@ -123,10 +124,22 @@
       </section>
 
       <section id="reportsPanel" class="view-panel hidden">
+        <div class="toolbar">
+          <button id="reportRefreshBtn" class="secondary" type="button">Refresh aggregates</button>
+        </div>
+        <div class="metrics" id="reportMetrics">
+          <div><span>Mentions scanned</span><strong id="reportMentionTotal">0</strong></div>
+          <div><span>Negative</span><strong id="reportNegative">0</strong></div>
+          <div><span>Open alerts</span><strong id="reportOpenAlerts">0</strong></div>
+          <div><span>Monitors</span><strong id="reportMonitorTotal">0</strong></div>
+        </div>
         <div class="plain-section">
-          <div class="eyebrow">Reports worker</div>
-          <h2>Daily JSON stubs</h2>
-          <p>Report jobs land in the reports worker queue and write idempotent stubs to R2. Wire monitor aggregates in a later phase.</p>
+          <div class="eyebrow">Live workspace rollup</div>
+          <h2>Sentiment & sources</h2>
+          <p class="hint">Aggregated from current monitor mention and alert APIs (not the reports-worker R2 stubs).</p>
+          <div id="reportSentimentBars" class="bar-list"></div>
+          <div id="reportSourceBars" class="bar-list"></div>
+          <div id="reportMonitorBreakdown" class="monitor-list"></div>
         </div>
       </section>
 
@@ -138,10 +151,41 @@
           <p class="hint">Notification channels (email / Telegram) are configured per tenant via <code>NOTIFY_CONFIG</code> KV. Delivery receipts are stored on each alert.</p>
           <button class="secondary" type="submit">Save</button>
         </form>
+        <form id="billingForm" class="plain-section hidden">
+          <div class="eyebrow">Billing</div>
+          <h2>Plan checkout</h2>
+          <p class="hint">Owners and admins can start a stub checkout. Viewer roles cannot.</p>
+          <label>Plan
+            <select name="plan" required>
+              <option value="starter">Starter — $29</option>
+              <option value="pro" selected>Pro — $49</option>
+              <option value="business">Business — $99</option>
+            </select>
+          </label>
+          <button class="primary" type="submit">Start checkout</button>
+          <div id="billingCheckoutResult" class="hint"></div>
+        </form>
       </section>
 
       <section id="sourceHealthPanel" class="view-panel hidden">
         <div id="sourceHealthList" class="source-grid"></div>
+      </section>
+
+      <section id="adminPanel" class="view-panel hidden">
+        <div class="toolbar">
+          <button id="adminRefreshBtn" class="secondary" type="button">Refresh tenants</button>
+        </div>
+        <div class="plain-section">
+          <div class="eyebrow">Super admin</div>
+          <h2>Tenant registry</h2>
+          <p class="hint">Listed from <code>CONFIG_KV</code> registry keys written on workspace create.</p>
+          <div id="adminTenantList" class="monitor-list"></div>
+        </div>
+        <div class="plain-section">
+          <div class="eyebrow">Platform</div>
+          <h2>Admin source health</h2>
+          <div id="adminSourceHealthList" class="source-grid"></div>
+        </div>
       </section>
 
       <div id="toast" class="toast hidden"></div>

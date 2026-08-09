@@ -23,11 +23,13 @@ Data: sanitized fixtures from `scripts/seed-local-qa.mjs` (fake brands/emails on
 | D3 | Mentions | nav Mentions | monitor, sentiment, minSeverity, source, Apply | List+detail; filters narrow results |
 | D4 | Alerts | nav Alerts | monitor, Refresh, Ack, Resolve | Lists alerts; Ack/Resolve update state |
 | D5 | Monitors | nav Monitors | New monitor dialog | Lists seeded monitors; create adds row |
-| D6 | Reports | nav Reports | — | Shows stub explanation (no crash) |
-| D7 | Settings | nav Settings | API base URL | Persists to localStorage; reload keeps value |
+| D6 | Reports | nav Reports | Refresh aggregates | Live sentiment/source bars + per-monitor rollup from mention/alert APIs |
+| D7 | Settings | nav Settings | API base URL, billing plan | Persists API base; owner can start stub checkout; viewer hides billing |
 | D8 | Source health | nav Source health | — | Shows ≥9 sources with availability chips |
-| D9 | New monitor modal | New monitor | name, type, query, Cancel/Create | Valid create succeeds; Cancel closes; invalid query errors |
+| D9 | New monitor modal | New monitor | name, type, query, Cancel/Create | Valid create succeeds; Cancel closes; invalid query errors; hidden for viewers |
 | D10 | Sign out | Sign out | — | Returns to auth; /v1/me unauthorized |
+| D11 | Mention feedback | Mentions detail | Relevant / Not relevant / Wrong sentiment / Resolved / Flag | POST feedback succeeds; toast confirms |
+| D12 | Admin console | nav Admin (super_admin only) | Refresh tenants | Lists tenant registry + admin source health; hidden for non-ops |
 
 ## API surface
 
@@ -73,11 +75,17 @@ Data: sanitized fixtures from `scripts/seed-local-qa.mjs` (fake brands/emails on
 | BUG-2 | High | Viewer seed/UX | Login as `viewer@acme.example` | See Acme Listening monitors | Only Viewer Scratch; Acme membership upsert used wrong DO shard (`reputa_session=…`) | curl `/v1/workspaces` before fix | **Fixed** — `shardFromSessionCookie()`; seed asserts Acme membership; workspace switcher + Acme preference |
 | BUG-3 | High | Monitor modal | Create monitor failure path | Clear toast, no crash | `Cannot read properties of null (reading 'reset')` after await; `method="dialog"` + stale `currentTarget` | computer-use screenshots | **Fixed** — capture form el before await; remove `method="dialog"`; clearer validation toasts |
 | BUG-4 | Medium | Monitor modal | Submit with Type selected | Submits to API | Intermittent HTML5 “fill out this field” blocked submit | computer-use | **Fixed** — explicit selected type option + JS required checks |
+| BUG-5 | Medium | Mentions UX | Open mention detail | Feedback actions available | Detail pane had no feedback controls despite API | inventory gap | **Fixed** — feedback buttons POST `/mentions/:id/feedback` |
+| BUG-6 | Medium | Settings UX | Owner opens Settings | Billing checkout UI | Checkout API only; no Settings form | inventory gap | **Fixed** — plan select + stub checkout link |
+| BUG-7 | Medium | Admin UX | Ops opens Admin | Tenant registry UI | Admin APIs only; no nav/panel | inventory gap | **Fixed** — Admin nav for `super_admin` |
+| BUG-8 | Low | Reports UX | Nav Reports | Live aggregates | Stub copy only | inventory gap | **Fixed** — sentiment/source/monitor rollups |
+| BUG-9 | Low | RBAC UX | Viewer on Monitors | New monitor hidden | Button visible; create 403 | inventory gap | **Fixed** — role-aware New monitor + billing visibility |
 
 ## Regression
 
 - `npm run validate` — includes `tests/qa-inventory.test.mjs`
 - Manual rerun: owner login, viewer Acme access, forbidden toast, plan-limit toast, mentions filter, alert ack — **PASS**
+- UI gap closure (2026-08-09): mention feedback, billing checkout, admin console, live reports, role-aware New monitor — covered by inventory surface test + API A11/A13/A15
 
 ## Local QA commands
 

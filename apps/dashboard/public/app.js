@@ -5,6 +5,14 @@ function defaultApiBase() {
   return `http://${host}:8787`;
 }
 
+const FEEDBACK_ACTIONS = [
+  { action: "relevant", label: "Relevant" },
+  { action: "not_relevant", label: "Not relevant" },
+  { action: "wrong_sentiment", label: "Wrong sentiment" },
+  { action: "resolved", label: "Resolved" },
+  { action: "flagged", label: "Flag" }
+];
+
 const state = {
   apiBase: defaultApiBase(),
   user: null,
@@ -15,7 +23,9 @@ const state = {
   mentions: [],
   selectedMentionId: null,
   alerts: [],
-  sourceHealth: []
+  sourceHealth: [],
+  reportStats: null,
+  adminTenants: []
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -24,9 +34,10 @@ const titles = {
   mentions: ["Mentions", "Filter and inspect mentions for a selected monitor."],
   alerts: ["Alerts", "Acknowledge or resolve negative mention alerts."],
   monitors: ["Monitors", "Manage keyword and Boolean monitors."],
-  reports: ["Reports", "Daily report stubs from the reports worker."],
-  settings: ["Settings", "API endpoint and notification delivery notes."],
-  "source-health": ["Source health", "Availability matrix for discovery sources."]
+  reports: ["Reports", "Live mention and alert aggregates for this workspace."],
+  settings: ["Settings", "API endpoint and billing checkout."],
+  "source-health": ["Source health", "Availability matrix for discovery sources."],
+  admin: ["Admin", "Tenant registry and platform source health."]
 };
 
 const toast = $("#toast");
@@ -40,6 +51,26 @@ function notify(message) {
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
+}
+
+function canManageMonitors() {
+  const role = state.workspace?.role;
+  return role === "owner" || role === "admin" || state.user?.globalRole === "super_admin";
+}
+
+function canManageBilling() {
+  return canManageMonitors();
+}
+
+function isSuperAdmin() {
+  return state.user?.globalRole === "super_admin";
+}
+
+function updateRoleChrome() {
+  const showNew = Boolean(state.user && state.workspace && canManageMonitors());
+  $("#newMonitorBtn").classList.toggle("hidden", !showNew);
+  $("#billingForm")?.classList.toggle("hidden", !(state.user && state.workspace && canManageBilling()));
+  $("#adminNavBtn")?.classList.toggle("hidden", !isSuperAdmin());
 }
 
 async function api(path, options = {}) {
@@ -61,12 +92,16 @@ function panelFor(view) {
     monitors: "#monitorsPanel",
     reports: "#reportsPanel",
     settings: "#settingsPanel",
-    "source-health": "#sourceHealthPanel"
+    "source-health": "#sourceHealthPanel",
+    admin: "#adminPanel"
   };
   return $(map[view]);
 }
 
 function setView(view) {
+  if (view === "admin" && !isSuperAdmin()) {
+    view = "overview";
+  }
   state.view = view;
   document.querySelectorAll(".nav").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
   const [title, subtitle] = titles[view] || titles.overview;
@@ -133,33 +168,143 @@ function renderSourceGrid(target, sources) {
   }
 }
 
-async function loadOverviewStats() {
-  $("#monitorCount").textContent = String(state.monitors.length);
-  let mentions = 0;
-  let alerts = 0;
+function renderBarList(target, entries, emptyLabel) {
+  target.innerHTML = "";
+  if (!entries.length) {
+    target.innerHTML = `<div class="empty">${escapeHtml(emptyLabel)}</div>`;
+    return;
+  }
+  const max = Math.max(...entries.map((item) => item.count), 1);
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    row.className = "bar-row";
+    const pct = Math.round((entry.count / max) * 100);
+    row.innerHTML = `<span>${escapeHtml(entry.label)}</span><div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div><strong>${entry.count}</strong>`;
+    target.appendChild(row);
+  }
+}
+
+async function collectWorkspaceAggregates() {
+  const sentimentCounts = { negative: 0, neutral: 0, positive: 0, unknown: 0 };
+  const sourceCounts = new Map();
+  const perMonitor = [];
+  let mentionTotal = 0;
+  let openAlerts = 0;
+  let negative = 0;
+
   for (const monitor of state.monitors) {
     const monitorId = monitor.monitor_id || monitor.id;
+    let mentions = [];
+    let alerts = [];
     try {
       const mentionData = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}/mentions?limit=100`);
-      mentions += (mentionData.mentions || []).length;
+      mentions = mentionData.mentions || [];
     } catch {}
     try {
       const alertData = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}/alerts`);
-      alerts += (alertData.alerts || []).filter((item) => item.state !== "resolved").length;
+      alerts = alertData.alerts || [];
     } catch {}
+
+    mentionTotal += mentions.length;
+    const open = alerts.filter((item) => item.state !== "resolved").length;
+    openAlerts += open;
+    let monitorNegative = 0;
+    for (const mention of mentions) {
+      const sentiment = String(mention.sentiment || "unknown").toLowerCase();
+      if (sentimentCounts[sentiment] === undefined) sentimentCounts.unknown += 1;
+      else sentimentCounts[sentiment] += 1;
+      if (sentiment === "negative") {
+        negative += 1;
+        monitorNegative += 1;
+      }
+      const source = mention.source || "unknown";
+      sourceCounts.set(source, (sourceCounts.get(source) || 0) + 1);
+    }
+    perMonitor.push({
+      id: monitorId,
+      name: monitor.name || monitorId,
+      mentions: mentions.length,
+      negative: monitorNegative,
+      openAlerts: open
+    });
   }
-  $("#mentionCount").textContent = String(mentions);
-  $("#alertCount").textContent = String(alerts);
+
+  return {
+    mentionTotal,
+    negative,
+    openAlerts,
+    monitorTotal: state.monitors.length,
+    sentimentCounts,
+    sourceCounts,
+    perMonitor
+  };
+}
+
+async function loadOverviewStats() {
+  $("#monitorCount").textContent = String(state.monitors.length);
+  const stats = await collectWorkspaceAggregates();
+  state.reportStats = stats;
+  $("#mentionCount").textContent = String(stats.mentionTotal);
+  $("#alertCount").textContent = String(stats.openAlerts);
   const available = state.sourceHealth.filter((item) => !["degraded", "disabled", "contract-required"].includes(item.availability)).length;
   $("#sourceCoverage").textContent = state.sourceHealth.length ? `${available}/${state.sourceHealth.length}` : "—";
   renderSourceGrid($("#overviewSourceList"), state.sourceHealth.slice(0, 6));
+}
+
+function renderReports() {
+  const stats = state.reportStats;
+  if (!stats) {
+    $("#reportMentionTotal").textContent = "0";
+    $("#reportNegative").textContent = "0";
+    $("#reportOpenAlerts").textContent = "0";
+    $("#reportMonitorTotal").textContent = String(state.monitors.length);
+    renderBarList($("#reportSentimentBars"), [], "No mention data yet.");
+    renderBarList($("#reportSourceBars"), [], "No source breakdown yet.");
+    $("#reportMonitorBreakdown").innerHTML = '<div class="empty">No monitors.</div>';
+    return;
+  }
+  $("#reportMentionTotal").textContent = String(stats.mentionTotal);
+  $("#reportNegative").textContent = String(stats.negative);
+  $("#reportOpenAlerts").textContent = String(stats.openAlerts);
+  $("#reportMonitorTotal").textContent = String(stats.monitorTotal);
+
+  const sentimentEntries = Object.entries(stats.sentimentCounts)
+    .filter(([, count]) => count > 0)
+    .map(([label, count]) => ({ label, count }));
+  renderBarList($("#reportSentimentBars"), sentimentEntries, "No sentiment signals yet.");
+
+  const sourceEntries = [...stats.sourceCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, count]) => ({ label, count }));
+  renderBarList($("#reportSourceBars"), sourceEntries, "No source breakdown yet.");
+
+  const list = $("#reportMonitorBreakdown");
+  list.innerHTML = "";
+  if (!stats.perMonitor.length) {
+    list.innerHTML = '<div class="empty">No monitors.</div>';
+    return;
+  }
+  for (const row of stats.perMonitor) {
+    const item = document.createElement("div");
+    item.className = "monitor-row";
+    item.innerHTML = `<div><strong>${escapeHtml(row.name)}</strong><small>${row.mentions} mentions · ${row.negative} negative · ${row.openAlerts} open alerts</small></div>`;
+    list.appendChild(item);
+  }
+}
+
+async function loadReports() {
+  if (!state.workspace) return;
+  state.reportStats = await collectWorkspaceAggregates();
+  renderReports();
 }
 
 function renderMonitors() {
   const list = $("#monitorList");
   list.innerHTML = "";
   if (!state.monitors.length) {
-    list.innerHTML = '<div class="empty">No monitors yet. Create the first keyword or Boolean monitor.</div>';
+    list.innerHTML = canManageMonitors()
+      ? '<div class="empty">No monitors yet. Create the first keyword or Boolean monitor.</div>'
+      : '<div class="empty">No monitors in this workspace yet.</div>';
     return;
   }
   for (const monitor of state.monitors) {
@@ -178,13 +323,38 @@ function renderMentionDetail(mention) {
     return;
   }
   pane.classList.remove("empty");
+  const monitorId = $("#mentionMonitorSelect").value;
   pane.innerHTML = `
     <div class="eyebrow">${escapeHtml(mention.source)}</div>
     <h2>${escapeHtml(mention.title || mention.excerpt || "Untitled mention")}</h2>
     <p>${escapeHtml(mention.excerpt || "")}</p>
     <p><strong>Sentiment</strong> ${escapeHtml(mention.sentiment)} · <strong>Severity</strong> ${escapeHtml(mention.severity_score)} · <strong>Relevance</strong> ${escapeHtml(mention.relevance_score)}</p>
     <p><a href="${escapeHtml(mention.canonical_url || "#")}" target="_blank" rel="noreferrer">Open source</a></p>
+    <div class="feedback-block">
+      <div class="eyebrow">Feedback</div>
+      <div class="feedback-actions" id="mentionFeedbackActions"></div>
+    </div>
   `;
+  const actions = $("#mentionFeedbackActions");
+  for (const item of FEEDBACK_ACTIONS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = item.label;
+    button.addEventListener("click", async () => {
+      if (!state.workspace || !monitorId) return;
+      try {
+        await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}/mentions/${mention.id}/feedback`, {
+          method: "POST",
+          body: JSON.stringify({ action: item.action })
+        });
+        notify(`Feedback saved: ${item.label}`);
+      } catch (error) {
+        notify(error.message);
+      }
+    });
+    actions.appendChild(button);
+  }
 }
 
 function renderMentions() {
@@ -283,21 +453,56 @@ async function loadAlerts() {
   renderAlerts();
 }
 
+function renderAdminTenants() {
+  const list = $("#adminTenantList");
+  list.innerHTML = "";
+  if (!state.adminTenants.length) {
+    list.innerHTML = '<div class="empty">No tenant registry entries.</div>';
+    return;
+  }
+  for (const tenant of state.adminTenants) {
+    const row = document.createElement("div");
+    row.className = "monitor-row";
+    const name = tenant.name || tenant.workspaceName || tenant.id || "tenant";
+    const plan = tenant.plan || "—";
+    const id = tenant.id || tenant.workspaceId || "—";
+    row.innerHTML = `<div><strong>${escapeHtml(name)}</strong><small>${escapeHtml(id)} · plan ${escapeHtml(plan)}</small></div><span class="status-chip">${escapeHtml(plan)}</span>`;
+    list.appendChild(row);
+  }
+}
+
+async function loadAdmin() {
+  if (!isSuperAdmin()) return;
+  const tenants = await api("/v1/admin/tenants");
+  state.adminTenants = tenants.tenants || [];
+  renderAdminTenants();
+  try {
+    const adminHealth = await api("/v1/admin/source-health");
+    renderSourceGrid($("#adminSourceHealthList"), adminHealth.sources || []);
+  } catch {
+    await refreshSourceHealth();
+    renderSourceGrid($("#adminSourceHealthList"), state.sourceHealth);
+  }
+}
+
 function renderSignedOut() {
   state.user = null;
-  $("#newMonitorBtn").classList.add("hidden");
+  state.workspace = null;
+  state.workspaces = [];
+  updateRoleChrome();
   $("#logoutBtn").classList.add("hidden");
   $("#workspaceSwitchWrap").classList.add("hidden");
   $("#sessionState").textContent = "Signed out";
+  $("#billingCheckoutResult").textContent = "";
   setView(state.view === "settings" ? "settings" : "overview");
 }
 
 async function renderSignedIn() {
-  $("#newMonitorBtn").classList.remove("hidden");
   $("#logoutBtn").classList.remove("hidden");
   $("#sessionState").textContent = state.user?.email || "Signed in";
   $("#workspaceName").textContent = state.workspace?.workspaceName || "Workspace";
   $("#workspaceRole").textContent = state.workspace?.role || "—";
+  updateRoleChrome();
   renderMonitors();
   await refreshSourceHealth();
   renderSourceGrid($("#sourceHealthList"), state.sourceHealth);
@@ -305,6 +510,10 @@ async function renderSignedIn() {
   setView(state.view);
   if (state.view === "mentions") await loadMentions();
   if (state.view === "alerts") await loadAlerts();
+  if (state.view === "reports") {
+    renderReports();
+  }
+  if (state.view === "admin") await loadAdmin();
 }
 
 function pickDefaultWorkspace(memberships) {
@@ -369,13 +578,23 @@ $("#logoutBtn").addEventListener("click", async () => {
   renderSignedOut();
 });
 
-$("#newMonitorBtn").addEventListener("click", () => dialog.showModal());
+$("#newMonitorBtn").addEventListener("click", () => {
+  if (!canManageMonitors()) {
+    notify("forbidden");
+    return;
+  }
+  dialog.showModal();
+});
 $("#cancelMonitor").addEventListener("click", () => dialog.close());
 
 $("#monitorForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!state.workspace) {
     notify("Select a workspace first");
+    return;
+  }
+  if (!canManageMonitors()) {
+    notify("forbidden");
     return;
   }
   const formEl = event.currentTarget;
@@ -425,10 +644,48 @@ $("#apiForm").addEventListener("submit", (event) => {
   notify("API endpoint saved");
 });
 
+$("#billingForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.workspace) {
+    notify("Select a workspace first");
+    return;
+  }
+  if (!canManageBilling()) {
+    notify("forbidden");
+    return;
+  }
+  const formEl = event.currentTarget;
+  const plan = new FormData(formEl).get("plan");
+  const origin = window.location.origin;
+  try {
+    const data = await api(`/v1/workspaces/${state.workspace.workspaceId}/billing/checkout`, {
+      method: "POST",
+      body: JSON.stringify({
+        plan,
+        successUrl: `${origin}/?billing=success`,
+        cancelUrl: `${origin}/?billing=cancel`
+      })
+    });
+    const url = data.checkout?.url || data.checkout?.checkoutUrl || "";
+    const result = $("#billingCheckoutResult");
+    if (url) {
+      result.innerHTML = `Checkout ready (${escapeHtml(data.provider || "stub")}): <a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a>`;
+      notify("Checkout session created");
+    } else {
+      result.textContent = JSON.stringify(data.checkout || data);
+      notify("Checkout created");
+    }
+  } catch (error) {
+    notify(error.message);
+  }
+});
+
 $("#mentionFilterBtn").addEventListener("click", () => loadMentions().catch((error) => notify(error.message)));
 $("#mentionMonitorSelect").addEventListener("change", () => loadMentions().catch((error) => notify(error.message)));
 $("#alertRefreshBtn").addEventListener("click", () => loadAlerts().catch((error) => notify(error.message)));
 $("#alertMonitorSelect").addEventListener("change", () => loadAlerts().catch((error) => notify(error.message)));
+$("#reportRefreshBtn")?.addEventListener("click", () => loadReports().catch((error) => notify(error.message)));
+$("#adminRefreshBtn")?.addEventListener("click", () => loadAdmin().catch((error) => notify(error.message)));
 
 for (const button of document.querySelectorAll(".nav")) {
   button.addEventListener("click", async () => {
@@ -439,10 +696,13 @@ for (const button of document.querySelectorAll(".nav")) {
       if (button.dataset.view === "mentions") await loadMentions();
       if (button.dataset.view === "alerts") await loadAlerts();
       if (button.dataset.view === "monitors") renderMonitors();
+      if (button.dataset.view === "reports") await loadReports();
+      if (button.dataset.view === "settings") updateRoleChrome();
       if (button.dataset.view === "source-health") {
         await refreshSourceHealth();
         renderSourceGrid($("#sourceHealthList"), state.sourceHealth);
       }
+      if (button.dataset.view === "admin") await loadAdmin();
     } catch (error) {
       notify(error.message);
     }

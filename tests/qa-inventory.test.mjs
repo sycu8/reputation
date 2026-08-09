@@ -211,3 +211,18 @@ test("D-shape: monitor directory fields usable by dashboard selects", async () =
     assert.ok(monitor.name);
   }
 });
+
+test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", async () => {
+  const { readFileSync } = await import("node:fs");
+  const html = readFileSync(new URL("../apps/dashboard/public/index.html", import.meta.url), "utf8");
+  const js = readFileSync(new URL("../apps/dashboard/public/app.js", import.meta.url), "utf8");
+  assert.match(html, /id="billingForm"/);
+  assert.match(html, /id="adminPanel"/);
+  assert.match(html, /id="adminNavBtn"/);
+  assert.match(html, /id="reportSentimentBars"/);
+  assert.match(js, /FEEDBACK_ACTIONS/);
+  assert.match(js, /canManageMonitors/);
+  assert.match(js, /billing\/checkout/);
+  assert.match(js, /\/v1\/admin\/tenants/);
+  assert.match(js, /not_relevant/);
+});
