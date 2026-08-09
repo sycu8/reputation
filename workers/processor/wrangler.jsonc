@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reputa-processor-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "durable_objects": {
+    "bindings": [{ "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-dev" }]
+  },
+  "r2_buckets": [{ "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-dev" }],
+  "queues": {
+    "consumers": [{ "queue": "reputa-process-content-dev", "max_batch_size": 20, "max_batch_timeout": 2, "max_retries": 3, "dead_letter_queue": "reputa-process-dlq-dev" }],
+    "producers": [
+      { "binding": "AI_NORMAL", "queue": "reputa-ai-normal-dev" },
+      { "binding": "AI_PRIORITY", "queue": "reputa-ai-priority-dev" }
+    ]
+  },
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_processor_dev" }]
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reputa-alerts-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "vars": { "ALERT_FROM_EMAIL": "alerts@example.com" },
+  "send_email": [{ "name": "EMAIL", "remote": true }],
+  "durable_objects": {
+    "bindings": [{ "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-dev" }]
+  },
+  "kv_namespaces": [{ "binding": "NOTIFY_CONFIG", "id": "00000000000000000000000000000003" }],
+  "queues": {
+    "consumers": [{ "queue": "reputa-alerts-dev", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 3, "dead_letter_queue": "reputa-alerts-dlq-dev" }]
+  },
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_alerts_dev" }]
+}

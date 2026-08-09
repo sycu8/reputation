@@ -1,0 +1,522 @@
+import { hasCapability, isSuperAdminEmail, type Capability } from "../../../packages/auth/src/index.ts";
+import { normalizeBooleanQuery, parseBooleanQuery } from "../../../packages/boolean-query/src/index.ts";
+import { monitorLimitFor } from "../../../packages/auth/src/entitlements.ts";
+import type { AuthContext, GlobalRole, MonitorType, WorkspaceRole } from "../../../packages/types/src/index.ts";
+import { structuredLog } from "../../../packages/observability/src/index.ts";
+
+interface Env {
+  USER_DIRECTORY: DurableObjectNamespace;
+  TENANT_DIRECTORY: DurableObjectNamespace;
+  MONITOR_DO: DurableObjectNamespace;
+  CONFIG_KV: KVNamespace;
+  RAW_CONTENT: R2Bucket;
+  ANALYTICS?: AnalyticsEngineDataset;
+  SUPER_ADMIN_EMAILS?: string;
+  ALLOWED_ORIGINS?: string;
+  ENVIRONMENT: string;
+  SESSION_COOKIE_NAME?: string;
+}
+
+interface RouteContext {
+  requestId: string;
+  url: URL;
+}
+
+type JsonObject = Record<string, unknown>;
+
+const COOKIE_DEFAULT = "reputa_session";
+
+function json(data: unknown, status = 200, headers: HeadersInit = {}): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", ...headers }
+  });
+}
+
+function errorResponse(error: string, status: number, requestId: string): Response {
+  return json({ error, requestId }, status);
+}
+
+async function readJson(request: Request): Promise<JsonObject> {
+  try {
+    return (await request.json()) as JsonObject;
+  } catch {
+    throw new HttpError(400, "invalid_json");
+  }
+}
+
+function asString(value: unknown, name: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new HttpError(400, `invalid_${name}`);
+  return value.trim();
+}
+
+function parseCookies(request: Request): Map<string, string> {
+  const result = new Map<string, string>();
+  const header = request.headers.get("cookie") ?? "";
+  for (const piece of header.split(";")) {
+    const index = piece.indexOf("=");
+    if (index <= 0) continue;
+    result.set(piece.slice(0, index).trim(), piece.slice(index + 1).trim());
+  }
+  return result;
+}
+
+function sessionCookie(name: string, value: string, expiresAt: string, secure: boolean): string {
+  return `${name}=${value}; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Lax; Expires=${new Date(expiresAt).toUTCString()}`;
+}
+
+function clearCookie(name: string, secure: boolean): string {
+  return `${name}=; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=Lax; Max-Age=0`;
+}
+
+function base64url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function shardForEmail(email: string): Promise<string> {
+  const normalized = email.trim().toLowerCase();
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(normalized));
+  return base64url(new Uint8Array(digest));
+}
+
+function userStub(env: Env, shard: string): DurableObjectStub {
+  return env.USER_DIRECTORY.get(env.USER_DIRECTORY.idFromName(shard));
+}
+
+function tenantStub(env: Env, tenantId: string): DurableObjectStub {
+  return env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(tenantId));
+}
+
+function monitorStub(env: Env, tenantId: string, monitorId: string): DurableObjectStub {
+  return env.MONITOR_DO.get(env.MONITOR_DO.idFromName(`${tenantId}:${monitorId}`));
+}
+
+async function doJson<T>(stub: DurableObjectStub, path: string, init?: RequestInit): Promise<T> {
+  const response = await stub.fetch(`https://do.internal${path}`, init);
+  const body = await response.json() as T & { error?: string };
+  if (!response.ok) throw new HttpError(response.status, body.error ?? "state_error");
+  return body;
+}
+
+class HttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function resolveAuth(request: Request, env: Env): Promise<AuthContext> {
+  const cookieName = env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT;
+  const raw = parseCookies(request).get(cookieName);
+  if (!raw) throw new HttpError(401, "authentication_required");
+  const [userShard, sessionId, sessionSecret] = raw.split(".");
+  if (!userShard || !sessionId || !sessionSecret) throw new HttpError(401, "invalid_session");
+  const verified = await doJson<{ userId: string; email: string; globalRole: GlobalRole; sessionId: string }>(
+    userStub(env, userShard),
+    "/internal/session/verify",
+    { method: "POST", body: JSON.stringify({ sessionId, sessionSecret }) }
+  );
+  return { userId: verified.userId, userShard, email: verified.email, globalRole: verified.globalRole, sessionId: verified.sessionId };
+}
+
+async function requireWorkspaceCapability(
+  env: Env,
+  auth: AuthContext,
+  workspaceId: string,
+  capability: Capability
+): Promise<WorkspaceRole> {
+  try {
+    const result = await doJson<{ membership: { userId: string; role: WorkspaceRole } }>(
+      tenantStub(env, workspaceId),
+      `/internal/memberships/${encodeURIComponent(auth.userId)}`
+    );
+    if (!hasCapability(result.membership.role, capability, auth.globalRole)) throw new HttpError(403, "forbidden");
+    return result.membership.role;
+  } catch (error) {
+    if (error instanceof HttpError && error.status === 404) {
+      if (auth.globalRole === "super_admin") return "owner";
+      throw new HttpError(403, "forbidden");
+    }
+    throw error;
+  }
+}
+
+function pathMatch(pathname: string, pattern: RegExp): RegExpMatchArray | null {
+  return pathname.match(pattern);
+}
+
+async function signup(request: Request, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  const email = asString(body.email, "email").toLowerCase();
+  const password = asString(body.password, "password");
+  const workspaceName = typeof body.workspaceName === "string" && body.workspaceName.trim() ? body.workspaceName.trim() : `${email.split("@")[0]}'s workspace`;
+  const shard = await shardForEmail(email);
+  const globalRole: GlobalRole = isSuperAdminEmail(email, env.SUPER_ADMIN_EMAILS) ? "super_admin" : "user";
+  const account = await doJson<{ userId: string; email: string; globalRole: GlobalRole; sessionId: string; sessionSecret: string; expiresAt: string }>(
+    userStub(env, shard),
+    "/internal/signup",
+    { method: "POST", body: JSON.stringify({ email, password, globalRole }) }
+  );
+  const workspaceId = crypto.randomUUID();
+  await doJson(tenantStub(env, workspaceId), "/internal/init", {
+    method: "POST",
+    body: JSON.stringify({ id: workspaceId, name: workspaceName, ownerUserId: account.userId })
+  });
+  await doJson(userStub(env, shard), "/internal/memberships", {
+    method: "POST",
+    body: JSON.stringify({ workspaceId, workspaceName, role: "owner" })
+  });
+  const cookieName = env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT;
+  const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
+  return json(
+    { user: { id: account.userId, email: account.email, globalRole: account.globalRole }, workspace: { id: workspaceId, name: workspaceName, role: "owner" } },
+    201,
+    { "set-cookie": sessionCookie(cookieName, cookieValue, account.expiresAt, env.ENVIRONMENT !== "development") }
+  );
+}
+
+async function login(request: Request, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  const email = asString(body.email, "email").toLowerCase();
+  const password = asString(body.password, "password");
+  const shard = await shardForEmail(email);
+  const account = await doJson<{ userId: string; email: string; globalRole: GlobalRole; sessionId: string; sessionSecret: string; expiresAt: string }>(
+    userStub(env, shard),
+    "/internal/login",
+    { method: "POST", body: JSON.stringify({ email, password }) }
+  );
+  const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
+  return json(
+    { user: { id: account.userId, email: account.email, globalRole: account.globalRole } },
+    200,
+    { "set-cookie": sessionCookie(env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT, cookieValue, account.expiresAt, env.ENVIRONMENT !== "development") }
+  );
+}
+
+async function logout(request: Request, env: Env): Promise<Response> {
+  const auth = await resolveAuth(request, env);
+  await doJson(userStub(env, auth.userShard), "/internal/session/revoke", {
+    method: "POST",
+    body: JSON.stringify({ sessionId: auth.sessionId })
+  });
+  return json({ ok: true }, 200, { "set-cookie": clearCookie(env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT, env.ENVIRONMENT !== "development") });
+}
+
+async function listWorkspaces(auth: AuthContext, env: Env): Promise<Response> {
+  const data = await doJson<{ memberships: Array<{ workspaceId: string; workspaceName: string; role: WorkspaceRole }> }>(
+    userStub(env, auth.userShard),
+    "/internal/memberships"
+  );
+  return json(data);
+}
+
+async function createWorkspace(request: Request, auth: AuthContext, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  const name = asString(body.name, "workspace_name");
+  const workspaceId = crypto.randomUUID();
+  await doJson(tenantStub(env, workspaceId), "/internal/init", {
+    method: "POST",
+    body: JSON.stringify({ id: workspaceId, name, ownerUserId: auth.userId })
+  });
+  await doJson(userStub(env, auth.userShard), "/internal/memberships", {
+    method: "POST",
+    body: JSON.stringify({ workspaceId, workspaceName: name, role: "owner" })
+  });
+  return json({ workspace: { id: workspaceId, name, role: "owner" } }, 201);
+}
+
+async function workspaceDetails(auth: AuthContext, env: Env, workspaceId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "workspace.read");
+  const data = await doJson<{ workspace: { id: string; name: string; plan: string; status: string } }>(tenantStub(env, workspaceId), "/internal/workspace");
+  return json(data);
+}
+
+async function listMonitors(auth: AuthContext, env: Env, workspaceId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "monitor.read");
+  const data = await doJson<{ monitors: Array<Record<string, unknown>> }>(tenantStub(env, workspaceId), "/internal/monitors");
+  return json(data);
+}
+
+function validateMonitorType(value: unknown): MonitorType {
+  if (value === "person" || value === "company" || value === "brand" || value === "product") return value;
+  throw new HttpError(400, "invalid_monitor_type");
+}
+
+async function createMonitor(request: Request, auth: AuthContext, env: Env, workspaceId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "monitor.create");
+  const workspace = await doJson<{ workspace: { id: string; name: string; plan: string; status: string } }>(tenantStub(env, workspaceId), "/internal/workspace");
+  const directory = await doJson<{ monitors: Array<{ status?: string }> }>(tenantStub(env, workspaceId), "/internal/monitors");
+  const limit = monitorLimitFor(workspace.workspace.plan, auth.globalRole === "super_admin");
+  const activeCount = directory.monitors.filter((item) => item.status !== "archived").length;
+  if (!limit.unlimited && activeCount >= (limit.value ?? 0)) throw new HttpError(402, "monitor_plan_limit_reached");
+
+  const body = await readJson(request);
+  const monitorId = crypto.randomUUID();
+  const name = asString(body.name, "monitor_name");
+  const type = validateMonitorType(body.type);
+  const requestedInterval = typeof body.scanIntervalSec === "number" ? body.scanIntervalSec : 900;
+  const scanIntervalSec = auth.globalRole === "super_admin" ? Math.max(60, Math.floor(requestedInterval)) : Math.max(300, Math.floor(requestedInterval));
+  const alertThreshold = typeof body.alertThreshold === "number" ? body.alertThreshold : 60;
+  const defaultLanguage = typeof body.defaultLanguage === "string" ? body.defaultLanguage : "vi";
+
+  await doJson(tenantStub(env, workspaceId), "/internal/monitors", {
+    method: "POST",
+    body: JSON.stringify({ actorUserId: auth.userId, monitorId, name, type, status: "active" })
+  });
+  try {
+    const data = await doJson(monitorStub(env, workspaceId, monitorId), "/internal/init", {
+      method: "POST",
+      body: JSON.stringify({ id: monitorId, tenantId: workspaceId, name, type, scanIntervalSec, alertThreshold, defaultLanguage })
+    });
+    return json(data, 201);
+  } catch (error) {
+    await doJson(tenantStub(env, workspaceId), `/internal/monitors/${monitorId}`, {
+      method: "DELETE",
+      body: JSON.stringify({ actorUserId: auth.userId })
+    });
+    throw error;
+  }
+}
+
+async function getMonitor(auth: AuthContext, env: Env, workspaceId: string, monitorId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "monitor.read");
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), "/internal/monitor");
+  return json(data);
+}
+
+async function updateMonitor(request: Request, auth: AuthContext, env: Env, workspaceId: string, monitorId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "monitor.update");
+  const body = await readJson(request);
+  const updated = await doJson<{ monitor: { name: string; type: string; status: string } }>(monitorStub(env, workspaceId, monitorId), "/internal/monitor", {
+    method: "PATCH",
+    body: JSON.stringify(body)
+  });
+  await doJson(tenantStub(env, workspaceId), `/internal/monitors/${monitorId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ actorUserId: auth.userId, name: updated.monitor.name, type: updated.monitor.type, status: updated.monitor.status })
+  });
+  return json(updated);
+}
+
+async function deleteMonitor(auth: AuthContext, env: Env, workspaceId: string, monitorId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "monitor.delete");
+  await doJson(monitorStub(env, workspaceId, monitorId), "/internal/monitor", { method: "DELETE" });
+  await doJson(tenantStub(env, workspaceId), `/internal/monitors/${monitorId}`, {
+    method: "DELETE",
+    body: JSON.stringify({ actorUserId: auth.userId })
+  });
+  return json({ ok: true });
+}
+
+async function listQueries(auth: AuthContext, env: Env, workspaceId: string, monitorId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "query.read");
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), "/internal/queries");
+  return json(data);
+}
+
+async function createQuery(request: Request, auth: AuthContext, env: Env, workspaceId: string, monitorId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "query.create");
+  const body = await readJson(request);
+  const rawQuery = asString(body.rawQuery, "raw_query");
+  let ast;
+  let normalizedQuery;
+  try {
+    ast = parseBooleanQuery(rawQuery);
+    normalizedQuery = normalizeBooleanQuery(rawQuery);
+  } catch (error) {
+    throw new HttpError(400, error instanceof Error ? error.message : "invalid_boolean_query");
+  }
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), "/internal/queries", {
+    method: "POST",
+    body: JSON.stringify({ rawQuery, normalizedQuery, astJson: JSON.stringify(ast), enabled: body.enabled !== false })
+  });
+  return json(data, 201);
+}
+
+async function updateQuery(request: Request, auth: AuthContext, env: Env, workspaceId: string, monitorId: string, queryId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "query.update");
+  const body = await readJson(request);
+  const patch = { ...body };
+  if (typeof body.rawQuery === "string") {
+    try {
+      const ast = parseBooleanQuery(body.rawQuery);
+      patch.normalizedQuery = normalizeBooleanQuery(body.rawQuery);
+      patch.astJson = JSON.stringify(ast);
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : "invalid_boolean_query");
+    }
+  }
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), `/internal/queries/${queryId}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch)
+  });
+  return json(data);
+}
+
+async function deleteQuery(auth: AuthContext, env: Env, workspaceId: string, monitorId: string, queryId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "query.delete");
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), `/internal/queries/${queryId}`, { method: "DELETE" });
+  return json(data);
+}
+
+function allowedOrigin(request: Request, env: Env): string | null {
+  const origin = request.headers.get("origin");
+  if (!origin) return null;
+  const allowed = (env.ALLOWED_ORIGINS ?? "http://localhost:8788").split(",").map((item) => item.trim()).filter(Boolean);
+  return allowed.includes(origin) ? origin : null;
+}
+
+function withCors(response: Response, request: Request, env: Env): Response {
+  const origin = allowedOrigin(request, env);
+  if (!origin) return response;
+  response.headers.set("access-control-allow-origin", origin);
+  response.headers.set("access-control-allow-credentials", "true");
+  response.headers.set("vary", "Origin");
+  return response;
+}
+
+function corsPreflight(request: Request, env: Env): Response {
+  const origin = allowedOrigin(request, env);
+  if (!origin) return new Response(null, { status: 403 });
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "access-control-allow-origin": origin,
+      "access-control-allow-credentials": "true",
+      "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
+      "access-control-allow-headers": "content-type",
+      "access-control-max-age": "600",
+      "vary": "Origin"
+    }
+  });
+}
+
+async function listMentions(request: Request, auth: AuthContext, env: Env, workspaceId: string, monitorId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "monitor.read");
+  const input = new URL(request.url);
+  const params = new URLSearchParams();
+  for (const key of ["limit", "sentiment", "minSeverity", "source"]) {
+    const value = input.searchParams.get(key);
+    if (value) params.set(key, value);
+  }
+  const suffix = params.size ? `?${params.toString()}` : "";
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), `/internal/mentions${suffix}`);
+  return json(data);
+}
+
+async function getMentionDetail(auth: AuthContext, env: Env, workspaceId: string, monitorId: string, mentionId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "monitor.read");
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), `/internal/mentions/${encodeURIComponent(mentionId)}`);
+  return json(data);
+}
+
+async function addMentionFeedback(request: Request, auth: AuthContext, env: Env, workspaceId: string, monitorId: string, mentionId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "monitor.update");
+  const body = await readJson(request);
+  const action = asString(body.action, "feedback_action");
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), "/internal/feedback", {
+    method: "POST",
+    body: JSON.stringify({ mentionId, userId: auth.userId, action })
+  });
+  return json(data);
+}
+
+async function listAlerts(auth: AuthContext, env: Env, workspaceId: string, monitorId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "monitor.read");
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), "/internal/alerts");
+  return json(data);
+}
+
+async function patchAlert(request: Request, auth: AuthContext, env: Env, workspaceId: string, monitorId: string, alertId: string): Promise<Response> {
+  await requireWorkspaceCapability(env, auth, workspaceId, "monitor.update");
+  const body = await readJson(request);
+  const state = asString(body.state, "alert_state");
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), `/internal/alerts/${encodeURIComponent(alertId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ state })
+  });
+  return json(data);
+}
+
+async function route(request: Request, env: Env, context: RouteContext): Promise<Response> {
+  const { pathname } = context.url;
+  if (request.method === "GET" && pathname === "/health") return json({ service: "api", status: "ok", environment: env.ENVIRONMENT, requestId: context.requestId });
+  if (request.method === "POST" && pathname === "/v1/auth/signup") return signup(request, env);
+  if (request.method === "POST" && pathname === "/v1/auth/login") return login(request, env);
+  if (request.method === "POST" && pathname === "/v1/queries/validate") {
+    const body = await readJson(request);
+    const rawQuery = asString(body.rawQuery, "raw_query");
+    try {
+      const ast = parseBooleanQuery(rawQuery);
+      return json({ valid: true, normalizedQuery: normalizeBooleanQuery(rawQuery), ast });
+    } catch (error) {
+      return json({ valid: false, error: error instanceof Error ? error.message : "invalid_boolean_query" }, 400);
+    }
+  }
+
+  const auth = await resolveAuth(request, env);
+  if (request.method === "POST" && pathname === "/v1/auth/logout") return logout(request, env);
+  if (request.method === "GET" && pathname === "/v1/me") return json({ user: { id: auth.userId, email: auth.email, globalRole: auth.globalRole } });
+  if (request.method === "GET" && pathname === "/v1/workspaces") return listWorkspaces(auth, env);
+  if (request.method === "POST" && pathname === "/v1/workspaces") return createWorkspace(request, auth, env);
+
+  let match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)$/);
+  if (match && request.method === "GET") return workspaceDetails(auth, env, match[1] ?? "");
+
+  match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors$/);
+  if (match && request.method === "GET") return listMonitors(auth, env, match[1] ?? "");
+  if (match && request.method === "POST") return createMonitor(request, auth, env, match[1] ?? "");
+
+  match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)$/);
+  if (match && request.method === "GET") return getMonitor(auth, env, match[1] ?? "", match[2] ?? "");
+  if (match && request.method === "PATCH") return updateMonitor(request, auth, env, match[1] ?? "", match[2] ?? "");
+  if (match && request.method === "DELETE") return deleteMonitor(auth, env, match[1] ?? "", match[2] ?? "");
+
+  match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)\/queries$/);
+  if (match && request.method === "GET") return listQueries(auth, env, match[1] ?? "", match[2] ?? "");
+  if (match && request.method === "POST") return createQuery(request, auth, env, match[1] ?? "", match[2] ?? "");
+
+  match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)\/queries\/([^/]+)$/);
+  if (match && request.method === "PATCH") return updateQuery(request, auth, env, match[1] ?? "", match[2] ?? "", match[3] ?? "");
+  if (match && request.method === "DELETE") return deleteQuery(auth, env, match[1] ?? "", match[2] ?? "", match[3] ?? "");
+  match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)\/mentions$/);
+  if (match && request.method === "GET") return listMentions(request, auth, env, match[1] ?? "", match[2] ?? "");
+
+  match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)\/mentions\/([^/]+)$/);
+  if (match && request.method === "GET") return getMentionDetail(auth, env, match[1] ?? "", match[2] ?? "", match[3] ?? "");
+
+  match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)\/mentions\/([^/]+)\/feedback$/);
+  if (match && request.method === "POST") return addMentionFeedback(request, auth, env, match[1] ?? "", match[2] ?? "", match[3] ?? "");
+
+  match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)\/alerts$/);
+  if (match && request.method === "GET") return listAlerts(auth, env, match[1] ?? "", match[2] ?? "");
+
+  match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)\/alerts\/([^/]+)$/);
+  if (match && request.method === "PATCH") return patchAlert(request, auth, env, match[1] ?? "", match[2] ?? "", match[3] ?? "");
+
+  return errorResponse("not_found", 404, context.requestId);
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const requestId = request.headers.get("cf-ray") ?? crypto.randomUUID();
+    const context: RouteContext = { requestId, url: new URL(request.url) };
+    try {
+      if (request.method === "OPTIONS") return corsPreflight(request, env);
+      const response = await route(request, env, context);
+      response.headers.set("x-request-id", requestId);
+      return withCors(response, request, env);
+    } catch (error) {
+      const httpError = error instanceof HttpError ? error : new HttpError(500, "internal_error");
+      structuredLog(httpError.status >= 500 ? "error" : "warn", httpError.message, { requestId, route: context.url.pathname }, {
+        status: httpError.status,
+        errorType: error instanceof Error ? error.name : "unknown"
+      });
+      return withCors(errorResponse(httpError.message, httpError.status, requestId), request, env);
+    }
+  }
+};

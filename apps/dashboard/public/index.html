@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PulseWatch</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <aside class="sidebar">
+      <div class="brand">PulseWatch</div>
+      <div class="tagline">Reputation monitoring</div>
+      <nav>
+        <button data-view="overview" class="nav active">Overview</button>
+        <button data-view="monitors" class="nav">Monitors</button>
+        <button data-view="settings" class="nav">Settings</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="sessionState">Signed out</span>
+        <button id="logoutBtn" class="ghost hidden">Sign out</button>
+      </div>
+    </aside>
+
+    <section class="content">
+      <header class="topbar">
+        <div>
+          <h1 id="pageTitle">Overview</h1>
+          <p id="pageSubtitle">Cloudflare-native social listening foundation.</p>
+        </div>
+        <button id="newMonitorBtn" class="primary hidden">New monitor</button>
+      </header>
+
+      <section id="authPanel" class="auth-grid">
+        <article class="panel">
+          <div class="eyebrow">Create account</div>
+          <h2>Start monitoring</h2>
+          <form id="signupForm">
+            <label>Email<input name="email" type="email" required /></label>
+            <label>Password<input name="password" type="password" minlength="10" required /></label>
+            <label>Workspace<input name="workspaceName" required placeholder="Acme Reputation" /></label>
+            <button class="primary" type="submit">Create account</button>
+          </form>
+        </article>
+        <article class="panel">
+          <div class="eyebrow">Welcome back</div>
+          <h2>Sign in</h2>
+          <form id="loginForm">
+            <label>Email<input name="email" type="email" required /></label>
+            <label>Password<input name="password" type="password" required /></label>
+            <button class="secondary" type="submit">Sign in</button>
+          </form>
+        </article>
+      </section>
+
+      <section id="appPanel" class="hidden">
+        <div class="metrics">
+          <article><span>Active monitors</span><strong id="monitorCount">0</strong></article>
+          <article><span>Negative alerts</span><strong>—</strong><small>Phase 9</small></article>
+          <article><span>Mentions today</span><strong>—</strong><small>Phase 8</small></article>
+          <article><span>Coverage</span><strong>Foundation</strong><small>Phase 1</small></article>
+        </div>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow">Workspace</div>
+              <h2 id="workspaceName">No workspace selected</h2>
+            </div>
+            <span id="workspaceRole" class="pill">—</span>
+          </div>
+          <div id="monitorList" class="monitor-list"></div>
+        </article>
+      </section>
+
+      <section id="settingsPanel" class="panel hidden">
+        <div class="eyebrow">API configuration</div>
+        <h2>Development endpoint</h2>
+        <form id="apiForm">
+          <label>API base URL<input name="apiBase" placeholder="http://localhost:8787" /></label>
+          <button class="secondary" type="submit">Save</button>
+        </form>
+      </section>
+
+      <div id="toast" class="toast hidden"></div>
+    </section>
+  </main>
+
+  <dialog id="monitorDialog">
+    <form id="monitorForm" method="dialog">
+      <div class="eyebrow">New monitor</div>
+      <h2>Create monitor</h2>
+      <label>Name<input name="name" required placeholder="Acme Company" /></label>
+      <label>Type
+        <select name="type">
+          <option value="company">Company</option>
+          <option value="brand">Brand</option>
+          <option value="person">Person</option>
+          <option value="product">Product</option>
+        </select>
+      </label>
+      <label>Initial keyword / Boolean query<input name="query" required placeholder='"Acme" AND NOT "Acme School"' /></label>
+      <div class="dialog-actions">
+        <button type="button" id="cancelMonitor" class="ghost">Cancel</button>
+        <button type="submit" class="primary">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

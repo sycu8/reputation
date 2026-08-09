@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reputa-discovery-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-dev" }
+    ]
+  },
+  "queues": {
+    "consumers": [
+      { "queue": "reputa-discovery-normal-dev", "max_batch_size": 20, "max_batch_timeout": 5, "max_retries": 3, "dead_letter_queue": "reputa-discovery-dlq-dev" },
+      { "queue": "reputa-discovery-priority-dev", "max_batch_size": 10, "max_batch_timeout": 1, "max_retries": 5, "dead_letter_queue": "reputa-discovery-dlq-dev" }
+    ],
+    "producers": [
+      { "binding": "CRAWL_STATIC", "queue": "reputa-crawl-static-dev" },
+      { "binding": "CRAWL_BROWSER", "queue": "reputa-crawl-browser-dev" }
+    ]
+  },
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_discovery_dev" }]
+}

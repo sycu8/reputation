@@ -1,0 +1,19 @@
+---
+description: Cloudflare architecture and deployment constraints
+globs: "{apps,workers,packages,config-examples}/**/*"
+alwaysApply: true
+---
+# Cloudflare architecture rules
+
+- Inspect relevant `wrangler.jsonc` bindings before editing runtime code.
+- Durable Objects are strongly consistent per-key shards, not a global database.
+- R2 stores raw/large objects; DOs store operational state and metadata.
+- Queues are the distributed work frontier. Consumers must be idempotent and have bounded retries/DLQ strategy.
+- KV is read-heavy eventual-consistency config/cache only.
+- Browser Run is an escalation path after normal fetch/extraction quality checks.
+- Preserve DomainCoordinatorDO and BrowserPoolDO coordination boundaries.
+- Workers AI should not receive every raw result; cheap deterministic/relevance filters come first.
+- Source discovery is federated and adapter-driven. No single search provider is total Internet coverage.
+- Protect crawler against SSRF on initial URLs and redirects. Do not bypass CAPTCHA/login/private content.
+- Keep dev, staging and production Cloudflare resources isolated.
+- Run `wrangler types` after binding/config changes.

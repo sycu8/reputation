@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reputa-state-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "durable_objects": {
+    "bindings": [
+      { "name": "USER_DIRECTORY", "class_name": "UserDirectoryDO" },
+      { "name": "TENANT_DIRECTORY", "class_name": "TenantDirectoryDO" },
+      { "name": "MONITOR_DO", "class_name": "MonitorDO" },
+      { "name": "TENANT_BUDGET", "class_name": "TenantBudgetDO" },
+      { "name": "DOMAIN_DO", "class_name": "DomainCoordinatorDO" },
+      { "name": "BROWSER_POOL_DO", "class_name": "BrowserPoolDO" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "UserDirectoryDO",
+        "TenantDirectoryDO",
+        "MonitorDO",
+        "TenantBudgetDO",
+        "DomainCoordinatorDO",
+        "BrowserPoolDO"
+      ]
+    }
+  ],
+  "env": {
+    "staging": { "name": "reputa-state-staging" },
+    "production": { "name": "reputa-state-production" }
+  }
+}

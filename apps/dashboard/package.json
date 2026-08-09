@@ -1,0 +1,5 @@
+{
+  "name": "@reputa/dashboard",
+  "private": true,
+  "type": "module"
+}
