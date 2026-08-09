@@ -1,5 +1,6 @@
 import { idempotencyKey, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import { calculateSeverity, severityBand, type Sentiment } from "../../../packages/severity/src/index.ts";
+import { shouldClusterAlert } from "../../../packages/virality/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog } from "../../../packages/observability/src/index.ts";
 
@@ -180,12 +181,42 @@ async function processMessage(message: Message<JobEnvelope<AiCandidatePayload>>,
   const result = await write.json() as { mentionId: string; created: boolean };
   if (!result.created) return;
 
-  if (classification.sentiment === "negative" && severityScore >= 60) {
+  const clusterId = job.payload.storyClusterId;
+  let clusterMentionCount = 1;
+  if (clusterId) {
+    const clusterProbe = await stub.fetch(
+      `https://do.internal/internal/mentions?limit=50&minSeverity=0`
+    );
+    if (clusterProbe.ok) {
+      const listed = await clusterProbe.json() as { mentions: Array<{ story_cluster_id?: string | null }> };
+      clusterMentionCount = Math.max(
+        1,
+        listed.mentions.filter((item) => item.story_cluster_id === clusterId).length
+      );
+    }
+  }
+  const clusterAlert = shouldClusterAlert(severityScore, 0, clusterMentionCount);
+  if ((classification.sentiment === "negative" && severityScore >= 60) || clusterAlert) {
     const band = severityBand(severityScore);
-    const dedupeKey = await idempotencyKey([job.monitorId, job.payload.contentId, "negative-v1"]);
+    const alertType = clusterAlert && !(classification.sentiment === "negative" && severityScore >= 60)
+      ? "cluster_virality"
+      : "negative_mention";
+    const dedupeKey = await idempotencyKey([
+      job.monitorId,
+      alertType === "cluster_virality" ? (clusterId ?? job.payload.contentId) : job.payload.contentId,
+      alertType === "cluster_virality" ? "cluster-v1" : "negative-v1"
+    ]);
     const alertWrite = await stub.fetch("https://do.internal/internal/alerts/upsert", {
       method: "POST",
-      body: JSON.stringify({ mentionId: result.mentionId, type: "negative_mention", severity: band, dedupeKey, reason: classification.reason })
+      body: JSON.stringify({
+        mentionId: result.mentionId,
+        type: alertType,
+        severity: band,
+        dedupeKey,
+        reason: clusterAlert && alertType === "cluster_virality"
+          ? `Cluster growth alert (${clusterMentionCount} related mentions)`
+          : classification.reason
+      })
     });
     if (alertWrite.ok) {
       const alertResult = await alertWrite.json() as { alertId: string; created: boolean };

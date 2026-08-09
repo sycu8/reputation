@@ -15,7 +15,7 @@ This package consolidates the latest source code, tests, Cloudflare configs, pro
 
 - `apps/api-worker/`
 - `apps/dashboard/`
-- `workers/state/`
+- `workers/state/` (includes `SchedulerShardDO`)
 - `workers/scheduler/`
 - `workers/discovery/`
 - `workers/crawler-fetch/`
@@ -23,7 +23,8 @@ This package consolidates the latest source code, tests, Cloudflare configs, pro
 - `workers/processor/`
 - `workers/ai-classifier/`
 - `workers/alerts/`
-- `packages/`
+- `workers/reports/`
+- `packages/` (`auth`, `billing`, `boolean-query`, `crawler-core`, `dedupe`, `observability`, `severity`, `source-adapters`, `types`, `virality`)
 - `tests/`
 - `scripts/`
 
@@ -41,6 +42,12 @@ All historical implementation prompts are retained under `prompts/`, including p
 - Production hostname: `reputation.orangecloud.vn`
 - Plans: $29 / $49 / $99 monthly
 - Goal: broad public Internet/social coverage with source-health transparency and high-precision negative alerts, not a false claim of 100% Internet coverage.
+
+## Agent progress (2026-08-09)
+
+- Branch: `cursor/import-and-build-reputation-8cdc`
+- Local `npm run validate`: PASS (36 tests)
+- Cloudflare deploy: blocked on missing Wrangler/MCP authentication in cloud agent
 
 ## No secrets included
 

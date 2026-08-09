@@ -1,87 +1,96 @@
 # BUILD_STATUS
 
-Last updated: 2026-08-09
+Last updated: 2026-08-09 (Cursor Cloud Agent — post-implementation)
 
 ## Summary
 
-A runnable Cloudflare-native foundation and first end-to-end data path now exist in this repository. Local TypeScript validation and Node/SQLite integration tests pass. Cloudflare remote bindings have not been deployed from this packaged build. The production deployment target is now selected as Cloudflare account Cloudspace with hostname `reputation.orangecloud.vn`; remote provisioning and smoke tests still must be performed from Cursor/operator environment with valid Cloudflare access.
+Handoff package imported into `sycu8/reputation`. Local validation passes with **36 tests**. Product code now covers sharded scheduling, federated discovery (including social adapter boundaries), SimHash/story clustering, dashboard UX, alert delivery receipts, reports worker skeleton, and billing stub/webhook/admin APIs.
 
+**Cloudflare production deploy is blocked:** Wrangler is not authenticated in this environment (`wrangler whoami` → not authenticated). Cloudflare Bindings MCP requires interactive auth in Cursor desktop IDE (unavailable to this cloud agent). No remote resources were created and `reputation.orangecloud.vn` was not verified or routed.
 
 ## Deployment target
 
 - Cloudflare account: **Cloudspace**
-- Account ID reference: `4c15704ef706b9c8954cd6f9feb678d8`
+- Account ID reference: `4c15704ef706b9c8954cd6f9feb678d8` (metadata only; not hardcoded in runtime)
 - Production hostname: `reputation.orangecloud.vn`
-- Deployment status: **NOT YET VERIFIED/DEPLOYED from this package**
+- Deployment status: **NOT DEPLOYED** — missing Cloudflare credentials/auth in agent environment
 
-## Validation
+## Validation (verified this run)
 
 Local:
 
+- `npm install`: PASS
 - `npm run typecheck`: PASS
 - `npm run lint`: PASS
-- `npm test`: PASS — 8 tests
-- Cursor-ready package validation: PASS — typecheck, lint and all 8 tests re-run after consolidation
-- SQLite-backed DO behavior simulated with Node `node:sqlite`: PASS
-- `wrangler types`: NOT RUN — Wrangler unavailable from the current internal npm registry
-- Browser Run remote integration: NOT RUN
-- Workers AI remote inference: NOT RUN
-- Cloudflare Email Service remote sending: NOT RUN
-- Brave Search live discovery: NOT RUN — secret not configured
+- `npm test`: PASS — **36 tests**
+- `npm run validate`: PASS
+- `wrangler whoami`: FAIL — not authenticated
+- `wrangler types`: NOT RUN — no authenticated Cloudflare session / placeholder KV IDs
+- Browser Run remote / Workers AI remote / Email Service / Brave live: NOT RUN
+- Zone ownership check for `orangecloud.vn` in Cloudspace: NOT RUN
 
 ## Phase status
 
 | Phase | Status | Notes |
 |---|---|---|
-| 0 Foundation | PASS WITH ENV LIMITATION | Monorepo, TypeScript, lint, tests, CI, Wrangler configs. `wrangler types` awaits normal Cloudflare environment. |
-| 1 Multi-tenant control plane | IMPLEMENTED | Signup/login, revocable sessions, workspace membership/RBAC, TenantDirectoryDO, MonitorDO, monitor/query CRUD, audit, tenant isolation tests. |
-| 2 Boolean engine | IMPLEMENTED | AND/OR/NOT, parentheses, exact phrases, implicit AND, Unicode/Vietnamese, normalize/evaluate, validation API. |
-| 3 Scheduler + Queues | PARTIAL | Job envelope, priorities, scheduler/queue worker skeleton. Production due-monitor index still needs completion. |
-| 4 Web/News/RSS | PARTIAL | Brave broad-web discovery + direct fetch crawler + R2/crawl cache. RSS/sitemap/news-specific adapters still needed. |
-| 5 Browser Run | IMPLEMENTED / UNVERIFIED REMOTELY | Quick Action `content` fallback, BrowserPoolDO, DomainCoordinatorDO, leases, R2 storage. Requires remote binding validation. |
-| 6 Relevance + dedupe | PARTIAL | Boolean post-fetch gate, relevance score, content ID/crawl-cache dedupe. SimHash/Vectorize/story dedupe pending. |
-| 7 Sentiment + severity | IMPLEMENTED / UNVERIFIED REMOTELY | Workers AI target-aware classifier, deterministic fallback, severity scoring, risk categories, priority lane. |
-| 8 Mentions UI/API | PARTIAL | Mention APIs + dashboard foundation. Full filtering/detail UX and charts remain. |
-| 9 Alerts | PARTIAL | Negative alert creation, Cloudflare Email Service + Telegram worker. Delivery idempotency/reconciliation and settings UI need hardening. |
-| 10 Social adapters | NOT STARTED | Adapter capability framework exists; live YouTube/X/Reddit/Facebook/TikTok/LinkedIn integrations remain. |
-| 11 Virality + clustering | NOT STARTED | — |
-| 12 Reports + hardening | NOT STARTED | — |
-| 13 Billing + super admin | PARTIAL | $29/$49/$99 entitlement primitives and explicit `super_admin`; checkout/webhook/admin console remain. |
+| 0 Foundation | PASS | Monorepo, TS, lint, tests, CI, Wrangler configs |
+| 1 Multi-tenant control plane | IMPLEMENTED | Auth/session/RBAC/tenants/monitors/audit |
+| 2 Boolean engine | IMPLEMENTED | AND/OR/NOT, phrases, Vietnamese |
+| 3 Scheduler + Queues | IMPLEMENTED | `SchedulerShardDO` (64 shards), claim/advance, API sync on monitor CRUD; KV no longer primary |
+| 4 Web/News/RSS | IMPLEMENTED (credentials pending) | Brave web + news providers, RSS/Atom parser, sitemap parser, federated fan-out + URL dedupe |
+| 5 Browser Run | IMPLEMENTED / UNVERIFIED REMOTELY | Unchanged; needs remote binding smoke |
+| 6 Relevance + dedupe | IMPLEMENTED (Vectorize optional) | Boolean post-fetch, SimHash near-dupe, story cluster assign; Vectorize adapter interface + optional binding |
+| 7 Sentiment + severity | IMPLEMENTED / UNVERIFIED REMOTELY | Unchanged path; virality score can boost severity |
+| 8 Mentions UI/API | IMPLEMENTED | Dashboard Overview/Mentions/Alerts/Monitors/Reports/Settings/Source health |
+| 9 Alerts | IMPLEMENTED | Per-channel `alert_deliveries` receipts; skip already-sent channels on retry |
+| 10 Social adapters | BOUNDARIES IMPLEMENTED | YouTube/X/Reddit call APIs when secrets present; else empty + truthful availability. FB/TikTok/LinkedIn degraded/contract-required stubs |
+| 11 Virality + clustering | PRIMITIVES IMPLEMENTED | `@reputa/virality` + story clusters; engagement snapshot pipeline still thin |
+| 12 Reports + hardening | SKELETON | `workers/reports` cron/queue/R2 stub; full SLO dashboards not live |
+| 13 Billing + super admin | PARTIAL / STUB PROVIDER | `$29/$49/$99` entitlements, stub checkout, signed webhook idempotency via KV, admin tenant list + source-health; real Stripe/provider not wired |
 
-## Important architectural invariants already enforced
+## Source coverage (code truthfulness)
 
-- No single global Durable Object database.
-- User identity, tenant directory, and monitor state are separate shards.
-- R2 owns raw/large content.
-- Tenant IDs from URLs are authorization-checked against server-side membership.
-- Sessions are revocable; authorization truth is not stored only in a JWT.
-- Public query cannot assign `super_admin`.
-- `fetch()` before Browser Run.
-- Browser Run has a global pool coordinator plus domain coordinator.
-- Canonical crawl cache enables crawl-once/reuse behavior within freshness TTL.
-- Queue jobs have trace/job IDs and can be retried.
-- Potential negative content is routed into a separate AI priority queue.
-- Boolean query is re-evaluated after fetching source content.
-- Crawler rejects private/local literal IP ranges and manually validates redirect targets.
+| Source | Runtime status without secrets |
+|---|---|
+| Open web (Brave) | `disabled` until `BRAVE_SEARCH_API_KEY` |
+| News (Brave news) | `disabled` until Brave key |
+| RSS/Atom | `public-web` when `RSS_FEED_URLS` configured |
+| Sitemap | `public-web` when `SITEMAP_URLS` configured |
+| YouTube | `native-api` path when `YOUTUBE_API_KEY`; else empty |
+| X | `native-api` path when `X_BEARER_TOKEN`; else empty |
+| Reddit | `contract-required` without token |
+| Facebook / TikTok / LinkedIn | `degraded` / `contract-required` stubs; no fake data |
 
-## Known risks / next fixes
+## Important invariants still enforced
 
-1. DNS-rebinding-grade SSRF hardening needs a Cloudflare-specific resolved-IP strategy or strict source allow/policy layer; current guard blocks private literal addresses and redirect hops.
-2. Scheduler currently reads a development due-monitor index from KV. Replace with a scalable sharded scheduler index populated by MonitorDO state.
-3. Alert delivery is at-least-once around external notification side effects. Add durable per-channel delivery receipts/reconciliation before production.
-4. Password PBKDF2 cost must be benchmarked on actual Workers CPU and tuned without weakening password security.
-5. Browser Run Quick Action must be tested with remote binding on representative JS-heavy sources.
-6. Workers AI schema output/fallback thresholds need benchmark fixtures and production evaluation metrics.
-7. Brave Search is one discovery provider, not total Internet coverage. Add federated search/news/RSS/sitemap/source-native providers and measure precision/recall/source health.
-8. Social platform adapters require source-specific API access/contract/policy work. Never replace unavailable access with brittle auth/CAPTCHA bypass.
+- No global database Durable Object (scheduler uses **sharded** `SchedulerShardDO`).
+- R2 for raw/large content; DO SQLite for operational shards.
+- Tenant authorization checked server-side; no public `super_admin` assignment.
+- Fetch-first / Browser-Run-second.
+- Boolean re-evaluation after fetch.
+- Negative hint → AI priority lane.
+- Alert channel delivery idempotency via receipts.
 
-## Next recommended implementation order
+## Genuine external blockers
 
-1. Provision one Cloudflare dev account resources and run `wrangler types` + remote smoke tests.
-2. Finish Phase 3 scheduler index.
-3. Finish RSS/sitemap/news adapters in Phase 4.
-4. Add Phase 6 semantic dedupe/Vectorize.
-5. Finish Phase 8 mention/detail/alert UI.
-6. Harden Phase 9 notification idempotency.
-7. Implement social adapters source-by-source.
-8. Add billing checkout/webhooks/admin console after monitoring economics are measured.
+1. **Cloudflare auth** — Wrangler + Bindings MCP unauthenticated in this cloud agent.
+2. **Provider secrets** — Brave, social APIs, Telegram, Email sender, billing webhook secret not present (by design).
+3. **Zone verification** — cannot confirm `orangecloud.vn` is in Cloudspace until Cloudflare auth exists.
+4. Placeholder KV namespace IDs (`000…`) must be replaced with provisioned IDs before deploy.
+
+## Operator unblock for production deploy
+
+1. In Cursor desktop: authenticate Cloudflare Bindings MCP to Cloudspace.
+2. Export/set `CLOUDFLARE_API_TOKEN` with Workers/R2/KV/Queues/DO/Browser/AI/Email permissions for account `4c15704ef706b9c8954cd6f9feb678d8`.
+3. Confirm `wrangler whoami` shows Cloudspace and that `orangecloud.vn` zone is in that account.
+4. Follow `docs/DEPLOYMENT_CLOUDSPACE.md`: provision resources → replace placeholder IDs → deploy state first → workers → routes → secrets → smoke tests.
+5. Set secrets: `SUPER_ADMIN_EMAILS`, `BRAVE_SEARCH_API_KEY`, optional social keys, `TELEGRAM_BOT_TOKEN`, `BILLING_WEBHOOK_SECRET`.
+
+## Next recommended steps after auth
+
+1. Provision Cloudspace resources and run `npm run wrangler:types`.
+2. Deploy + smoke test per `docs/DEPLOYMENT_CLOUDSPACE.md`.
+3. Wire real billing provider replacing stub.
+4. Add engagement snapshot collection for live virality.
+5. Remote Browser Run / Workers AI evaluation fixtures.
+6. Measure P95 negative-alert latency against SLO.
