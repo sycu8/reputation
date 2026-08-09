@@ -1,6 +1,7 @@
 import { advanceNextScanAt, claimLeaseUntil, isClaimable } from "../../../packages/crawler-core/src/index.ts";
 import { hammingDistance64, simHashFromHex } from "../../../packages/dedupe/src/index.ts";
-import type { GlobalRole, MonitorRecord, MonitorStatus, MonitorType, QueryRecord, WorkspaceRole } from "../../../packages/types/src/index.ts";
+import type { GlobalRole, MonitorProfile, MonitorRecord, MonitorStatus, MonitorType, QueryRecord, WorkspaceRole } from "../../../packages/types/src/index.ts";
+import { normalizeMonitorProfile, parseMonitorProfileJson } from "../../../packages/types/src/index.ts";
 
 interface Env {}
 
@@ -303,6 +304,7 @@ export class TenantDirectoryDO extends SqliteObject {
       monitor_id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT NOT NULL, status TEXT NOT NULL,
       priority TEXT NOT NULL DEFAULT 'normal', next_scan_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )`);
+    ensureColumn(this.sql, "monitor_directory", "profile_json", "TEXT");
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_monitor_directory_next_scan ON monitor_directory(next_scan_at, status)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS audit_events (
       id TEXT PRIMARY KEY, actor_user_id TEXT NOT NULL, action TEXT NOT NULL, target_type TEXT NOT NULL,
@@ -383,8 +385,18 @@ export class TenantDirectoryDO extends SqliteObject {
 
   private listMonitors(): Response {
     const monitors = rows(this.sql.exec<Record<string, unknown>>(
-      `SELECT monitor_id,name,type,status,priority,next_scan_at,created_at,updated_at FROM monitor_directory ORDER BY created_at DESC`
-    ));
+      `SELECT monitor_id,name,type,status,priority,next_scan_at,profile_json,created_at,updated_at FROM monitor_directory ORDER BY created_at DESC`
+    )).map((row) => ({
+      monitor_id: row.monitor_id,
+      name: row.name,
+      type: row.type,
+      status: row.status,
+      priority: row.priority,
+      next_scan_at: row.next_scan_at,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      profile: parseMonitorProfileJson(typeof row.profile_json === "string" ? row.profile_json : null)
+    }));
     return json({ monitors });
   }
 
@@ -397,20 +409,22 @@ export class TenantDirectoryDO extends SqliteObject {
     const status = body.status === "paused" ? "paused" : "active";
     const priority = typeof body.priority === "string" && body.priority.trim() ? body.priority.trim() : "normal";
     const nextScanAt = typeof body.nextScanAt === "string" && body.nextScanAt.trim() ? body.nextScanAt.trim() : null;
+    const profile = normalizeMonitorProfile(body.profile);
+    const profileJson = JSON.stringify(profile);
     const ts = nowIso();
     this.sql.exec(
-      `INSERT INTO monitor_directory(monitor_id,name,type,status,priority,next_scan_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
-      monitorId, name, type, status, priority, nextScanAt, ts, ts
+      `INSERT INTO monitor_directory(monitor_id,name,type,status,priority,next_scan_at,profile_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+      monitorId, name, type, status, priority, nextScanAt, profileJson, ts, ts
     );
-    this.audit(actorUserId, "monitor.create", "monitor", monitorId, { name, type, nextScanAt });
+    this.audit(actorUserId, "monitor.create", "monitor", monitorId, { name, type, nextScanAt, profile });
     return json({ ok: true }, 201);
   }
 
   private async updateMonitorEntry(request: Request, monitorId: string): Promise<Response> {
     const body = await readJson(request);
     const actorUserId = asString(body.actorUserId, "actor_user_id");
-    const current = rows(this.sql.exec<{ name: string; type: string; status: string; priority: string; next_scan_at: string | null }>(
-      `SELECT name,type,status,priority,next_scan_at FROM monitor_directory WHERE monitor_id = ? LIMIT 1`, monitorId
+    const current = rows(this.sql.exec<{ name: string; type: string; status: string; priority: string; next_scan_at: string | null; profile_json: string | null }>(
+      `SELECT name,type,status,priority,next_scan_at,profile_json FROM monitor_directory WHERE monitor_id = ? LIMIT 1`, monitorId
     ))[0];
     if (!current) return json({ error: "monitor_not_found" }, 404);
     const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : current.name;
@@ -422,11 +436,15 @@ export class TenantDirectoryDO extends SqliteObject {
       : body.nextScanAt === null
         ? null
         : current.next_scan_at;
+    const profile = body.profile !== undefined
+      ? normalizeMonitorProfile(body.profile)
+      : parseMonitorProfileJson(current.profile_json);
+    const profileJson = JSON.stringify(profile);
     this.sql.exec(
-      `UPDATE monitor_directory SET name=?,type=?,status=?,priority=?,next_scan_at=?,updated_at=? WHERE monitor_id=?`,
-      name, type, status, priority, nextScanAt, nowIso(), monitorId
+      `UPDATE monitor_directory SET name=?,type=?,status=?,priority=?,next_scan_at=?,profile_json=?,updated_at=? WHERE monitor_id=?`,
+      name, type, status, priority, nextScanAt, profileJson, nowIso(), monitorId
     );
-    this.audit(actorUserId, "monitor.update", "monitor", monitorId, { name, type, status, priority, nextScanAt });
+    this.audit(actorUserId, "monitor.update", "monitor", monitorId, { name, type, status, priority, nextScanAt, profile });
     return json({ ok: true });
   }
 
@@ -483,6 +501,7 @@ export class MonitorDO extends SqliteObject {
     )`);
     ensureColumn(this.sql, "monitor", "next_scan_at", "TEXT");
     ensureColumn(this.sql, "monitor", "last_scan_at", "TEXT");
+    ensureColumn(this.sql, "monitor", "profile_json", "TEXT");
     this.sql.exec(`CREATE TABLE IF NOT EXISTS queries (
       id TEXT PRIMARY KEY, raw_query TEXT NOT NULL, normalized_query TEXT NOT NULL, ast_json TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -581,10 +600,12 @@ export class MonitorDO extends SqliteObject {
     const alertThreshold = typeof body.alertThreshold === "number" ? Math.min(100, Math.max(0, Math.floor(body.alertThreshold))) : 60;
     const ts = nowIso();
     const nextScanAt = typeof body.nextScanAt === "string" && body.nextScanAt.trim() ? body.nextScanAt.trim() : ts;
+    const profile = normalizeMonitorProfile(body.profile);
+    const profileJson = JSON.stringify(profile);
     this.sql.exec(
-      `INSERT OR IGNORE INTO monitor(id,tenant_id,name,type,status,default_language,scan_interval_sec,alert_threshold,next_scan_at,last_scan_at,created_at,updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-      id, tenantId, name, type, "active", defaultLanguage, scanIntervalSec, alertThreshold, nextScanAt, null, ts, ts
+      `INSERT OR IGNORE INTO monitor(id,tenant_id,name,type,status,default_language,scan_interval_sec,alert_threshold,next_scan_at,last_scan_at,profile_json,created_at,updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      id, tenantId, name, type, "active", defaultLanguage, scanIntervalSec, alertThreshold, nextScanAt, null, profileJson, ts, ts
     );
     return this.getMonitor();
   }
@@ -593,7 +614,7 @@ export class MonitorDO extends SqliteObject {
     const item = rows(this.sql.exec<{
       id: string; tenant_id: string; name: string; type: MonitorType; status: MonitorStatus;
       default_language: string | null; scan_interval_sec: number; alert_threshold: number;
-      next_scan_at: string | null; last_scan_at: string | null; created_at: string; updated_at: string;
+      next_scan_at: string | null; last_scan_at: string | null; profile_json: string | null; created_at: string; updated_at: string;
     }>(`SELECT * FROM monitor LIMIT 1`))[0];
     if (!item) return json({ error: "monitor_not_found" }, 404);
     const monitor: MonitorRecord = {
@@ -607,6 +628,7 @@ export class MonitorDO extends SqliteObject {
       alertThreshold: item.alert_threshold,
       nextScanAt: item.next_scan_at ?? null,
       lastScanAt: item.last_scan_at ?? null,
+      profile: parseMonitorProfileJson(item.profile_json),
       createdAt: item.created_at,
       updatedAt: item.updated_at
     };
@@ -630,9 +652,12 @@ export class MonitorDO extends SqliteObject {
       : body.nextScanAt === null
         ? null
         : current.nextScanAt;
+    const profile: MonitorProfile = body.profile !== undefined
+      ? normalizeMonitorProfile(body.profile)
+      : (current.profile ?? {});
     this.sql.exec(
-      `UPDATE monitor SET name=?,type=?,status=?,default_language=?,scan_interval_sec=?,alert_threshold=?,next_scan_at=?,updated_at=? WHERE id=?`,
-      name, type, status, defaultLanguage, scanIntervalSec, alertThreshold, nextScanAt, nowIso(), current.id
+      `UPDATE monitor SET name=?,type=?,status=?,default_language=?,scan_interval_sec=?,alert_threshold=?,next_scan_at=?,profile_json=?,updated_at=? WHERE id=?`,
+      name, type, status, defaultLanguage, scanIntervalSec, alertThreshold, nextScanAt, JSON.stringify(profile), nowIso(), current.id
     );
     return this.getMonitor();
   }

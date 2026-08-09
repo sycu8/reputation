@@ -5,6 +5,7 @@ import { createBillingProvider, planFromPriceId } from "../../../packages/billin
 import { schedulerShardIndex } from "../../../packages/crawler-core/src/index.ts";
 import { SOURCE_CAPABILITY_DEFAULTS } from "../../../packages/source-adapters/src/index.ts";
 import type { AuthContext, GlobalRole, MonitorType, WorkspaceRole } from "../../../packages/types/src/index.ts";
+import { normalizeMonitorProfile } from "../../../packages/types/src/index.ts";
 import { structuredLog } from "../../../packages/observability/src/index.ts";
 
 interface Env {
@@ -385,15 +386,16 @@ async function createMonitor(request: Request, auth: AuthContext, env: Env, work
   const defaultLanguage = typeof body.defaultLanguage === "string" ? body.defaultLanguage : "vi";
   const priority = typeof body.priority === "string" && body.priority.trim() ? body.priority.trim() : "normal";
   const nextScanAt = new Date().toISOString();
+  const profile = normalizeMonitorProfile(body.profile);
 
   await doJson(tenantStub(env, workspaceId), "/internal/monitors", {
     method: "POST",
-    body: JSON.stringify({ actorUserId: auth.userId, monitorId, name, type, status: "active", priority, nextScanAt })
+    body: JSON.stringify({ actorUserId: auth.userId, monitorId, name, type, status: "active", priority, nextScanAt, profile })
   });
   try {
     const data = await doJson(monitorStub(env, workspaceId, monitorId), "/internal/init", {
       method: "POST",
-      body: JSON.stringify({ id: monitorId, tenantId: workspaceId, name, type, scanIntervalSec, alertThreshold, defaultLanguage, nextScanAt })
+      body: JSON.stringify({ id: monitorId, tenantId: workspaceId, name, type, scanIntervalSec, alertThreshold, defaultLanguage, nextScanAt, profile })
     });
     await upsertSchedulerMonitor(env, {
       tenantId: workspaceId,
@@ -434,6 +436,7 @@ async function updateMonitor(request: Request, auth: AuthContext, env: Env, work
       status: string;
       scanIntervalSec: number;
       nextScanAt: string | null;
+      profile?: Record<string, unknown>;
     };
   }>(monitorStub(env, workspaceId, monitorId), "/internal/monitor", {
     method: "PATCH",
@@ -448,7 +451,8 @@ async function updateMonitor(request: Request, auth: AuthContext, env: Env, work
       type: updated.monitor.type,
       status: updated.monitor.status,
       ...(priority ? { priority } : {}),
-      nextScanAt: updated.monitor.nextScanAt
+      nextScanAt: updated.monitor.nextScanAt,
+      ...(updated.monitor.profile ? { profile: updated.monitor.profile } : body.profile !== undefined ? { profile: normalizeMonitorProfile(body.profile) } : {})
     })
   });
   if (updated.monitor.status === "paused" || updated.monitor.status === "archived") {

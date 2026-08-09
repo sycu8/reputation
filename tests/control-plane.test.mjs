@@ -146,10 +146,27 @@ test("multi-tenant isolation, monitor/query CRUD, audit, and session revocation"
   const bWorkspace = b.body.workspace.id;
   assert.notEqual(aWorkspace, bWorkspace);
 
-  const createMonitor = await call(env, "POST", `/v1/workspaces/${aWorkspace}/monitors`, { name: "Alice Co", type: "company" }, a.cookie);
+  const createMonitor = await call(env, "POST", `/v1/workspaces/${aWorkspace}/monitors`, {
+    name: "Alice Co",
+    type: "company",
+    profile: {
+      website: "https://alice.example",
+      facebook: "https://www.facebook.com/alice-co",
+      notes: "Primary brand pages"
+    }
+  }, a.cookie);
   assert.equal(createMonitor.status, 201);
   const created = await createMonitor.json();
   const monitorId = created.monitor.id;
+  assert.equal(created.monitor.profile?.website, "https://alice.example/");
+  assert.equal(created.monitor.profile?.facebook, "https://www.facebook.com/alice-co");
+  assert.equal(created.monitor.profile?.notes, "Primary brand pages");
+
+  const listedWithProfile = await call(env, "GET", `/v1/workspaces/${aWorkspace}/monitors`, undefined, a.cookie);
+  assert.equal(listedWithProfile.status, 200);
+  const listedMonitors = (await listedWithProfile.json()).monitors;
+  const listed = listedMonitors.find((item) => (item.monitor_id || item.id) === monitorId);
+  assert.ok(listed?.profile?.website);
 
   const forbidden = await call(env, "GET", `/v1/workspaces/${aWorkspace}/monitors`, undefined, b.cookie);
   assert.equal(forbidden.status, 403);
