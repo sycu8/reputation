@@ -125,7 +125,7 @@ async function registerTenant(env: Env, input: { id: string; name: string; plan?
   await env.CONFIG_KV.put(`tenant:registry:${input.id}`, JSON.stringify({
     id: input.id,
     name: input.name,
-    plan: input.plan ?? "starter",
+    plan: input.plan ?? "free",
     ownerUserId: input.ownerUserId ?? null,
     createdAt: new Date().toISOString()
   }));
@@ -275,13 +275,13 @@ async function signup(request: Request, env: Env): Promise<Response> {
   const workspaceId = crypto.randomUUID();
   await doJson(tenantStub(env, workspaceId), "/internal/init", {
     method: "POST",
-    body: JSON.stringify({ id: workspaceId, name: workspaceName, ownerUserId: account.userId })
+    body: JSON.stringify({ id: workspaceId, name: workspaceName, ownerUserId: account.userId, plan: "free" })
   });
   await doJson(userStub(env, shard), "/internal/memberships", {
     method: "POST",
     body: JSON.stringify({ workspaceId, workspaceName, role: "owner" })
   });
-  await registerTenant(env, { id: workspaceId, name: workspaceName, plan: "starter", ownerUserId: account.userId });
+  await registerTenant(env, { id: workspaceId, name: workspaceName, plan: "free", ownerUserId: account.userId });
   const cookieName = env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT;
   const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
   return json(
@@ -340,14 +340,14 @@ async function createWorkspace(request: Request, auth: AuthContext, env: Env): P
   const workspaceId = crypto.randomUUID();
   await doJson(tenantStub(env, workspaceId), "/internal/init", {
     method: "POST",
-    body: JSON.stringify({ id: workspaceId, name, ownerUserId: auth.userId })
+    body: JSON.stringify({ id: workspaceId, name, ownerUserId: auth.userId, plan: "free" })
   });
   await doJson(userStub(env, auth.userShard), "/internal/memberships", {
     method: "POST",
     body: JSON.stringify({ workspaceId, workspaceName: name, role: "owner" })
   });
-  await registerTenant(env, { id: workspaceId, name, plan: "starter", ownerUserId: auth.userId });
-  return json({ workspace: { id: workspaceId, name, role: "owner" } }, 201);
+  await registerTenant(env, { id: workspaceId, name, plan: "free", ownerUserId: auth.userId });
+  return json({ workspace: { id: workspaceId, name, role: "owner", plan: "free" } }, 201);
 }
 
 async function workspaceDetails(auth: AuthContext, env: Env, workspaceId: string): Promise<Response> {

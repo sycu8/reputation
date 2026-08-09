@@ -1,4 +1,4 @@
-export type CustomerPlan = "starter" | "pro" | "business";
+export type CustomerPlan = "free" | "starter" | "pro" | "business";
 
 export interface PlanEntitlements {
   plan: CustomerPlan;
@@ -10,8 +10,19 @@ export interface PlanEntitlements {
   teamMaxSeats: number;
 }
 
-/** Technical entitlement tiers. Commercial pricing is not stored in-repo. */
+/**
+ * Technical entitlement tiers.
+ * Public list prices live in the marketing site and signed-in billing UI.
+ */
 export const PLAN_ENTITLEMENTS: Record<CustomerPlan, PlanEntitlements> = {
+  free: {
+    plan: "free",
+    displayName: "PulseWatch Free",
+    monitorMaxActive: 1,
+    mentionMonthlyIncluded: 1_000,
+    scanMinIntervalSeconds: 1_800,
+    teamMaxSeats: 1
+  },
   starter: {
     plan: "starter",
     displayName: "PulseWatch Starter",
@@ -49,6 +60,6 @@ export interface EntitlementDecision {
 
 export function monitorLimitFor(plan: string, superAdmin: boolean): EntitlementDecision {
   if (superAdmin) return { unlimited: true };
-  const entitlements = PLAN_ENTITLEMENTS[plan as CustomerPlan] ?? PLAN_ENTITLEMENTS.starter;
+  const entitlements = PLAN_ENTITLEMENTS[plan as CustomerPlan] ?? PLAN_ENTITLEMENTS.free;
   return { unlimited: false, value: entitlements.monitorMaxActive };
 }

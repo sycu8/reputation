@@ -338,14 +338,17 @@ export class TenantDirectoryDO extends SqliteObject {
     const name = asString(body.name, "tenant_name");
     const ownerUserId = asString(body.ownerUserId, "owner_user_id");
     const ts = nowIso();
-    this.sql.exec(`INSERT OR IGNORE INTO tenants(id,name,plan,status,created_at,updated_at) VALUES(?,?,?,?,?,?)`, id, name, "starter", "active", ts, ts);
+    const plan = typeof body.plan === "string" && body.plan.trim() ? body.plan.trim() : "free";
+    const allowedPlans = new Set(["free", "starter", "pro", "business"]);
+    if (!allowedPlans.has(plan)) return json({ error: "invalid_plan" }, 400);
+    this.sql.exec(`INSERT OR IGNORE INTO tenants(id,name,plan,status,created_at,updated_at) VALUES(?,?,?,?,?,?)`, id, name, plan, "active", ts, ts);
     this.sql.exec(
       `INSERT INTO memberships(user_id,role,created_at,updated_at) VALUES(?,?,?,?)
        ON CONFLICT(user_id) DO UPDATE SET role=excluded.role, updated_at=excluded.updated_at`,
       ownerUserId, "owner", ts, ts
     );
-    this.audit(ownerUserId, "workspace.create", "workspace", id, { name });
-    return json({ id, name, plan: "starter", status: "active" }, 201);
+    this.audit(ownerUserId, "workspace.create", "workspace", id, { name, plan });
+    return json({ id, name, plan, status: "active" }, 201);
   }
 
   private getWorkspace(): Response {
@@ -453,7 +456,7 @@ export class TenantDirectoryDO extends SqliteObject {
     const body = await readJson(request);
     const plan = asString(body.plan, "plan");
     const actorUserId = asString(body.actorUserId, "actor_user_id");
-    const allowed = new Set(["starter", "pro", "business"]);
+    const allowed = new Set(["free", "starter", "pro", "business"]);
     if (!allowed.has(plan)) return json({ error: "invalid_plan" }, 400);
     const workspace = rows(this.sql.exec<{ id: string; plan: string }>(`SELECT id,plan FROM tenants LIMIT 1`))[0];
     if (!workspace) return json({ error: "workspace_not_initialized" }, 404);

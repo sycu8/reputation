@@ -84,7 +84,7 @@ const titles = {
   alerts: ["Alerts", "Open the source story for every alert. Filter by date and severity score."],
   monitors: ["Monitors", "Manage brand and competitor keyword / Boolean monitors."],
   reports: ["Reports", "Presentation-ready listening rollups for stakeholders."],
-  settings: ["Settings", "API endpoint and billing checkout."],
+  settings: ["Settings", "API endpoint, plan comparison, and Stripe upgrade."],
   "source-health": ["Source health", "Availability matrix for discovery sources."],
   admin: ["Admin", "Tenant registry and platform source health."]
 };
@@ -253,6 +253,145 @@ function updateRoleChrome() {
   $("#newMonitorBtn").classList.toggle("hidden", !showNew);
   $("#billingForm")?.classList.toggle("hidden", !(state.user && state.workspace && canManageBilling()));
   $("#adminNavBtn")?.classList.toggle("hidden", !isSuperAdmin());
+  renderPlanChrome();
+}
+
+const PLAN_CATALOG = {
+  free: {
+    key: "free",
+    name: "PulseWatch Free",
+    priceLabel: "$0",
+    audience: "Try listening",
+    features: [
+      "1 monitor",
+      "1K mentions / month",
+      "1 user",
+      "Scan about every 30 min",
+      "Basic email alerts"
+    ]
+  },
+  starter: {
+    key: "starter",
+    name: "PulseWatch Starter",
+    priceLabel: "$9.99",
+    audience: "For individuals",
+    features: [
+      "3 monitors",
+      "10K mentions / month",
+      "1 user",
+      "Scan about every 15 min",
+      "Email alerts + basic reports"
+    ]
+  },
+  pro: {
+    key: "pro",
+    name: "PulseWatch Pro",
+    priceLabel: "$19.99",
+    audience: "For professionals & SMBs",
+    recommended: true,
+    features: [
+      "10 monitors",
+      "50K mentions / month",
+      "5 users",
+      "Scan about every 10 min",
+      "Priority alerts + competitor insights"
+    ]
+  },
+  business: {
+    key: "business",
+    name: "PulseWatch Business",
+    priceLabel: "$39.99",
+    audience: "For teams",
+    features: [
+      "30 monitors",
+      "200K mentions / month",
+      "15 users",
+      "Scan about every 5 min",
+      "Priority support + API access"
+    ]
+  }
+};
+
+const STRIPE_PAYMENT_LINKS = {
+  starter: "https://buy.stripe.com/bJe4gz4O21QO0f4dvecZa05",
+  pro: "https://buy.stripe.com/00w00j2FU1QO8LA8aUcZa06",
+  business: "https://buy.stripe.com/fZufZh3JY0MK3rg2QAcZa07"
+};
+
+function planSummary(planKey) {
+  const plan = PLAN_CATALOG[planKey] || PLAN_CATALOG.free;
+  return `${plan.features[0]} · ${plan.features[1]} · ${plan.features[2]}`;
+}
+
+function currentPlanKey() {
+  const key = String(state.workspace?.plan || "free").toLowerCase();
+  return PLAN_CATALOG[key] ? key : "free";
+}
+
+function renderPlanChrome() {
+  const key = currentPlanKey();
+  const plan = PLAN_CATALOG[key];
+  const chip = $("#workspacePlan");
+  if (chip) chip.textContent = state.workspace ? plan.name.replace("PulseWatch ", "") : "—";
+  const nameEl = $("#planCurrentName");
+  const summaryEl = $("#planCurrentSummary");
+  if (nameEl) nameEl.textContent = state.workspace ? `${plan.name} — ${plan.priceLabel}/mo` : "—";
+  if (summaryEl) summaryEl.textContent = state.workspace ? planSummary(key) : "";
+  renderPlanCompareGrid();
+}
+
+function renderPlanCompareGrid() {
+  const grid = $("#planCompareGrid");
+  if (!grid) return;
+  const current = currentPlanKey();
+  const canPay = Boolean(state.user && state.workspace && canManageBilling());
+  for (const card of grid.querySelectorAll("[data-plan-card]")) {
+    const key = card.dataset.planCard;
+    card.classList.toggle("is-current", key === current);
+    const checkout = card.querySelector("[data-plan-checkout]");
+    const freeAction = card.querySelector('[data-plan-action="free"]');
+    if (key === current) {
+      if (checkout) {
+        checkout.disabled = true;
+        checkout.textContent = "Current plan";
+        checkout.className = "ghost";
+      }
+      if (freeAction) {
+        freeAction.disabled = true;
+        freeAction.textContent = "Current plan";
+        freeAction.className = "ghost";
+      }
+      continue;
+    }
+    if (checkout) {
+      checkout.disabled = !canPay;
+      checkout.textContent = canPay ? "Pay with Stripe" : "Owner/admin only";
+      checkout.className = key === "pro" ? "primary" : "secondary";
+      if (!canPay) checkout.className = "ghost";
+    }
+    if (freeAction) {
+      freeAction.disabled = true;
+      freeAction.textContent = "Included at signup";
+      freeAction.className = "secondary";
+    }
+  }
+}
+
+async function refreshWorkspaceDetails() {
+  if (!state.workspace?.workspaceId) return;
+  try {
+    const data = await api(`/v1/workspaces/${state.workspace.workspaceId}`);
+    const workspace = data.workspace || {};
+    state.workspace = {
+      ...state.workspace,
+      plan: workspace.plan || state.workspace.plan || "free",
+      workspaceName: workspace.name || state.workspace.workspaceName,
+      status: workspace.status || state.workspace.status
+    };
+  } catch {
+    state.workspace.plan = state.workspace.plan || "free";
+  }
+  renderPlanChrome();
 }
 
 const SESSION_TOKEN_KEY = "pulsewatch-session";
@@ -912,6 +1051,7 @@ async function renderSignedIn() {
   $("#sessionState").textContent = state.user?.email || "Signed in";
   $("#workspaceName").textContent = state.workspace?.workspaceName || "Workspace";
   $("#workspaceRole").textContent = state.workspace?.role || "—";
+  await refreshWorkspaceDetails();
   updateRoleChrome();
   renderMonitors();
   await refreshSourceHealth();
@@ -1065,14 +1205,7 @@ $("#apiForm").addEventListener("submit", (event) => {
   notify("API endpoint saved");
 });
 
-const STRIPE_PAYMENT_LINKS = {
-  starter: "https://buy.stripe.com/8x200j4O2674e5U8aUcZa02",
-  pro: "https://buy.stripe.com/6oU7sLgwKgLI0f4cracZa03",
-  business: "https://buy.stripe.com/8x29ATfsGfHE1j8dvecZa04"
-};
-
-$("#billingForm")?.addEventListener("submit", async (event) => {
-  event.preventDefault();
+function openStripeCheckout(plan) {
   if (!state.workspace) {
     notify("Select a workspace first");
     return;
@@ -1081,17 +1214,28 @@ $("#billingForm")?.addEventListener("submit", async (event) => {
     notify("forbidden");
     return;
   }
-  const formEl = event.currentTarget;
-  const plan = String(new FormData(formEl).get("plan") || "");
   const url = STRIPE_PAYMENT_LINKS[plan];
   const result = $("#billingCheckoutResult");
   if (!url) {
     notify("invalid_plan");
     return;
   }
-  result.innerHTML = `Opening Stripe for <strong>${escapeHtml(plan)}</strong>: <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`;
+  if (result) {
+    result.innerHTML = `Opening Stripe for <strong>${escapeHtml(plan)}</strong>: <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`;
+  }
   window.open(url, "_blank", "noopener,noreferrer");
   notify("Opening Stripe checkout");
+}
+
+$("#billingForm")?.addEventListener("submit", (event) => {
+  event.preventDefault();
+});
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-plan-checkout]");
+  if (!button) return;
+  event.preventDefault();
+  openStripeCheckout(button.dataset.planCheckout);
 });
 
 $("#mentionFilterBtn").addEventListener("click", () => loadMentions().catch((error) => notify(error.message)));

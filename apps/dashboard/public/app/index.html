@@ -90,11 +90,12 @@
         <div class="auth-grid">
           <form id="signupForm" class="auth-form">
             <div class="eyebrow">Create account</div>
-            <h2>Start monitoring</h2>
+            <h2>Start on Free</h2>
+            <p class="hint">New workspaces begin on <strong>PulseWatch Free</strong> (1 monitor). Upgrade to Starter, Pro, or Business anytime in Settings.</p>
             <label>Email<input name="email" type="email" required autocomplete="email" /></label>
             <label>Password<input name="password" type="password" minlength="10" required autocomplete="new-password" /></label>
             <label>Workspace<input name="workspaceName" required placeholder="Acme Listening" autocomplete="organization" /></label>
-            <button class="primary" type="submit">Create account</button>
+            <button class="primary" type="submit">Create free account</button>
           </form>
           <form id="loginForm" class="auth-form">
             <div class="eyebrow">Welcome back</div>
@@ -126,7 +127,10 @@
             <div class="eyebrow">Workspace</div>
             <h2 id="workspaceName">No workspace selected</h2>
           </div>
-          <span id="workspaceRole" class="status-chip">—</span>
+          <div class="workspace-strip-meta">
+            <span id="workspacePlan" class="status-chip plan-chip">—</span>
+            <span id="workspaceRole" class="status-chip">—</span>
+          </div>
         </div>
         <div id="overviewChannelSentiment" class="channel-sentiment-grid"></div>
         <div id="overviewSourceList" class="source-grid"></div>
@@ -307,16 +311,67 @@
         </form>
         <form id="billingForm" class="plain-section hidden">
           <div class="eyebrow">Billing</div>
-          <h2>Upgrade with Stripe</h2>
-          <p class="hint">Signed-in owners and admins can open the Stripe payment link for Starter, Pro, or Business. Viewers cannot. Super Admin is not a customer plan.</p>
-          <label>Plan
-            <select name="plan" required>
-              <option value="starter">PulseWatch Starter — $29/mo</option>
-              <option value="pro" selected>PulseWatch Pro — $49/mo</option>
-              <option value="business">PulseWatch Business — $99/mo</option>
-            </select>
-          </label>
-          <button class="primary" type="submit">Pay with Stripe</button>
+          <h2>Plans &amp; upgrade</h2>
+          <p class="hint">Compare Free vs paid capacity. Owners and admins can open Stripe for Starter, Pro, or Business. Viewers cannot. Super Admin is not a customer plan.</p>
+          <div class="plan-current" id="planCurrentBanner">
+            <span class="eyebrow">Current plan</span>
+            <strong id="planCurrentName">—</strong>
+            <p class="hint" id="planCurrentSummary"></p>
+          </div>
+          <div class="plan-grid" id="planCompareGrid" aria-label="Plan comparison">
+            <article class="plan-card" data-plan-card="free">
+              <span class="plan-card-kicker">Try listening</span>
+              <h3>PulseWatch Free</h3>
+              <p class="plan-price">$0<small>/mo</small></p>
+              <ul>
+                <li>1 monitor</li>
+                <li>1K mentions / month</li>
+                <li>1 user</li>
+                <li>Scan about every 30 min</li>
+                <li>Basic email alerts</li>
+              </ul>
+              <button type="button" class="secondary" disabled data-plan-action="free">Included at signup</button>
+            </article>
+            <article class="plan-card" data-plan-card="starter">
+              <span class="plan-card-kicker">For individuals</span>
+              <h3>PulseWatch Starter</h3>
+              <p class="plan-price">$9.99<small>/mo</small></p>
+              <ul>
+                <li>3 monitors</li>
+                <li>10K mentions / month</li>
+                <li>1 user</li>
+                <li>Scan about every 15 min</li>
+                <li>Email alerts + basic reports</li>
+              </ul>
+              <button type="button" class="secondary" data-plan-checkout="starter">Pay with Stripe</button>
+            </article>
+            <article class="plan-card is-recommended" data-plan-card="pro">
+              <span class="plan-card-kicker">Recommended</span>
+              <h3>PulseWatch Pro</h3>
+              <p class="plan-price">$19.99<small>/mo</small></p>
+              <ul>
+                <li>10 monitors</li>
+                <li>50K mentions / month</li>
+                <li>5 users</li>
+                <li>Scan about every 10 min</li>
+                <li>Priority alerts + competitor insights</li>
+              </ul>
+              <button type="button" class="primary" data-plan-checkout="pro">Pay with Stripe</button>
+            </article>
+            <article class="plan-card" data-plan-card="business">
+              <span class="plan-card-kicker">For teams</span>
+              <h3>PulseWatch Business</h3>
+              <p class="plan-price">$39.99<small>/mo</small></p>
+              <ul>
+                <li>30 monitors</li>
+                <li>200K mentions / month</li>
+                <li>15 users</li>
+                <li>Scan about every 5 min</li>
+                <li>Priority support + API access</li>
+              </ul>
+              <button type="button" class="secondary" data-plan-checkout="business">Pay with Stripe</button>
+            </article>
+          </div>
           <div id="billingCheckoutResult" class="hint"></div>
         </form>
       </section>

@@ -218,20 +218,21 @@ curl -sS -b cookies.txt "$API/v1/me"</code></pre>
 
       <section id="entitlements">
         <h2>Entitlements</h2>
-        <p>Workspaces carry a technical plan key (<code>starter</code> | <code>pro</code> | <code>business</code>) mapped to public labels <strong>PulseWatch Starter</strong>, <strong>PulseWatch Pro</strong>, and <strong>PulseWatch Business</strong>. Commercial pricing is not published in this repository — checkout uses the billing provider catalog. The internal Super Admin bypass is not a customer plan.</p>
+        <p>Workspaces carry a technical plan key (<code>free</code> | <code>starter</code> | <code>pro</code> | <code>business</code>) mapped to public labels <strong>PulseWatch Free</strong>, <strong>PulseWatch Starter</strong>, <strong>PulseWatch Pro</strong>, and <strong>PulseWatch Business</strong>. List prices are shown on the marketing site and in the signed-in Settings billing UI; checkout uses Stripe payment links. The internal Super Admin bypass is not a customer plan.</p>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Plan key</th><th>Public label</th><th>Active monitors</th><th>Default scan floor</th></tr>
+              <tr><th>Plan key</th><th>Public label</th><th>Active monitors</th><th>Mentions / mo</th><th>Seats</th><th>Scan floor (entitlement)</th></tr>
             </thead>
             <tbody>
-              <tr><td><code>starter</code></td><td>PulseWatch Starter</td><td>3</td><td>≥ 300s (5 min) for customers</td></tr>
-              <tr><td><code>pro</code></td><td>PulseWatch Pro</td><td>10</td><td>≥ 300s</td></tr>
-              <tr><td><code>business</code></td><td>PulseWatch Business</td><td>30</td><td>≥ 300s</td></tr>
+              <tr><td><code>free</code></td><td>PulseWatch Free</td><td>1</td><td>1K</td><td>1</td><td>≥ 1800s</td></tr>
+              <tr><td><code>starter</code></td><td>PulseWatch Starter ($9.99/mo)</td><td>3</td><td>10K</td><td>1</td><td>≥ 900s</td></tr>
+              <tr><td><code>pro</code></td><td>PulseWatch Pro ($19.99/mo)</td><td>10</td><td>50K</td><td>5</td><td>≥ 600s</td></tr>
+              <tr><td><code>business</code></td><td>PulseWatch Business ($39.99/mo)</td><td>30</td><td>200K</td><td>15</td><td>≥ 300s</td></tr>
             </tbody>
           </table>
         </div>
-        <p>Creating a monitor beyond the entitlement limit returns <strong>402</strong> <code>monitor_plan_limit_reached</code>. New workspaces start on <code>starter</code> until billing webhooks update the plan key.</p>
+        <p>Creating a monitor beyond the entitlement limit returns <strong>402</strong> <code>monitor_plan_limit_reached</code>. New workspaces start on <code>free</code> until billing webhooks update the plan key to a paid tier.</p>
       </section>
 
       <section id="endpoints">

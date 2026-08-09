@@ -131,6 +131,7 @@ test("RBAC and plan primitives are deterministic", () => {
   assert.equal(hasCapability("analyst", "monitor.create"), true);
   assert.equal(hasCapability("owner", "monitor.delete"), true);
   assert.equal(hasCapability("viewer", "monitor.delete", "super_admin"), true);
+  assert.equal(monitorLimitFor("free", false).value, 1);
   assert.equal(monitorLimitFor("starter", false).value, 3);
   assert.equal(monitorLimitFor("business", false).value, 30);
   assert.deepEqual(monitorLimitFor("starter", true), { unlimited: true });
