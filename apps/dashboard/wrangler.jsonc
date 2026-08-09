@@ -2,12 +2,31 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "reputa-dashboard-dev",
   "compatibility_date": "2026-08-01",
+  "observability": {
+    "enabled": false,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true,
+      "invocation_logs": true
+    },
+    "traces": {
+      "enabled": false,
+      "persist": true,
+      "head_sampling_rate": 1
+    }
+  },
   "assets": {
     "directory": "./public",
     "not_found_handling": "single-page-application"
   },
   "env": {
-    "staging": { "name": "reputa-dashboard-staging" },
-    "production": { "name": "reputa-dashboard-production" }
+    "staging": {
+      "name": "reputa-dashboard-staging"
+    },
+    "production": {
+      "name": "reputa-dashboard-production"
+    }
   }
 }
