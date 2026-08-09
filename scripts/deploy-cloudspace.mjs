@@ -267,6 +267,33 @@ async function main() {
 
   const zone = process.env.SKIP_ROUTES === "1" ? null : await verifyZone();
   if (zone && SUFFIX === "production") {
+    // Ensure proxied DNS for the custom hostname so Workers routes can serve traffic.
+    const dnsName = HOSTNAME;
+    const dnsList = await cf(`/zones/${zone.id}/dns_records?name=${encodeURIComponent(dnsName)}&per_page=100`);
+    const existingDns = (dnsList || []).find((item) => item.name === dnsName || item.name === `${dnsName}.`);
+    if (!existingDns) {
+      await cf(`/zones/${zone.id}/dns_records`, {
+        method: "POST",
+        body: JSON.stringify({
+          type: "AAAA",
+          name: "reputation",
+          content: "100::",
+          proxied: true,
+          ttl: 1,
+          comment: "PulseWatch workers route placeholder"
+        })
+      });
+      console.log(`DNS created: ${dnsName} AAAA 100:: (proxied)`);
+    } else if (!existingDns.proxied) {
+      await cf(`/zones/${zone.id}/dns_records/${existingDns.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ proxied: true })
+      });
+      console.log(`DNS proxied enabled: ${dnsName} (${existingDns.type})`);
+    } else {
+      console.log(`DNS reuse: ${dnsName} ${existingDns.type} ${existingDns.content} (proxied)`);
+    }
+
     // Prefer Workers routes on the zone hostname
     const routes = [
       { pattern: `${HOSTNAME}/api/*`, script: "reputa-api-production" },
@@ -291,14 +318,23 @@ async function main() {
     }
   }
 
-  // Smoke tests
+  // Smoke tests — resolve workers.dev subdomain for this account
+  let workersSubdomain = "sycu-lee";
+  try {
+    const sub = await cf(`/accounts/${ACCOUNT_ID}/workers/subdomain`);
+    if (sub?.subdomain) workersSubdomain = sub.subdomain;
+  } catch {
+    console.warn("Could not resolve workers subdomain; using fallback sycu-lee");
+  }
+  const workersHost = `reputa-api-${SUFFIX === "dev" ? "dev" : SUFFIX}.${workersSubdomain}.workers.dev`;
+
   const apiCandidates = SUFFIX === "production"
-    ? [`https://${HOSTNAME}/api/health`, `https://reputa-api-production.workers.dev/health`]
-    : [`https://reputa-api-${SUFFIX}.workers.dev/health`];
+    ? [`https://${workersHost}/health`, `https://${HOSTNAME}/api/health`]
+    : [`https://${workersHost}/health`];
 
   for (const url of apiCandidates) {
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
       const text = await response.text();
       console.log(`Smoke ${url} -> ${response.status} ${text.slice(0, 200)}`);
     } catch (error) {
