@@ -1,3 +1,5 @@
+import { initTheme } from "./theme.js";
+
 function defaultApiBase() {
   const stored = localStorage.getItem("apiBase");
   if (stored) return stored;
@@ -710,4 +712,5 @@ for (const button of document.querySelectorAll(".nav")) {
 }
 
 $("#apiForm").querySelector('[name="apiBase"]').value = state.apiBase;
+initTheme();
 bootstrap();

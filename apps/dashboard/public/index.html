@@ -4,6 +4,20 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PulseWatch</title>
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem("pulsewatch-theme");
+        var theme = stored === "light" || stored === "dark"
+          ? stored
+          : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+      } catch (error) {
+        document.documentElement.dataset.theme = "light";
+      }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
@@ -40,6 +54,10 @@
           <p id="pageSubtitle">Track mentions, alerts, and coverage across your monitors.</p>
         </div>
         <div class="topbar-actions">
+          <button type="button" id="themeToggle" class="secondary" aria-pressed="false" aria-label="Switch to dark mode" title="Dark mode">
+            <span class="theme-icon" aria-hidden="true">◐</span>
+            <span data-theme-label>Dark</span>
+          </button>
           <label class="inline workspace-switch hidden" id="workspaceSwitchWrap">
             Workspace
             <select id="workspaceSelect" aria-label="Workspace switcher"></select>

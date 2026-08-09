@@ -5,6 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PulseWatch API Reference</title>
   <meta name="description" content="HTTP API reference for PulseWatch — authentication, workspaces, monitors, Boolean queries, mentions, alerts, billing, and admin." />
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem("pulsewatch-theme");
+        var theme = stored === "light" || stored === "dark"
+          ? stored
+          : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+      } catch (error) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
@@ -23,6 +37,10 @@
       <a href="#endpoints">Endpoints</a>
       <a href="#errors">Errors</a>
       <a href="#rbac">RBAC</a>
+      <button type="button" id="themeToggle" aria-pressed="false" aria-label="Switch to light mode" title="Light mode">
+        <span aria-hidden="true">◐</span>
+        <span data-theme-label>Light</span>
+      </button>
       <a class="header-cta" href="/">Open app</a>
     </nav>
   </header>
