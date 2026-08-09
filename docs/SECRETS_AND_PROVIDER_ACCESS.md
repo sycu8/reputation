@@ -10,10 +10,20 @@ Required at deploy/operator level:
 
 ## Discovery/search
 
-Current code includes a Brave broad-web discovery path.
-- `BRAVE_SEARCH_API_KEY` (or the exact env name currently used by source code; inspect before configuring)
+Always-on free discovery (no API key):
+- Public news RSS via Hacker News (`hnrss.org`) and Bing News RSS (publisher URLs unwrapped from apiclick)
+- Optional static `RSS_FEED_URLS` / `SITEMAP_URLS` (comma-separated) — production ships BBC / VNExpress / Guardian defaults
+
+Optional paid/search upgrade:
+- `BRAVE_SEARCH_API_KEY` on `reputa-discovery-*` for Brave web + news search
 
 Add providers behind source-adapter interfaces rather than hard-coding provider logic into the pipeline.
+
+Bootstrap a live collector workspace after deploy:
+```bash
+node scripts/bootstrap-production-collection.mjs
+```
+
 
 ## Social/native source credentials
 

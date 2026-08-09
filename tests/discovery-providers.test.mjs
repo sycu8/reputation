@@ -95,9 +95,11 @@ test("federated list includes brave when key set", () => {
   assert.ok(withKey.some((p) => p instanceof BraveWebDiscoveryProvider));
   assert.ok(withKey.some((p) => p.id === "brave-web"));
   assert.ok(withKey.some((p) => p.id === "brave-news"));
+  assert.ok(withKey.some((p) => p.id === "public-news-rss"));
 
   const withoutKey = createFederatedDiscoveryProviders({});
   assert.equal(withoutKey.some((p) => p.id === "brave-web"), false);
+  assert.ok(withoutKey.some((p) => p.id === "public-news-rss"), "free public news RSS must always be enabled");
 
   const withFeeds = createFederatedDiscoveryProviders({
     RSS_FEED_URLS: "https://example.com/feed.xml",
@@ -107,6 +109,35 @@ test("federated list includes brave when key set", () => {
   assert.ok(withFeeds.some((p) => p.id === "sitemaps"));
   assert.doesNotThrow(() => assertPublicHttpUrl("https://example.com/feed.xml"));
   assert.doesNotThrow(() => assertPublicHttpUrl("https://example.com/sitemap.xml"));
+});
+
+test("public news RSS resolves Bing apiclick to publisher URLs", async () => {
+  const { PublicNewsRssDiscoveryProvider, resolvePublicNewsUrl } = await import("../packages/source-adapters/src/index.ts");
+  const nested = resolvePublicNewsUrl(
+    "http://www.bing.com/news/apiclick.aspx?url=https%3a%2f%2fwww.forbes.com%2fsites%2fexample%2fcloudflare%2f&c=1&mkt=en-us"
+  );
+  assert.equal(nested, "https://www.forbes.com/sites/example/cloudflare/");
+  assert.equal(resolvePublicNewsUrl("https://news.google.com/rss/articles/ABC"), "https://news.google.com/rss/articles/ABC");
+
+  const provider = new PublicNewsRssDiscoveryProvider();
+  let results = [];
+  try {
+    results = await provider.discover({
+      query: "Cloudflare",
+      ast: { type: "term", value: "Cloudflare", phrase: false },
+      limit: 10
+    });
+  } catch (error) {
+    console.warn("public news live probe skipped:", error instanceof Error ? error.message : error);
+    return;
+  }
+  if (!results.length) {
+    console.warn("public news live probe returned 0 candidates — skipping strict asserts");
+    return;
+  }
+  assert.ok(results.every((item) => item.source === "news"));
+  assert.ok(results.every((item) => /^https?:\/\//i.test(item.url)));
+  assert.ok(results.every((item) => !/news\.google\.com/i.test(item.url)));
 });
 
 test("social stubs return empty without credentials", async () => {

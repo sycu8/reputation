@@ -21,6 +21,10 @@
   // Optional secrets (wrangler secret put): BRAVE_SEARCH_API_KEY, YOUTUBE_API_KEY, X_BEARER_TOKEN,
   // REDDIT_ACCESS_TOKEN, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
   // Optional plain vars: RSS_FEED_URLS, SITEMAP_URLS (comma-separated public HTTPS URLs)
+  // Public news RSS discovery (HN/Bing) is always enabled in code — no key required.
+  "vars": {
+    "RSS_FEED_URLS": "https://feeds.bbci.co.uk/news/rss.xml,https://vnexpress.net/rss/tin-moi-nhat.rss,https://vnexpress.net/rss/kinh-doanh.rss,https://www.theguardian.com/world/rss"
+  },
   "durable_objects": {
     "bindings": [
       { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-dev" }
@@ -40,6 +44,9 @@
   "env": {
     "production": {
       "name": "reputa-discovery-production",
+      "vars": {
+        "RSS_FEED_URLS": "https://feeds.bbci.co.uk/news/rss.xml,https://vnexpress.net/rss/tin-moi-nhat.rss,https://vnexpress.net/rss/kinh-doanh.rss,https://www.theguardian.com/world/rss"
+      },
       "durable_objects": {
         "bindings": [
           { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-production" }

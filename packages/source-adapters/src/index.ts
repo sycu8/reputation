@@ -1,5 +1,5 @@
 import { assertPublicHttpUrl } from "../../crawler-core/src/index.ts";
-import type { BooleanAst } from "../../boolean-query/src/index.ts";
+import { evaluateBooleanAst, type BooleanAst } from "../../boolean-query/src/index.ts";
 
 export type SourceType = "web" | "news" | "rss" | "youtube" | "reddit" | "x" | "facebook" | "tiktok" | "linkedin";
 export type SourceAvailability = "native-api" | "public-web" | "licensed-provider" | "contract-required" | "degraded" | "disabled";
@@ -326,13 +326,82 @@ export class RssFeedDiscoveryProvider implements DiscoveryProvider {
     for (const feedUrl of this.feedUrls) {
       try {
         const xml = await fetchText(feedUrl, { headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" } });
-        out.push(...parseRssOrAtom(xml, feedUrl));
+        for (const item of parseRssOrAtom(xml, feedUrl)) {
+          const haystack = `${item.title ?? ""} ${item.snippet ?? ""}`;
+          if (!evaluateBooleanAst(input.ast, haystack)) continue;
+          out.push(item);
+          if (out.length >= input.limit) return out;
+        }
       } catch {
         // Skip failing feeds; federation continues with remaining providers.
       }
-      if (out.length >= input.limit) break;
     }
     return out.slice(0, input.limit);
+  }
+}
+
+/** Free query-scoped public news RSS (HN + Bing). No API key required. */
+export class PublicNewsRssDiscoveryProvider implements DiscoveryProvider {
+  readonly id = "public-news-rss";
+  readonly source: SourceType = "news";
+  readonly availability: SourceAvailability = "public-web";
+  readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.news.capabilities;
+
+  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
+    const q = input.query.trim();
+    if (!q) return [];
+    const templates = [
+      `https://hnrss.org/newest?q=${encodeURIComponent(q)}`,
+      `https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss`,
+      `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`,
+      `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=vi&gl=VN&ceid=VN:vi`
+    ];
+    const out: DiscoveryResult[] = [];
+    const seen = new Set<string>();
+    for (const feedUrl of templates) {
+      try {
+        const xml = await fetchText(feedUrl, {
+          headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" }
+        });
+        for (const item of parseRssOrAtom(xml, feedUrl)) {
+          const resolved = resolvePublicNewsUrl(item.url);
+          if (!resolved) continue;
+          const key = resolved.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          // Prefer publisher URLs — skip Google News interstitial pages that do not redirect.
+          if (/^https?:\/\/news\.google\.com\//i.test(resolved)) continue;
+          const parsed = toResult({
+            source: "news",
+            url: resolved,
+            title: item.title,
+            snippet: item.snippet,
+            publishedAt: item.publishedAt,
+            metadata: { ...(item.metadata ?? {}), provider: "public-news-rss", feedUrl }
+          });
+          if (!parsed) continue;
+          out.push(parsed);
+          if (out.length >= input.limit) return out;
+        }
+      } catch {
+        // Skip failing feeds.
+      }
+    }
+    return out;
+  }
+}
+
+/** Prefer publisher URLs when feeds wrap clicks (e.g. Bing News apiclick). */
+export function resolvePublicNewsUrl(raw: string): string | null {
+  try {
+    const url = new URL(raw);
+    if (url.hostname.endsWith("bing.com") && url.pathname.includes("apiclick")) {
+      const nested = url.searchParams.get("url");
+      if (nested) return assertPublicHttpUrl(nested).toString();
+    }
+    return assertPublicHttpUrl(raw).toString();
+  } catch {
+    return null;
   }
 }
 
@@ -583,7 +652,10 @@ export function createFederatedDiscoveryProviders(env: {
   RSS_FEED_URLS?: string | undefined;
   SITEMAP_URLS?: string | undefined;
 }): DiscoveryProvider[] {
-  const providers: DiscoveryProvider[] = [];
+  const providers: DiscoveryProvider[] = [
+    // Always-on free discovery so production collects without paid API keys.
+    new PublicNewsRssDiscoveryProvider()
+  ];
   if (env.BRAVE_SEARCH_API_KEY) {
     providers.push(new BraveWebDiscoveryProvider(env.BRAVE_SEARCH_API_KEY));
     providers.push(new BraveNewsDiscoveryProvider(env.BRAVE_SEARCH_API_KEY));
