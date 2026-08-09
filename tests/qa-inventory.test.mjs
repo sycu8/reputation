@@ -393,7 +393,8 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /not_relevant/);
   assert.match(js, /resolveDefaultApiBase/);
   assert.match(js, /PRODUCTION_API_BASE/);
-  assert.match(js, /reputa-api-production\.sycu-lee\.workers\.dev/);
+  assert.match(js, /reputation\.orangecloud\.vn\/api/);
+  assert.doesNotMatch(js, /PRODUCTION_API_BASE = "https:\/\/reputa-api-production\.sycu-lee\.workers\.dev"/);
   assert.match(js, /pulsewatch-session/);
   assert.match(js, /Bearer/);
   assert.match(js, /rememberSession/);
@@ -404,6 +405,9 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /PulseWatch Business/);
   assert.match(html, /Pay with Stripe/);
   assert.match(html, /Upgrade with Stripe/);
+  assert.match(html, /reputation\.orangecloud\.vn\/api/);
+  assert.match(html, /reputation\.orangecloud\.vn\//);
+  assert.doesNotMatch(html, /Prefer that over <code>\/api<\/code>/);
   assert.match(html, /brand-mark\.svg/);
   assert.doesNotMatch(html, /OrangeCloud Reputation/);
   assert.doesNotMatch(html, /option value="starter">Starter</);

@@ -24,10 +24,7 @@ function resolveDefaultBase() {
   if (location.port === "8788" || host === "localhost" || host === "127.0.0.1") {
     return `http://${host}:8787`;
   }
-  if (host.endsWith(".workers.dev")) {
-    return "https://reputa-api-production.sycu-lee.workers.dev";
-  }
-  return `${location.origin}/api`;
+  return "https://reputation.orangecloud.vn/api";
 }
 
 const defaultBase = resolveDefaultBase();
