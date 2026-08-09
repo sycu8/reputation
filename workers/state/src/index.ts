@@ -749,10 +749,21 @@ export class MonitorDO extends SqliteObject {
     const sentiment = url.searchParams.get("sentiment");
     const minSeverity = Number(url.searchParams.get("minSeverity") ?? "0");
     const source = url.searchParams.get("source");
+    const from = url.searchParams.get("from");
+    const to = url.searchParams.get("to");
     const clauses = ["severity_score >= ?"];
     const params: unknown[] = [Number.isFinite(minSeverity) ? minSeverity : 0];
     if (sentiment) { clauses.push("sentiment = ?"); params.push(sentiment); }
     if (source) { clauses.push("source = ?"); params.push(source); }
+    // Filter on discovered_at (always ISO). published_at may be RSS/RFC822 and is shown in UI separately.
+    if (from && /^\d{4}-\d{2}-\d{2}/.test(from)) {
+      clauses.push("discovered_at >= ?");
+      params.push(from.length <= 10 ? `${from}T00:00:00.000Z` : from);
+    }
+    if (to && /^\d{4}-\d{2}-\d{2}/.test(to)) {
+      clauses.push("discovered_at <= ?");
+      params.push(to.length <= 10 ? `${to}T23:59:59.999Z` : to);
+    }
     params.push(limit);
     const result = rows(this.sql.exec<Record<string, unknown>>(
       `SELECT * FROM mentions WHERE ${clauses.join(" AND ")} ORDER BY discovered_at DESC LIMIT ?`,

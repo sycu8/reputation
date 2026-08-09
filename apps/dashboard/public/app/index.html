@@ -40,6 +40,7 @@
       <nav>
         <button data-view="overview" class="nav active">Overview</button>
         <button data-view="mentions" class="nav">Mentions</button>
+        <button data-view="insights" class="nav">Insights</button>
         <button data-view="alerts" class="nav">Alerts</button>
         <button data-view="monitors" class="nav">Monitors</button>
         <button data-view="reports" class="nav">Reports</button>
@@ -109,6 +110,11 @@
       </section>
 
       <section id="overviewPanel" class="view-panel hidden">
+        <div class="listening-hero">
+          <div class="eyebrow">Market voice</div>
+          <h2>Hear what the market is saying about you</h2>
+          <p>Track sentiment, channels, and competitors in one listening workspace — then turn it into a shareable report.</p>
+        </div>
         <div class="metrics">
           <div><span>Active monitors</span><strong id="monitorCount">0</strong></div>
           <div><span>Mentions</span><strong id="mentionCount">0</strong></div>
@@ -122,6 +128,7 @@
           </div>
           <span id="workspaceRole" class="status-chip">—</span>
         </div>
+        <div id="overviewChannelSentiment" class="channel-sentiment-grid"></div>
         <div id="overviewSourceList" class="source-grid"></div>
       </section>
 
@@ -129,6 +136,12 @@
         <div class="toolbar">
           <label class="inline">Monitor
             <select id="mentionMonitorSelect"></select>
+          </label>
+          <label class="inline">From
+            <input id="mentionFrom" type="date" />
+          </label>
+          <label class="inline">To
+            <input id="mentionTo" type="date" />
           </label>
           <label class="inline">Sentiment
             <select id="mentionSentiment">
@@ -141,8 +154,19 @@
           <label class="inline">Min severity
             <input id="mentionMinSeverity" type="number" min="0" max="100" value="0" />
           </label>
-          <label class="inline">Source
-            <input id="mentionSource" placeholder="news, reddit…" />
+          <label class="inline">Channel
+            <select id="mentionSource">
+              <option value="">Any channel</option>
+              <option value="news">News</option>
+              <option value="web">Web / article</option>
+              <option value="rss">Blog / RSS</option>
+              <option value="reddit">Reddit</option>
+              <option value="youtube">YouTube</option>
+              <option value="x">X</option>
+              <option value="facebook">Facebook</option>
+              <option value="tiktok">TikTok</option>
+              <option value="linkedin">LinkedIn</option>
+            </select>
           </label>
           <button id="mentionFilterBtn" class="secondary" type="button">Apply</button>
         </div>
@@ -166,23 +190,77 @@
         <div id="monitorList" class="monitor-list"></div>
       </section>
 
+      <section id="insightsPanel" class="view-panel hidden">
+        <div class="listening-hero">
+          <div class="eyebrow">Social listening</div>
+          <h2>Understand how the market talks about your brand</h2>
+          <p>Sentiment by channel, share of voice vs competitors, and audience mix across sources — built for decisions, not dashboards for their own sake.</p>
+        </div>
+        <div class="toolbar">
+          <label class="inline">Your brand
+            <select id="insightsBrandSelect"></select>
+          </label>
+          <label class="inline">Compare vs
+            <select id="insightsCompetitorSelect"></select>
+          </label>
+          <button id="insightsRefreshBtn" class="secondary" type="button">Refresh</button>
+        </div>
+        <div class="insights-grid">
+          <article class="plain-section">
+            <div class="eyebrow">Brand sentiment</div>
+            <h2>Across channels</h2>
+            <p class="hint">Positive / neutral / negative share for the selected brand monitor.</p>
+            <div id="insightsSentimentByChannel" class="channel-sentiment-grid"></div>
+          </article>
+          <article class="plain-section">
+            <div class="eyebrow">Audience</div>
+            <h2>Where people talk</h2>
+            <p class="hint">Share of voice by channel and content type.</p>
+            <div id="insightsAudienceBars" class="bar-list"></div>
+          </article>
+          <article class="plain-section insights-span">
+            <div class="eyebrow">Competitors</div>
+            <h2>Side-by-side listening</h2>
+            <p class="hint">Benchmark mention volume, negativity, and top channels against another monitor.</p>
+            <div id="insightsCompetitorTable" class="competitor-table"></div>
+          </article>
+        </div>
+      </section>
+
       <section id="reportsPanel" class="view-panel hidden">
         <div class="toolbar">
           <button id="reportRefreshBtn" class="secondary" type="button">Refresh aggregates</button>
+          <button id="reportPrintBtn" class="primary" type="button">Print / export report</button>
         </div>
-        <div class="metrics" id="reportMetrics">
-          <div><span>Mentions scanned</span><strong id="reportMentionTotal">0</strong></div>
-          <div><span>Negative</span><strong id="reportNegative">0</strong></div>
-          <div><span>Open alerts</span><strong id="reportOpenAlerts">0</strong></div>
-          <div><span>Monitors</span><strong id="reportMonitorTotal">0</strong></div>
-        </div>
-        <div class="plain-section">
-          <div class="eyebrow">Live workspace rollup</div>
-          <h2>Sentiment &amp; sources</h2>
-          <p class="hint">Aggregated from current monitor mention and alert APIs (not the reports-worker R2 stubs).</p>
-          <div id="reportSentimentBars" class="bar-list"></div>
-          <div id="reportSourceBars" class="bar-list"></div>
-          <div id="reportMonitorBreakdown" class="monitor-list"></div>
+        <div id="reportCanvas" class="report-canvas">
+          <div class="report-cover">
+            <div class="eyebrow">PulseWatch listening report</div>
+            <h2 id="reportTitle">What the market is saying</h2>
+            <p id="reportSubtitle" class="hint">Live rollup from your monitors — presentation-ready for stakeholders.</p>
+            <p id="reportGeneratedAt" class="hint"></p>
+          </div>
+          <div class="metrics" id="reportMetrics">
+            <div><span>Mentions scanned</span><strong id="reportMentionTotal">0</strong></div>
+            <div><span>Negative</span><strong id="reportNegative" class="metric-neg">0</strong></div>
+            <div><span>Open alerts</span><strong id="reportOpenAlerts">0</strong></div>
+            <div><span>Monitors</span><strong id="reportMonitorTotal">0</strong></div>
+          </div>
+          <div class="plain-section">
+            <div class="eyebrow">Sentiment mix</div>
+            <h2>How people feel</h2>
+            <div id="reportSentimentBars" class="bar-list"></div>
+          </div>
+          <div class="plain-section">
+            <div class="eyebrow">Channels</div>
+            <h2>Where it shows up</h2>
+            <div id="reportSourceBars" class="bar-list"></div>
+            <div id="reportChannelSentiment" class="channel-sentiment-grid"></div>
+          </div>
+          <div class="plain-section">
+            <div class="eyebrow">Monitors</div>
+            <h2>Brand &amp; competitor coverage</h2>
+            <div id="reportMonitorBreakdown" class="monitor-list"></div>
+          </div>
         </div>
       </section>
 
@@ -258,13 +336,14 @@
       <label>Name<input name="name" required placeholder="Acme Company" autocomplete="off" /></label>
       <label>Type
         <select name="type" required>
-          <option value="company" selected>Company</option>
-          <option value="brand">Brand</option>
+          <option value="company" selected>Company / competitor</option>
+          <option value="brand">Your brand</option>
           <option value="person">Person</option>
           <option value="product">Product</option>
         </select>
       </label>
       <label>Initial keyword / Boolean query<input name="query" required placeholder='"Acme" AND NOT "Acme School"' autocomplete="off" /></label>
+      <p class="hint">Tip: create one monitor for your brand and others for rivals — Insights compares them side-by-side.</p>
       <div class="dialog-actions">
         <button type="button" id="cancelMonitor" class="ghost">Cancel</button>
         <button type="submit" class="primary">Create</button>

@@ -78,14 +78,39 @@ const state = {
 
 const $ = (selector) => document.querySelector(selector);
 const titles = {
-  overview: ["Overview", "Workspace pulse across monitors, mentions, and alerts."],
-  mentions: ["Mentions", "Filter and inspect mentions for a selected monitor."],
+  overview: ["Overview", "Hear what the market is saying about you — across monitors and channels."],
+  mentions: ["Mentions", "Filter by time, channel, and sentiment. Inspect every story clearly."],
+  insights: ["Insights", "Brand sentiment, audience mix, and competitor listening side-by-side."],
   alerts: ["Alerts", "Acknowledge or resolve negative mention alerts."],
-  monitors: ["Monitors", "Manage keyword and Boolean monitors."],
-  reports: ["Reports", "Live mention and alert aggregates for this workspace."],
+  monitors: ["Monitors", "Manage brand and competitor keyword / Boolean monitors."],
+  reports: ["Reports", "Presentation-ready listening rollups for stakeholders."],
   settings: ["Settings", "API endpoint and billing checkout."],
   "source-health": ["Source health", "Availability matrix for discovery sources."],
   admin: ["Admin", "Tenant registry and platform source health."]
+};
+
+const CONTENT_TYPE_LABELS = {
+  news: "News",
+  web: "Article",
+  rss: "Blog post",
+  reddit: "Reddit",
+  youtube: "YouTube video",
+  x: "X post",
+  facebook: "Facebook",
+  tiktok: "TikTok video",
+  linkedin: "LinkedIn"
+};
+
+const CHANNEL_LABELS = {
+  news: "News",
+  web: "Web",
+  rss: "Blogs / RSS",
+  reddit: "Reddit",
+  youtube: "YouTube",
+  x: "X",
+  facebook: "Facebook",
+  tiktok: "TikTok",
+  linkedin: "LinkedIn"
 };
 
 const toast = $("#toast");
@@ -99,6 +124,115 @@ function notify(message) {
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
+}
+
+function contentTypeLabel(source) {
+  const key = String(source || "unknown").toLowerCase();
+  return CONTENT_TYPE_LABELS[key] || (key ? key.charAt(0).toUpperCase() + key.slice(1) : "Unknown");
+}
+
+function channelLabel(source) {
+  const key = String(source || "unknown").toLowerCase();
+  return CHANNEL_LABELS[key] || contentTypeLabel(key);
+}
+
+function parseMentionDate(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatMentionTime(value) {
+  const date = parseMentionDate(value);
+  if (!date) return "Time unknown";
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short"
+    }).format(date);
+  } catch {
+    return date.toISOString();
+  }
+}
+
+function formatMentionTimeLine(mention) {
+  const published = parseMentionDate(mention.published_at);
+  const discovered = parseMentionDate(mention.discovered_at);
+  if (published) {
+    const pub = formatMentionTime(mention.published_at);
+    if (discovered) return `Published ${pub} · Found ${formatMentionTime(mention.discovered_at)}`;
+    return `Published ${pub}`;
+  }
+  if (discovered) return `Found ${formatMentionTime(mention.discovered_at)}`;
+  return "Time unknown";
+}
+
+function sentimentTagHtml(sentiment) {
+  const key = String(sentiment || "unknown").toLowerCase();
+  const label = key === "negative" || key === "neutral" || key === "positive" ? key : "unknown";
+  return `<span class="tag tag-sentiment sentiment-${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+}
+
+function mentionTagsHtml(mention) {
+  const source = String(mention.source || "unknown").toLowerCase();
+  const severity = Number(mention.severity_score);
+  const severityLabel = Number.isFinite(severity) ? `Severity ${Math.round(severity)}` : "Severity —";
+  return `
+    <div class="tag-row">
+      <span class="tag tag-channel">${escapeHtml(contentTypeLabel(source))}</span>
+      ${sentimentTagHtml(mention.sentiment)}
+      <span class="tag tag-severity">${escapeHtml(severityLabel)}</span>
+    </div>
+  `;
+}
+
+function emptyChannelSentiment() {
+  return { positive: 0, neutral: 0, negative: 0, unknown: 0 };
+}
+
+function renderChannelSentimentGrid(target, channelSentiment, emptyLabel = "No channel sentiment yet.") {
+  if (!target) return;
+  target.innerHTML = "";
+  const entries = [...(channelSentiment || new Map()).entries()]
+    .map(([source, counts]) => ({
+      source,
+      label: channelLabel(source),
+      total: (counts.positive || 0) + (counts.neutral || 0) + (counts.negative || 0) + (counts.unknown || 0),
+      counts
+    }))
+    .filter((item) => item.total > 0)
+    .sort((a, b) => b.total - a.total);
+  if (!entries.length) {
+    target.innerHTML = `<div class="empty">${escapeHtml(emptyLabel)}</div>`;
+    return;
+  }
+  for (const entry of entries) {
+    const pos = entry.counts.positive || 0;
+    const neu = entry.counts.neutral || 0;
+    const neg = entry.counts.negative || 0;
+    const unk = entry.counts.unknown || 0;
+    const total = Math.max(entry.total, 1);
+    const card = document.createElement("div");
+    card.className = "channel-sentiment-card";
+    card.innerHTML = `
+      <div class="channel-sentiment-head">
+        <strong>${escapeHtml(entry.label)}</strong>
+        <span>${entry.total}</span>
+      </div>
+      <div class="sentiment-stack" aria-hidden="true">
+        <span class="seg pos" style="width:${(pos / total) * 100}%"></span>
+        <span class="seg neu" style="width:${(neu / total) * 100}%"></span>
+        <span class="seg neg" style="width:${(neg / total) * 100}%"></span>
+        <span class="seg unk" style="width:${(unk / total) * 100}%"></span>
+      </div>
+      <div class="channel-sentiment-legend">
+        <span class="sentiment-positive">${pos} positive</span>
+        <span class="sentiment-neutral">${neu} neutral</span>
+        <span class="sentiment-negative">${neg} negative</span>
+      </div>
+    `;
+    target.appendChild(card);
+  }
 }
 
 function canManageMonitors() {
@@ -197,6 +331,7 @@ function panelFor(view) {
   const map = {
     overview: "#overviewPanel",
     mentions: "#mentionsPanel",
+    insights: "#insightsPanel",
     alerts: "#alertsPanel",
     monitors: "#monitorsPanel",
     reports: "#reportsPanel",
@@ -237,9 +372,16 @@ function setView(view) {
 }
 
 function fillMonitorSelects() {
-  for (const select of [$("#mentionMonitorSelect"), $("#alertMonitorSelect")]) {
+  for (const select of [$("#mentionMonitorSelect"), $("#alertMonitorSelect"), $("#insightsBrandSelect"), $("#insightsCompetitorSelect")]) {
+    if (!select) continue;
     const previous = select.value;
     select.innerHTML = "";
+    if (select.id === "insightsCompetitorSelect") {
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = "All other monitors";
+      select.appendChild(none);
+    }
     for (const monitor of state.monitors) {
       const option = document.createElement("option");
       option.value = monitor.monitor_id || monitor.id;
@@ -247,6 +389,9 @@ function fillMonitorSelects() {
       select.appendChild(option);
     }
     if ([...select.options].some((item) => item.value === previous)) select.value = previous;
+  }
+  if ($("#insightsBrandSelect") && !$("#insightsBrandSelect").value && state.monitors[0]) {
+    $("#insightsBrandSelect").value = state.monitors[0].monitor_id || state.monitors[0].id;
   }
 }
 
@@ -299,6 +444,7 @@ function renderBarList(target, entries, emptyLabel) {
 async function collectWorkspaceAggregates() {
   const sentimentCounts = { negative: 0, neutral: 0, positive: 0, unknown: 0 };
   const sourceCounts = new Map();
+  const channelSentiment = new Map();
   const perMonitor = [];
   let mentionTotal = 0;
   let openAlerts = 0;
@@ -321,6 +467,10 @@ async function collectWorkspaceAggregates() {
     const open = alerts.filter((item) => item.state !== "resolved").length;
     openAlerts += open;
     let monitorNegative = 0;
+    let monitorPositive = 0;
+    let monitorNeutral = 0;
+    const monitorSources = new Map();
+    const monitorChannelSentiment = new Map();
     for (const mention of mentions) {
       const sentiment = String(mention.sentiment || "unknown").toLowerCase();
       if (sentimentCounts[sentiment] === undefined) sentimentCounts.unknown += 1;
@@ -328,16 +478,31 @@ async function collectWorkspaceAggregates() {
       if (sentiment === "negative") {
         negative += 1;
         monitorNegative += 1;
+      } else if (sentiment === "positive") {
+        monitorPositive += 1;
+      } else if (sentiment === "neutral") {
+        monitorNeutral += 1;
       }
       const source = mention.source || "unknown";
       sourceCounts.set(source, (sourceCounts.get(source) || 0) + 1);
+      monitorSources.set(source, (monitorSources.get(source) || 0) + 1);
+      if (!channelSentiment.has(source)) channelSentiment.set(source, emptyChannelSentiment());
+      if (!monitorChannelSentiment.has(source)) monitorChannelSentiment.set(source, emptyChannelSentiment());
+      const bucket = sentimentCounts[sentiment] === undefined ? "unknown" : sentiment;
+      channelSentiment.get(source)[bucket] += 1;
+      monitorChannelSentiment.get(source)[bucket] += 1;
     }
     perMonitor.push({
       id: monitorId,
       name: monitor.name || monitorId,
       mentions: mentions.length,
       negative: monitorNegative,
-      openAlerts: open
+      positive: monitorPositive,
+      neutral: monitorNeutral,
+      openAlerts: open,
+      sourceCounts: monitorSources,
+      channelSentiment: monitorChannelSentiment,
+      mentionsRaw: mentions
     });
   }
 
@@ -348,7 +513,9 @@ async function collectWorkspaceAggregates() {
     monitorTotal: state.monitors.length,
     sentimentCounts,
     sourceCounts,
-    perMonitor
+    channelSentiment,
+    perMonitor,
+    generatedAt: new Date().toISOString()
   };
 }
 
@@ -360,11 +527,23 @@ async function loadOverviewStats() {
   $("#alertCount").textContent = String(stats.openAlerts);
   const available = state.sourceHealth.filter((item) => !["degraded", "disabled", "contract-required"].includes(item.availability)).length;
   $("#sourceCoverage").textContent = state.sourceHealth.length ? `${available}/${state.sourceHealth.length}` : "—";
+  renderChannelSentimentGrid($("#overviewChannelSentiment"), stats.channelSentiment, "Collect mentions to see channel sentiment.");
   renderSourceGrid($("#overviewSourceList"), state.sourceHealth.slice(0, 6));
 }
 
 function renderReports() {
   const stats = state.reportStats;
+  const generated = $("#reportGeneratedAt");
+  if (generated) {
+    generated.textContent = stats?.generatedAt
+      ? `Generated ${formatMentionTime(stats.generatedAt)}`
+      : "";
+  }
+  if ($("#reportTitle")) {
+    $("#reportTitle").textContent = state.workspace?.workspaceName
+      ? `What the market is saying about ${state.workspace.workspaceName}`
+      : "What the market is saying";
+  }
   if (!stats) {
     $("#reportMentionTotal").textContent = "0";
     $("#reportNegative").textContent = "0";
@@ -372,6 +551,7 @@ function renderReports() {
     $("#reportMonitorTotal").textContent = String(state.monitors.length);
     renderBarList($("#reportSentimentBars"), [], "No mention data yet.");
     renderBarList($("#reportSourceBars"), [], "No source breakdown yet.");
+    renderChannelSentimentGrid($("#reportChannelSentiment"), new Map());
     $("#reportMonitorBreakdown").innerHTML = '<div class="empty">No monitors.</div>';
     return;
   }
@@ -387,8 +567,9 @@ function renderReports() {
 
   const sourceEntries = [...stats.sourceCounts.entries()]
     .sort((a, b) => b[1] - a[1])
-    .map(([label, count]) => ({ label, count }));
+    .map(([label, count]) => ({ label: channelLabel(label), count }));
   renderBarList($("#reportSourceBars"), sourceEntries, "No source breakdown yet.");
+  renderChannelSentimentGrid($("#reportChannelSentiment"), stats.channelSentiment);
 
   const list = $("#reportMonitorBreakdown");
   list.innerHTML = "";
@@ -399,9 +580,64 @@ function renderReports() {
   for (const row of stats.perMonitor) {
     const item = document.createElement("div");
     item.className = "monitor-row";
-    item.innerHTML = `<div><strong>${escapeHtml(row.name)}</strong><small>${row.mentions} mentions · ${row.negative} negative · ${row.openAlerts} open alerts</small></div>`;
+    item.innerHTML = `<div><strong>${escapeHtml(row.name)}</strong><small>${row.mentions} mentions · <span class="sentiment-negative">${row.negative} negative</span> · <span class="sentiment-positive">${row.positive || 0} positive</span> · ${row.openAlerts} open alerts</small></div>`;
     list.appendChild(item);
   }
+}
+
+function renderInsights() {
+  const stats = state.reportStats;
+  const brandId = $("#insightsBrandSelect")?.value;
+  const competitorId = $("#insightsCompetitorSelect")?.value;
+  const brand = stats?.perMonitor?.find((item) => item.id === brandId) || stats?.perMonitor?.[0];
+  renderChannelSentimentGrid(
+    $("#insightsSentimentByChannel"),
+    brand?.channelSentiment || new Map(),
+    "No brand mentions yet for this monitor."
+  );
+
+  const audienceEntries = [...(brand?.sourceCounts || new Map()).entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([label, count]) => ({ label: `${channelLabel(label)} · ${contentTypeLabel(label)}`, count }));
+  renderBarList($("#insightsAudienceBars"), audienceEntries, "No audience / channel mix yet.");
+
+  const table = $("#insightsCompetitorTable");
+  if (!table) return;
+  table.innerHTML = "";
+  const rows = (stats?.perMonitor || []).filter((item) => {
+    if (!brand) return true;
+    if (item.id === brand.id) return true;
+    if (competitorId) return item.id === competitorId;
+    return true;
+  });
+  if (!rows.length) {
+    table.innerHTML = '<div class="empty">Create brand and competitor monitors to compare.</div>';
+    return;
+  }
+  const header = document.createElement("div");
+  header.className = "competitor-row competitor-head";
+  header.innerHTML = "<span>Monitor</span><span>Mentions</span><span>Positive</span><span>Neutral</span><span>Negative</span><span>Top channel</span>";
+  table.appendChild(header);
+  for (const row of rows) {
+    const topChannel = [...(row.sourceCounts || new Map()).entries()].sort((a, b) => b[1] - a[1])[0];
+    const el = document.createElement("div");
+    el.className = `competitor-row${brand && row.id === brand.id ? " is-brand" : ""}`;
+    el.innerHTML = `
+      <strong>${escapeHtml(row.name)}${brand && row.id === brand.id ? " <em>you</em>" : ""}</strong>
+      <span>${row.mentions}</span>
+      <span class="sentiment-positive">${row.positive || 0}</span>
+      <span class="sentiment-neutral">${row.neutral || 0}</span>
+      <span class="sentiment-negative">${row.negative || 0}</span>
+      <span>${escapeHtml(topChannel ? channelLabel(topChannel[0]) : "—")}</span>
+    `;
+    table.appendChild(el);
+  }
+}
+
+async function loadInsights() {
+  if (!state.workspace) return;
+  state.reportStats = await collectWorkspaceAggregates();
+  renderInsights();
 }
 
 async function loadReports() {
@@ -436,12 +672,14 @@ function renderMentionDetail(mention) {
   }
   pane.classList.remove("empty");
   const monitorId = $("#mentionMonitorSelect").value;
+  const relevance = mention.relevance_score;
   pane.innerHTML = `
-    <div class="eyebrow">${escapeHtml(mention.source)}</div>
+    ${mentionTagsHtml(mention)}
+    <p class="mention-time">${escapeHtml(formatMentionTimeLine(mention))}</p>
     <h2>${escapeHtml(mention.title || mention.excerpt || "Untitled mention")}</h2>
     <p>${escapeHtml(mention.excerpt || "")}</p>
-    <p><strong>Sentiment</strong> ${escapeHtml(mention.sentiment)} · <strong>Severity</strong> ${escapeHtml(mention.severity_score)} · <strong>Relevance</strong> ${escapeHtml(mention.relevance_score)}</p>
-    <p><a href="${escapeHtml(mention.canonical_url || "#")}" target="_blank" rel="noreferrer">Open source</a></p>
+    <p class="mention-meta"><strong>Relevance</strong> ${escapeHtml(relevance)} · <strong>Topic</strong> ${escapeHtml(mention.topic || "—")} · <strong>Language</strong> ${escapeHtml(mention.language || "—")}</p>
+    <p><a href="${escapeHtml(mention.canonical_url || "#")}" target="_blank" rel="noreferrer">Open original</a></p>
     <div class="feedback-block">
       <div class="eyebrow">Feedback</div>
       <div class="feedback-actions" id="mentionFeedbackActions"></div>
@@ -481,7 +719,11 @@ function renderMentions() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `list-item${mention.id === state.selectedMentionId ? " active" : ""}`;
-    button.innerHTML = `<strong>${escapeHtml(mention.title || mention.excerpt || "Untitled")}</strong><small>${escapeHtml(mention.source)} · ${escapeHtml(mention.sentiment)} · sev ${escapeHtml(mention.severity_score)}</small>`;
+    button.innerHTML = `
+      ${mentionTagsHtml(mention)}
+      <strong>${escapeHtml(mention.title || mention.excerpt || "Untitled")}</strong>
+      <small class="mention-time">${escapeHtml(formatMentionTimeLine(mention))}</small>
+    `;
     button.addEventListener("click", () => {
       state.selectedMentionId = mention.id;
       renderMentions();
@@ -503,15 +745,33 @@ async function loadMentions() {
     return;
   }
   const params = new URLSearchParams();
-  params.set("limit", "50");
+  params.set("limit", "100");
   const sentiment = $("#mentionSentiment").value;
   const minSeverity = $("#mentionMinSeverity").value;
   const source = $("#mentionSource").value.trim();
+  const from = $("#mentionFrom")?.value;
+  const to = $("#mentionTo")?.value;
   if (sentiment) params.set("sentiment", sentiment);
   if (minSeverity) params.set("minSeverity", minSeverity);
   if (source) params.set("source", source);
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
   const data = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}/mentions?${params}`);
-  state.mentions = data.mentions || [];
+  let mentions = data.mentions || [];
+  // Client refine by published_at when parseable and outside the selected window.
+  if (from || to) {
+    const fromMs = from ? Date.parse(`${from}T00:00:00.000Z`) : null;
+    const toMs = to ? Date.parse(`${to}T23:59:59.999Z`) : null;
+    mentions = mentions.filter((mention) => {
+      const event = parseMentionDate(mention.published_at) || parseMentionDate(mention.discovered_at);
+      if (!event) return true;
+      const ms = event.getTime();
+      if (fromMs !== null && !Number.isNaN(fromMs) && ms < fromMs) return false;
+      if (toMs !== null && !Number.isNaN(toMs) && ms > toMs) return false;
+      return true;
+    });
+  }
+  state.mentions = mentions;
   renderMentions();
 }
 
@@ -625,6 +885,7 @@ async function renderSignedIn() {
   setView(state.view);
   if (state.view === "mentions") await loadMentions();
   if (state.view === "alerts") await loadAlerts();
+  if (state.view === "insights") await loadInsights();
   if (state.view === "reports") {
     renderReports();
   }
@@ -803,6 +1064,14 @@ $("#mentionMonitorSelect").addEventListener("change", () => loadMentions().catch
 $("#alertRefreshBtn").addEventListener("click", () => loadAlerts().catch((error) => notify(error.message)));
 $("#alertMonitorSelect").addEventListener("change", () => loadAlerts().catch((error) => notify(error.message)));
 $("#reportRefreshBtn")?.addEventListener("click", () => loadReports().catch((error) => notify(error.message)));
+$("#reportPrintBtn")?.addEventListener("click", () => {
+  document.body.classList.add("printing-report");
+  window.print();
+  setTimeout(() => document.body.classList.remove("printing-report"), 500);
+});
+$("#insightsRefreshBtn")?.addEventListener("click", () => loadInsights().catch((error) => notify(error.message)));
+$("#insightsBrandSelect")?.addEventListener("change", () => renderInsights());
+$("#insightsCompetitorSelect")?.addEventListener("change", () => renderInsights());
 $("#adminRefreshBtn")?.addEventListener("click", () => loadAdmin().catch((error) => notify(error.message)));
 
 $("#authSettingsLink")?.addEventListener("click", () => {
@@ -819,6 +1088,7 @@ for (const button of document.querySelectorAll(".nav")) {
       if (!state.user) return;
       if (button.dataset.view === "overview") await loadOverviewStats();
       if (button.dataset.view === "mentions") await loadMentions();
+      if (button.dataset.view === "insights") await loadInsights();
       if (button.dataset.view === "alerts") await loadAlerts();
       if (button.dataset.view === "monitors") renderMonitors();
       if (button.dataset.view === "reports") await loadReports();
