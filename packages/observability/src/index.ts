@@ -18,3 +18,5 @@ export function structuredLog(level: "info" | "warn" | "error", message: string,
   else if (level === "warn") console.warn(JSON.stringify(payload));
   else console.log(JSON.stringify(payload));
 }
+
+export { workerHealthResponse } from "./health.ts";

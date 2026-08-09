@@ -1,6 +1,6 @@
 import { assertPublicHttpUrl, createJob, normalizeUrl, sha256Hex, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
-import { structuredLog } from "../../../packages/observability/src/index.ts";
+import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -142,6 +142,10 @@ function retryDelayFromError(error: unknown): number | undefined {
 }
 
 export default {
+  async fetch(): Promise<Response> {
+    return workerHealthResponse("crawler-browser");
+  },
+
   async queue(batch: MessageBatch<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
     for (const message of batch.messages) {
       try {

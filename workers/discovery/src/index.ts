@@ -8,7 +8,7 @@ import {
   type DiscoveryResult,
   type SourceType
 } from "../../../packages/source-adapters/src/index.ts";
-import { structuredLog } from "../../../packages/observability/src/index.ts";
+import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 
 interface DiscoveryPayload {
   reason: "scheduled";
@@ -140,6 +140,10 @@ async function processMessage(message: Message<JobEnvelope<DiscoveryPayload>>, e
 }
 
 export default {
+  async fetch(): Promise<Response> {
+    return workerHealthResponse("discovery");
+  },
+
   async queue(batch: MessageBatch<JobEnvelope<DiscoveryPayload>>, env: Env): Promise<void> {
     for (const message of batch.messages) {
       try {

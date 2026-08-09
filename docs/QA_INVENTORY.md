@@ -80,7 +80,8 @@ Data: sanitized fixtures from `scripts/seed-local-qa.mjs` (fake brands/emails on
 | BUG-6 | Medium | Settings UX | Owner opens Settings | Billing checkout UI | Checkout API only; no Settings form | inventory gap | **Fixed** — plan select + stub checkout link |
 | BUG-7 | Medium | Admin UX | Ops opens Admin | Tenant registry UI | Admin APIs only; no nav/panel | inventory gap | **Fixed** — Admin nav for `super_admin` |
 | BUG-8 | Low | Reports UX | Nav Reports | Live aggregates | Stub copy only | inventory gap | **Fixed** — sentiment/source/monitor rollups |
-| BUG-9 | Low | RBAC UX | Viewer on Monitors | New monitor hidden | Button visible; create 403 | inventory gap | **Fixed** — role-aware New monitor + billing visibility |
+| BUG-11 | Critical | Auth signup | POST `/v1/auth/signup` on Workers | Account created | 500 `Pbkdf2 failed: iteration counts above 100000` (`PASSWORD_ITERATIONS=210000`) | observability + curl | **Fixed** — cap PBKDF2 at 100_000 (Workers WebCrypto max) |
+| BUG-12 | Medium | Queue workers | GET `reputa-processor-production` `/` | Health JSON | `Handler does not export a fetch() function.` | observability | **Fixed** — queue workers export health `fetch()` |
 
 ## Regression
 

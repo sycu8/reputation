@@ -1,52 +1,61 @@
 :root,
 html[data-theme="dark"] {
-  --bg0: #07141f;
-  --bg1: #0d2233;
-  --ink: #e8eef4;
-  --muted: #8aa0b5;
-  --line: rgba(201, 213, 226, 0.16);
-  --panel: rgba(12, 32, 48, 0.72);
-  --accent: #2dd4bf;
-  --accent-strong: #14b8a6;
-  --accent-dim: rgba(45, 212, 191, 0.14);
-  --get: #38bdf8;
-  --post: #34d399;
-  --patch: #fbbf24;
-  --delete: #fb7185;
+  --orange: #F97316;
+  --navy: #0B1220;
+  --midnight: #111827;
+  --cloud: #F8FAFC;
+  --slate: #64748B;
+  --positive: #22C55E;
+  --info: #3B82F6;
+  --warning: #F59E0B;
+  --critical: #EF4444;
+  --bg0: #070b14;
+  --bg1: #111827;
+  --ink: #F8FAFC;
+  --muted: #94a3b8;
+  --line: rgba(148, 163, 184, 0.18);
+  --panel: rgba(17, 24, 39, 0.78);
+  --accent: #F97316;
+  --accent-strong: #fb923c;
+  --accent-dim: rgba(249, 115, 22, 0.14);
+  --get: #3B82F6;
+  --post: #22C55E;
+  --patch: #F59E0B;
+  --delete: #EF4444;
   --code-bg: rgba(255, 255, 255, 0.06);
-  --code-block-bg: #061018;
-  --header-bg: rgba(7, 20, 31, 0.72);
-  --page-wash-a: rgba(45, 212, 191, 0.22);
-  --page-wash-b: rgba(56, 189, 248, 0.14);
-  --page-wash-c: #050d14;
-  --cta-ink: #042f2e;
-  --body-copy: #c5d2de;
+  --code-block-bg: #05080f;
+  --header-bg: rgba(7, 11, 20, 0.78);
+  --page-wash-a: rgba(249, 115, 22, 0.2);
+  --page-wash-b: rgba(59, 130, 246, 0.12);
+  --page-wash-c: #05080f;
+  --cta-ink: #0B1220;
+  --body-copy: #cbd5e1;
   --font-display: "Sora", "Trebuchet MS", sans-serif;
   --font-body: "IBM Plex Sans", "Segoe UI", sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
 html[data-theme="light"] {
-  --bg0: #e8eef4;
-  --bg1: #f7fafc;
-  --ink: #102033;
-  --muted: #5b6b7c;
-  --line: #c9d5e2;
-  --panel: rgba(255, 255, 255, 0.82);
-  --accent: #0f766e;
-  --accent-strong: #0b5f59;
-  --accent-dim: rgba(15, 118, 110, 0.12);
-  --get: #0284c7;
-  --post: #059669;
+  --bg0: #F8FAFC;
+  --bg1: #eef2f7;
+  --ink: #0B1220;
+  --muted: #64748B;
+  --line: #d5dde8;
+  --panel: rgba(255, 255, 255, 0.88);
+  --accent: #F97316;
+  --accent-strong: #ea580c;
+  --accent-dim: rgba(249, 115, 22, 0.12);
+  --get: #2563eb;
+  --post: #16a34a;
   --patch: #d97706;
-  --delete: #e11d48;
-  --code-bg: rgba(16, 32, 51, 0.05);
-  --code-block-bg: #0f2433;
-  --header-bg: rgba(247, 250, 252, 0.86);
-  --page-wash-a: rgba(15, 118, 110, 0.16);
-  --page-wash-b: rgba(14, 116, 144, 0.12);
-  --page-wash-c: #f7fafc;
-  --cta-ink: #fff;
+  --delete: #dc2626;
+  --code-bg: rgba(11, 18, 32, 0.05);
+  --code-block-bg: #111827;
+  --header-bg: rgba(248, 250, 252, 0.9);
+  --page-wash-a: rgba(249, 115, 22, 0.14);
+  --page-wash-b: rgba(59, 130, 246, 0.1);
+  --page-wash-c: #F8FAFC;
+  --cta-ink: #ffffff;
   --body-copy: #334155;
 }
 
@@ -101,12 +110,21 @@ button { font: inherit; cursor: pointer; color: inherit; }
   z-index: 20;
   background: var(--header-bg);
 }
-.brand-link { display: flex; align-items: baseline; gap: 10px; color: inherit; text-decoration: none; }
+.brand-link { display: flex; align-items: center; gap: 10px; color: inherit; text-decoration: none; }
+.brand-mark { flex: 0 0 auto; display: block; }
+.brand-text { display: grid; gap: 1px; line-height: 1.1; }
 .brand {
   font-family: var(--font-display);
   font-weight: 800;
   letter-spacing: -0.04em;
   font-size: 22px;
+}
+.brand-by {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 .brand-sub {
   color: var(--accent);
@@ -114,6 +132,7 @@ button { font: inherit; cursor: pointer; color: inherit; }
   font-weight: 800;
   letter-spacing: 0.14em;
   text-transform: uppercase;
+  margin-left: 4px;
 }
 .header-nav { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
 .header-nav a { color: var(--muted); font-size: 14px; font-weight: 600; text-decoration: none; }
@@ -366,7 +385,8 @@ tr:last-child td { border-bottom: 0; }
   color: var(--muted);
   font-size: 14px;
 }
-.site-footer .brand { font-size: 16px; color: var(--ink); margin-right: 10px; }
+.site-footer .brand-lockup { display: flex; align-items: center; gap: 10px; }
+.site-footer .brand { font-size: 16px; color: var(--ink); margin-right: 0; }
 
 .toast {
   position: fixed;

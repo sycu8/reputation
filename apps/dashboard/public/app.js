@@ -1,10 +1,36 @@
 import { initTheme } from "./theme.js";
 
+function isLocalDashboardHost() {
+  const host = window.location.hostname || "127.0.0.1";
+  return location.port === "8788" || host === "localhost" || host === "127.0.0.1";
+}
+
+function resolveDefaultApiBase() {
+  const host = window.location.hostname || "127.0.0.1";
+  if (isLocalDashboardHost()) return `http://${host}:8787`;
+  if (host.endsWith(".workers.dev")) {
+    return "https://reputa-api-production.sycu-lee.workers.dev";
+  }
+  // Same-origin Workers route on the custom hostname.
+  return `${location.origin}/api`;
+}
+
+function isUsableApiBase(value) {
+  try {
+    const url = new URL(value);
+    if (location.protocol === "https:" && url.protocol === "http:") return false;
+    if (!isLocalDashboardHost() && url.port === "8787") return false;
+    return Boolean(url.origin);
+  } catch {
+    return false;
+  }
+}
+
 function defaultApiBase() {
   const stored = localStorage.getItem("apiBase");
-  if (stored) return stored;
-  const host = window.location.hostname || "127.0.0.1";
-  return `http://${host}:8787`;
+  if (stored && isUsableApiBase(stored)) return stored.replace(/\/$/, "");
+  if (stored) localStorage.removeItem("apiBase");
+  return resolveDefaultApiBase();
 }
 
 const FEEDBACK_ACTIONS = [
@@ -76,11 +102,16 @@ function updateRoleChrome() {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(`${state.apiBase}${path}`, {
-    credentials: "include",
-    headers: { "content-type": "application/json", ...(options.headers || {}) },
-    ...options
-  });
+  let response;
+  try {
+    response = await fetch(`${state.apiBase}${path}`, {
+      credentials: "include",
+      headers: { "content-type": "application/json", ...(options.headers || {}) },
+      ...options
+    });
+  } catch {
+    throw new Error(`Failed to reach API at ${state.apiBase}. Check Settings → API base URL.`);
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
   return data;
@@ -117,11 +148,14 @@ function setView(view) {
   if (!state.user) {
     if (view === "settings") {
       $("#settingsPanel").classList.remove("hidden");
+      $("#appTopbar")?.classList.remove("hidden");
     } else {
       $("#authPanel").classList.remove("hidden");
+      $("#appTopbar")?.classList.add("hidden");
     }
     return;
   }
+  $("#appTopbar")?.classList.remove("hidden");
   const panel = panelFor(view);
   if (panel) panel.classList.remove("hidden");
 }
@@ -640,7 +674,12 @@ $("#workspaceSelect").addEventListener("change", async (event) => {
 $("#apiForm").addEventListener("submit", (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
-  state.apiBase = String(form.get("apiBase") || "").replace(/\/$/, "") || "http://localhost:8787";
+  const next = String(form.get("apiBase") || "").replace(/\/$/, "") || resolveDefaultApiBase();
+  if (!isUsableApiBase(next)) {
+    notify("API base URL looks invalid for this page (use https production API, not :8787)");
+    return;
+  }
+  state.apiBase = next;
   localStorage.setItem("apiBase", state.apiBase);
   $("#apiForm").querySelector('[name="apiBase"]').value = state.apiBase;
   notify("API endpoint saved");

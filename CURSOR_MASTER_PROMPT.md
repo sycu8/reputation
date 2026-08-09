@@ -1,4 +1,4 @@
-# Cursor Master Prompt — Build and Deploy Reputation Orangecloud
+# Cursor Master Prompt — Build and Deploy PulseWatch by OrangeCloud
 
 You are the senior implementation and deployment owner of this repository. Work autonomously and systematically until the application is production-ready or you hit a genuine external blocker such as missing credentials, unavailable commercial source access, or a Cloudflare account/zone mismatch.
 

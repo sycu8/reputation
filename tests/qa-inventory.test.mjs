@@ -189,6 +189,35 @@ test("viewer membership includes Acme and insecure cookies for local-qa", async 
   });
   const setCookie = login.headers.get("set-cookie") || "";
   assert.equal(setCookie.includes("Secure"), false);
+  assert.match(setCookie, /SameSite=Lax/i);
+});
+
+test("production auth cookies are Secure + SameSite=None for cross-origin dashboard", async () => {
+  const world = await buildSeededEnv({ mentionsPerMonitor: 1 });
+  world.env.ENVIRONMENT = "production";
+  world.env.ALLOWED_ORIGINS = "https://reputa-dashboard-production.sycu-lee.workers.dev,https://reputation.orangecloud.vn";
+
+  const preflight = await api.fetch(
+    new Request("http://localhost/v1/auth/login", {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://reputa-dashboard-production.sycu-lee.workers.dev",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type"
+      }
+    }),
+    world.env
+  );
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("access-control-allow-origin"), "https://reputa-dashboard-production.sycu-lee.workers.dev");
+
+  const login = await apiCall(api, world.env, "POST", "/v1/auth/login", {
+    email: world.accounts.owner.email,
+    password: QA_PASSWORD
+  });
+  const setCookie = login.headers.get("set-cookie") || "";
+  assert.match(setCookie, /Secure/i);
+  assert.match(setCookie, /SameSite=None/i);
 });
 
 test("shardFromSessionCookie strips cookie name prefix", () => {
@@ -226,6 +255,35 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /billing\/checkout/);
   assert.match(js, /\/v1\/admin\/tenants/);
   assert.match(js, /not_relevant/);
+  assert.match(js, /resolveDefaultApiBase/);
+  assert.match(js, /reputa-api-production\.sycu-lee\.workers\.dev/);
+  assert.match(html, /PulseWatch \| Social Listening/);
+  assert.match(html, /PulseWatch by OrangeCloud/);
+  assert.match(html, /Know what the Internet is saying about you/);
+  assert.match(html, /PulseWatch Starter/);
+  assert.match(html, /PulseWatch Pro/);
+  assert.match(html, /PulseWatch Business/);
+  assert.match(html, /og:title/);
+  assert.match(html, /brand-mark\.svg/);
+  assert.doesNotMatch(html, /OrangeCloud Reputation/);
+  assert.doesNotMatch(html, /option value="starter">Starter</);
+});
+
+test("password hashing stays within Workers PBKDF2 iteration limit", async () => {
+  const { readFileSync } = await import("node:fs");
+  const state = readFileSync(new URL("../workers/state/src/index.ts", import.meta.url), "utf8");
+  assert.match(state, /PASSWORD_ITERATIONS = 100_000/);
+  assert.doesNotMatch(state, /PASSWORD_ITERATIONS = 210_000/);
+  assert.match(state, /MAX_PASSWORD_ITERATIONS = 100_000/);
+});
+
+test("queue workers export fetch health handlers", async () => {
+  const { readFileSync } = await import("node:fs");
+  for (const service of ["processor", "discovery", "crawler-fetch", "crawler-browser", "alerts", "ai-classifier"]) {
+    const src = readFileSync(new URL(`../workers/${service}/src/index.ts`, import.meta.url), "utf8");
+    assert.match(src, /async fetch\(/);
+    assert.match(src, /workerHealthResponse/);
+  }
 });
 
 test("D13 API docs page documents core v1 surfaces", async () => {
@@ -237,10 +295,13 @@ test("D13 API docs page documents core v1 surfaces", async () => {
   assert.match(html, /\/v1\/workspaces\/\{workspaceId\}\/monitors/);
   assert.match(html, /billing\/checkout/);
   assert.match(html, /\/v1\/admin\/tenants/);
-  assert.match(html, /Boolean query language/);
-  assert.match(html, /id="themeToggle"/);
+  assert.match(html, /PulseWatch by OrangeCloud/);
+  assert.match(html, /PulseWatch Starter/);
+  assert.doesNotMatch(html, /OrangeCloud Reputation/);
+  assert.doesNotMatch(html, /<td><code>super_admin<\/code><\/td>/);
   assert.match(css, /--accent/);
   assert.match(css, /data-theme="light"/);
+  assert.match(css, /#F97316/);
 });
 
 test("theme helper and dashboard expose light/dark mode toggle", async () => {

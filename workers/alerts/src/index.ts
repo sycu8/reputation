@@ -1,5 +1,5 @@
 import type { JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
-import { structuredLog } from "../../../packages/observability/src/index.ts";
+import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 import {
   decideChannelActions,
   summarizeDeliveryOutcomes,
@@ -186,6 +186,10 @@ async function processMessage(message: Message<JobEnvelope<AlertPayload>>, env: 
 }
 
 export default {
+  async fetch(): Promise<Response> {
+    return workerHealthResponse("alerts");
+  },
+
   async queue(batch: MessageBatch<JobEnvelope<AlertPayload>>, env: Env): Promise<void> {
     for (const message of batch.messages) {
       try {
