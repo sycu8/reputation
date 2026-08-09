@@ -199,7 +199,26 @@ async function resolveAuth(request: Request, env: Env): Promise<AuthContext> {
     "/internal/session/verify",
     { method: "POST", body: JSON.stringify({ sessionId, sessionSecret }) }
   );
-  return { userId: verified.userId, userShard, email: verified.email, globalRole: verified.globalRole, sessionId: verified.sessionId };
+  const globalRole = await syncSuperAdminRole(env, userShard, verified.email, verified.globalRole);
+  return { userId: verified.userId, userShard, email: verified.email, globalRole, sessionId: verified.sessionId };
+}
+
+/** Keep stored global_role aligned with SUPER_ADMIN_EMAILS allowlist (promote/demote). */
+async function syncSuperAdminRole(
+  env: Env,
+  userShard: string,
+  email: string,
+  current: GlobalRole
+): Promise<GlobalRole> {
+  if (!env.SUPER_ADMIN_EMAILS?.trim()) return current;
+  const desired: GlobalRole = isSuperAdminEmail(email, env.SUPER_ADMIN_EMAILS) ? "super_admin" : "user";
+  if (desired === current) return current;
+  const updated = await doJson<{ globalRole: GlobalRole }>(
+    userStub(env, userShard),
+    "/internal/global-role",
+    { method: "POST", body: JSON.stringify({ globalRole: desired }) }
+  );
+  return updated.globalRole;
 }
 
 async function requireWorkspaceCapability(

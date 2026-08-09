@@ -146,6 +146,38 @@ test("A12 alert ack/resolve workflow", async () => {
   assert.equal(resolve.status, 200);
 });
 
+test("SUPER_ADMIN_EMAILS promotes an existing account on /v1/me", async () => {
+  if (!world) world = await buildSeededEnv({ mentionsPerMonitor: 4 });
+  const email = `promote-${Date.now()}@example.com`;
+  const envNoAdmin = { ...world.env, SUPER_ADMIN_EMAILS: "" };
+  const signup = await apiCall(api, envNoAdmin, "POST", "/v1/auth/signup", {
+    email,
+    password: QA_PASSWORD,
+    workspaceName: "Promote WS"
+  });
+  assert.equal(signup.status, 201);
+  const created = await signup.json();
+  assert.equal(created.user.globalRole, "user");
+  const token = created.session.token;
+
+  const envAdmin = { ...world.env, SUPER_ADMIN_EMAILS: email };
+  const me = await api.fetch(
+    new Request("https://api.local/v1/me", {
+      headers: { Authorization: `Bearer ${token}` }
+    }),
+    envAdmin
+  );
+  assert.equal(me.status, 200);
+  assert.equal((await me.json()).user.globalRole, "super_admin");
+});
+
+test("deploy defaults SUPER_ADMIN_EMAILS to sycu.lee@gmail.com", async () => {
+  const { readFileSync } = await import("node:fs");
+  const deploy = readFileSync(new URL("../scripts/deploy-cloudspace.mjs", import.meta.url), "utf8");
+  assert.match(deploy, /sycu\.lee@gmail\.com/);
+  assert.match(deploy, /SUPER_ADMIN_EMAILS/);
+});
+
 test("A13/A15 billing checkout and admin gate", async () => {
   const checkout = await apiCall(
     api,

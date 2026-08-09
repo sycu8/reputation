@@ -85,7 +85,7 @@ Paste into the agent chat (or set as cloud secret) then say “deploy”:
 ```bash
 export CLOUDFLARE_API_TOKEN='<token with Workers Scripts, KV, R2, Queues, DO, AI, Browser Rendering, Zone Workers Routes>'
 export CLOUDFLARE_ACCOUNT_ID='4c15704ef706b9c8954cd6f9feb678d8'
-export SUPER_ADMIN_EMAILS='sycu.lee@gmail.com'   # optional
+export SUPER_ADMIN_EMAILS='sycu.lee@gmail.com'   # defaults to this if unset on deploy
 npm run deploy:cloudspace
 ```
 

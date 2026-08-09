@@ -160,6 +160,7 @@ export class UserDirectoryDO extends SqliteObject {
       if (request.method === "POST" && url.pathname === "/internal/login") return await this.login(request);
       if (request.method === "POST" && url.pathname === "/internal/session/verify") return await this.verifySession(request);
       if (request.method === "POST" && url.pathname === "/internal/session/revoke") return await this.revokeSession(request);
+      if (request.method === "POST" && url.pathname === "/internal/global-role") return await this.setGlobalRole(request);
       if (request.method === "POST" && url.pathname === "/internal/memberships") return await this.upsertMembership(request);
       if (request.method === "GET" && url.pathname === "/internal/memberships") return this.listMemberships();
       return json({ error: "not_found" }, 404);
@@ -246,6 +247,20 @@ export class UserDirectoryDO extends SqliteObject {
     const sessionId = asString(body.sessionId, "session_id");
     this.sql.exec(`UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`, nowIso(), sessionId);
     return json({ ok: true });
+  }
+
+  private async setGlobalRole(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const globalRole = body.globalRole === "super_admin" ? "super_admin" : "user";
+    const accounts = rows(this.sql.exec<{ id: string; email: string; global_role: GlobalRole; status: string }>(
+      `SELECT id,email,global_role,status FROM user_account LIMIT 1`
+    ));
+    const account = accounts[0];
+    if (!account || account.status !== "active") return json({ error: "account_not_found" }, 404);
+    if (account.global_role !== globalRole) {
+      this.sql.exec(`UPDATE user_account SET global_role = ?, updated_at = ? WHERE id = ?`, globalRole, nowIso(), account.id);
+    }
+    return json({ userId: account.id, email: account.email, globalRole });
   }
 
   private async upsertMembership(request: Request): Promise<Response> {

@@ -9,7 +9,7 @@
  * Optional:
  *   DEPLOY_ENV=production|staging|dev  (default production)
  *   SKIP_ROUTES=1                      (skip DNS/route changes)
- *   SUPER_ADMIN_EMAILS=a@b.com
+ *   SUPER_ADMIN_EMAILS=sycu.lee@gmail.com   (defaults to sycu.lee@gmail.com if unset)
  *   BRAVE_SEARCH_API_KEY=...
  *   TELEGRAM_BOT_TOKEN=...
  *   BILLING_WEBHOOK_SECRET=...
@@ -260,7 +260,11 @@ async function main() {
     run("npx", ["wrangler", "deploy", "--config", config, ...wranglerEnvArgs()]);
   }
 
-  await putSecret("apps/api-worker/wrangler.jsonc", "SUPER_ADMIN_EMAILS", process.env.SUPER_ADMIN_EMAILS);
+  await putSecret(
+    "apps/api-worker/wrangler.jsonc",
+    "SUPER_ADMIN_EMAILS",
+    (process.env.SUPER_ADMIN_EMAILS || "").trim() || "sycu.lee@gmail.com"
+  );
   await putSecret("apps/api-worker/wrangler.jsonc", "BILLING_WEBHOOK_SECRET", process.env.BILLING_WEBHOOK_SECRET);
   await putSecret("workers/discovery/wrangler.jsonc", "BRAVE_SEARCH_API_KEY", process.env.BRAVE_SEARCH_API_KEY);
   await putSecret("workers/alerts/wrangler.jsonc", "TELEGRAM_BOT_TOKEN", process.env.TELEGRAM_BOT_TOKEN);
