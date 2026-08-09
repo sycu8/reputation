@@ -1,7 +1,20 @@
 import { assertPublicHttpUrl } from "../../crawler-core/src/index.ts";
 import { evaluateBooleanAst, type BooleanAst } from "../../boolean-query/src/index.ts";
 
-export type SourceType = "web" | "news" | "rss" | "youtube" | "reddit" | "x" | "facebook" | "tiktok" | "linkedin";
+export type SourceType =
+  | "web"
+  | "news"
+  | "rss"
+  | "youtube"
+  | "reddit"
+  | "x"
+  | "facebook"
+  | "tiktok"
+  | "linkedin"
+  | "facebook_group"
+  | "telegram"
+  | "zalo"
+  | "discord";
 export type SourceAvailability = "native-api" | "public-web" | "licensed-provider" | "contract-required" | "degraded" | "disabled";
 
 export interface SourceCapabilities {
@@ -78,7 +91,12 @@ export const SOURCE_CAPABILITY_DEFAULTS: Record<SourceType, { availability: Sour
   x: { availability: "native-api", capabilities: { keywordSearch: true, booleanSearch: true, historicalSearch: false, comments: true, engagement: true, renderMayBeRequired: false } },
   facebook: { availability: "public-web", capabilities: { keywordSearch: true, booleanSearch: false, historicalSearch: false, comments: false, engagement: false, renderMayBeRequired: true } },
   tiktok: { availability: "public-web", capabilities: { keywordSearch: true, booleanSearch: false, historicalSearch: false, comments: false, engagement: true, renderMayBeRequired: true } },
-  linkedin: { availability: "public-web", capabilities: { keywordSearch: true, booleanSearch: false, historicalSearch: false, comments: false, engagement: false, renderMayBeRequired: true } }
+  linkedin: { availability: "public-web", capabilities: { keywordSearch: true, booleanSearch: false, historicalSearch: false, comments: false, engagement: false, renderMayBeRequired: true } },
+  // Closed / private communities — authorized access only; never scrape behind login walls.
+  facebook_group: { availability: "contract-required", capabilities: { keywordSearch: false, booleanSearch: false, historicalSearch: false, comments: true, engagement: false, renderMayBeRequired: true } },
+  telegram: { availability: "contract-required", capabilities: { keywordSearch: false, booleanSearch: false, historicalSearch: false, comments: true, engagement: false, renderMayBeRequired: false } },
+  zalo: { availability: "contract-required", capabilities: { keywordSearch: false, booleanSearch: false, historicalSearch: false, comments: true, engagement: false, renderMayBeRequired: true } },
+  discord: { availability: "contract-required", capabilities: { keywordSearch: false, booleanSearch: false, historicalSearch: false, comments: true, engagement: true, renderMayBeRequired: false } }
 };
 
 function decodeXmlEntities(value: string): string {
@@ -966,6 +984,46 @@ export async function discoverPublicSocialSiteMentions(
   return out;
 }
 
+/**
+ * Closed / private community discovery.
+ * Honest no-op without authorized credentials — never bypasses login walls or invites.
+ */
+abstract class ClosedGroupDiscoveryProvider implements DiscoveryProvider {
+  abstract readonly id: string;
+  abstract readonly source: SourceType;
+  readonly availability: SourceAvailability = "contract-required";
+  abstract readonly capabilities: SourceCapabilities;
+
+  async discover(_input: DiscoveryInput): Promise<DiscoveryResult[]> {
+    // Collection requires customer-authorized access (official APIs / bot tokens / membership).
+    return [];
+  }
+}
+
+export class FacebookGroupDiscoveryProvider extends ClosedGroupDiscoveryProvider {
+  readonly id = "facebook-group";
+  readonly source: SourceType = "facebook_group";
+  readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.facebook_group.capabilities;
+}
+
+export class TelegramDiscoveryProvider extends ClosedGroupDiscoveryProvider {
+  readonly id = "telegram";
+  readonly source: SourceType = "telegram";
+  readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.telegram.capabilities;
+}
+
+export class ZaloDiscoveryProvider extends ClosedGroupDiscoveryProvider {
+  readonly id = "zalo";
+  readonly source: SourceType = "zalo";
+  readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.zalo.capabilities;
+}
+
+export class DiscordDiscoveryProvider extends ClosedGroupDiscoveryProvider {
+  readonly id = "discord";
+  readonly source: SourceType = "discord";
+  readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.discord.capabilities;
+}
+
 export function createFederatedDiscoveryProviders(env: {
   BRAVE_SEARCH_API_KEY?: string | undefined;
   RSS_FEED_URLS?: string | undefined;
@@ -1003,7 +1061,12 @@ export function createSocialDiscoveryProviders(env: {
     new RedditDiscoveryProvider(env.REDDIT_ACCESS_TOKEN, env.REDDIT_CLIENT_ID, env.REDDIT_CLIENT_SECRET),
     new FacebookDiscoveryProvider(),
     new TikTokDiscoveryProvider(),
-    new LinkedInDiscoveryProvider()
+    new LinkedInDiscoveryProvider(),
+    // Closed groups — contract-required until authorized access is connected.
+    new FacebookGroupDiscoveryProvider(),
+    new TelegramDiscoveryProvider(),
+    new ZaloDiscoveryProvider(),
+    new DiscordDiscoveryProvider()
   ];
 }
 

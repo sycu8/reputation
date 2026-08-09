@@ -282,3 +282,36 @@ test("youtube/x/reddit providers report correct availability", () => {
     { id: "reddit", source: "reddit", availability: "contract-required" }
   ]);
 });
+
+test("closed group sources are contract-required and do not invent results", async () => {
+  const {
+    FacebookGroupDiscoveryProvider,
+    TelegramDiscoveryProvider,
+    ZaloDiscoveryProvider,
+    DiscordDiscoveryProvider,
+    SOURCE_CAPABILITY_DEFAULTS,
+    createSocialDiscoveryProviders
+  } = await import("../packages/source-adapters/src/index.ts");
+
+  assert.equal(SOURCE_CAPABILITY_DEFAULTS.facebook_group.availability, "contract-required");
+  assert.equal(SOURCE_CAPABILITY_DEFAULTS.telegram.availability, "contract-required");
+  assert.equal(SOURCE_CAPABILITY_DEFAULTS.zalo.availability, "contract-required");
+  assert.equal(SOURCE_CAPABILITY_DEFAULTS.discord.availability, "contract-required");
+
+  const providers = [
+    new FacebookGroupDiscoveryProvider(),
+    new TelegramDiscoveryProvider(),
+    new ZaloDiscoveryProvider(),
+    new DiscordDiscoveryProvider()
+  ];
+  const input = { query: "Acme", ast: { type: "term", value: "Acme", phrase: false }, limit: 10 };
+  for (const provider of providers) {
+    assert.equal(provider.availability, "contract-required");
+    assert.deepEqual(await provider.discover(input), []);
+  }
+  const social = createSocialDiscoveryProviders({});
+  assert.ok(social.some((item) => item.id === "facebook-group"));
+  assert.ok(social.some((item) => item.id === "telegram"));
+  assert.ok(social.some((item) => item.id === "zalo"));
+  assert.ok(social.some((item) => item.id === "discord"));
+});
