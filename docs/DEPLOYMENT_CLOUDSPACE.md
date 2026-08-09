@@ -8,9 +8,18 @@
 
 The account ID is deployment metadata. Do not place it in application runtime source or commit credentials.
 
+## GitHub Actions deploy
+
+Preferred path once secrets are configured:
+
+1. Repository secret **`CLOUDFLARE_API_TOKEN`** (required) — Cloudspace token with Workers/KV/R2/Queues/DO/AI/Browser/DNS.
+2. Optional secrets: `CLOUDFLARE_ACCOUNT_ID` (defaults to Cloudspace `4c15704ef706b9c8954cd6f9feb678d8`), `SUPER_ADMIN_EMAILS`, `BRAVE_SEARCH_API_KEY`, `TELEGRAM_BOT_TOKEN`, `BILLING_WEBHOOK_SECRET`.
+3. Run **Actions → Deploy Cloudspace → Run workflow** (`production` or `staging`).
+4. Workflow file: `.github/workflows/deploy-cloudspace.yml` → `npm run deploy:cloudspace`.
+
 ## Preflight
 
-1. Authenticate Wrangler to the intended Cloudflare identity.
+1. Authenticate Wrangler to the intended Cloudflare identity (local) **or** use the GitHub Actions secret above.
 2. Confirm `wrangler whoami` includes Cloudspace.
 3. Verify the `orangecloud.vn` zone is in Cloudspace before changing DNS/routes.
 4. Run local validation:
