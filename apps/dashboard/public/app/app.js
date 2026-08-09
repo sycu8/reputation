@@ -137,6 +137,74 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
 }
 
+/** Unwrap Browser Run JSON leftovers and turn excerpts into readable paragraphs. */
+function readableMentionBody(raw) {
+  let text = String(raw ?? "").trim();
+  if (!text) return "";
+  if (text.startsWith("{") && text.includes('"result"')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && parsed.success === true && typeof parsed.result === "string") {
+        text = parsed.result;
+      }
+    } catch {
+      const match = text.match(/"result"\s*:\s*"((?:\\.|[^"\\])*)(?:"|$)/);
+      if (match?.[1] != null) {
+        try {
+          text = JSON.parse(`"${match[1]}"`);
+        } catch {
+          text = match[1]
+            .replace(/\\n/g, "\n")
+            .replace(/\\t/g, " ")
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, "\\");
+        }
+      }
+    }
+  }
+  text = text
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|li|tr|section|article)>/gi, "\n\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, " ")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  return text;
+}
+
+function mentionTitle(mention) {
+  const title = String(mention?.title || "").trim();
+  if (title && !(title.startsWith("{") && title.includes('"result"'))) return title;
+  const body = readableMentionBody(mention?.excerpt || title);
+  const firstLine = body.split(/\n+/).map((line) => line.trim()).find(Boolean);
+  return firstLine || "Untitled mention";
+}
+
+function mentionBodyHtml(raw) {
+  const body = readableMentionBody(raw);
+  if (!body) return '<p class="mention-body empty-body">No excerpt available.</p>';
+  const paragraphs = body
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  return `<div class="mention-body">${paragraphs
+    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br>")}</p>`)
+    .join("")}</div>`;
+}
+
 function contentTypeLabel(source) {
   const key = String(source || "unknown").toLowerCase();
   return CONTENT_TYPE_LABELS[key] || (key ? key.charAt(0).toUpperCase() + key.slice(1) : "Unknown");
@@ -959,8 +1027,8 @@ function renderMentionDetail(mention) {
   pane.innerHTML = `
     ${mentionTagsHtml(mention)}
     <p class="mention-time">${escapeHtml(formatMentionTimeLine(mention))}</p>
-    <h2>${escapeHtml(mention.title || mention.excerpt || "Untitled mention")}</h2>
-    <p>${escapeHtml(mention.excerpt || "")}</p>
+    <h2>${escapeHtml(mentionTitle(mention))}</h2>
+    ${mentionBodyHtml(mention.excerpt || "")}
     <p class="mention-meta"><strong>Relevance</strong> ${escapeHtml(relevance)} · <strong>Topic</strong> ${escapeHtml(mention.topic || "—")} · <strong>Language</strong> ${escapeHtml(mention.language || "—")}</p>
     <p><a href="${escapeHtml(mention.canonical_url || "#")}" target="_blank" rel="noreferrer">Open original</a></p>
     <div class="feedback-block">
@@ -1004,8 +1072,9 @@ function renderMentions() {
     button.className = `list-item${mention.id === state.selectedMentionId ? " active" : ""}`;
     button.innerHTML = `
       ${mentionTagsHtml(mention)}
-      <strong>${escapeHtml(mention.title || mention.excerpt || "Untitled")}</strong>
+      <strong>${escapeHtml(mentionTitle(mention))}</strong>
       <small class="mention-time">${escapeHtml(formatMentionTimeLine(mention))}</small>
+      <small class="mention-list-excerpt">${escapeHtml(readableMentionBody(mention.excerpt || "").replace(/\s+/g, " ").slice(0, 160))}</small>
     `;
     button.addEventListener("click", () => {
       state.selectedMentionId = mention.id;
@@ -1091,8 +1160,8 @@ function renderAlerts() {
           discovered_at: mention.discovered_at || alert.created_at
         })
       : `Alert ${formatMentionTime(alert.created_at)}`;
-    const title = mention?.title || alert.reason || "Untitled alert";
-    const excerpt = mention?.excerpt || alert.reason || "";
+    const title = mention ? mentionTitle(mention) : (alert.reason || "Untitled alert");
+    const excerpt = readableMentionBody(mention?.excerpt || alert.reason || "").replace(/\s+/g, " ").slice(0, 280);
     const sourceUrl = mention?.canonical_url || "";
     row.innerHTML = `
       <div class="tag-row">

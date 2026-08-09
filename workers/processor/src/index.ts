@@ -1,5 +1,5 @@
 import { evaluateBooleanAst, type BooleanAst } from "../../../packages/boolean-query/src/index.ts";
-import { createJob, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
+import { createJob, readableContentText, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import {
   assignStoryCluster,
   contentFingerprint,
@@ -84,8 +84,12 @@ async function processMessage(message: Message<JobEnvelope<ProcessPayload>>, env
   if (!monitorResponse.ok || !queriesResponse.ok) throw new Error("monitor_state_unavailable");
   const monitorData = await monitorResponse.json() as { monitor: { name: string } };
   const queryData = await queriesResponse.json() as { queries: Array<{ astJson: string; enabled: boolean; normalizedQuery: string }> };
-  const title = typeof raw.title === "string" ? raw.title : job.payload.discoveryTitle ?? "";
-  const text = typeof raw.extractedText === "string" ? raw.extractedText : typeof raw.rawBody === "string" ? raw.rawBody : "";
+  const title = readableContentText(
+    typeof raw.title === "string" ? raw.title : job.payload.discoveryTitle ?? ""
+  ).split("\n")[0] || (typeof raw.title === "string" ? raw.title : job.payload.discoveryTitle ?? "");
+  const text = readableContentText(
+    typeof raw.extractedText === "string" ? raw.extractedText : typeof raw.rawBody === "string" ? raw.rawBody : ""
+  );
   const combined = `${title}\n${text}`;
   const fingerprint = contentFingerprint(combined);
 

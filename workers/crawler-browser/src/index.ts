@@ -1,4 +1,4 @@
-import { assertPublicHttpUrl, createJob, normalizeUrl, sha256Hex, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
+import { assertPublicHttpUrl, createJob, htmlToPlainText, normalizeUrl, sha256Hex, unwrapBrowserRunPayload, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 
@@ -39,25 +39,6 @@ async function doCall<T>(stub: DurableObjectStub, path: string, body: Record<str
   return { response, data };
 }
 
-function stripHtml(html: string): { title: string | null; text: string } {
-  const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim() ?? null;
-  const text = html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-  return { title, text };
-}
-
 async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
   const job = message.body;
   const target = assertPublicHttpUrl(job.payload.url);
@@ -86,9 +67,12 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
       userAgent: "PulseWatchBot/0.1 (+public reputation monitoring; contact configured by operator)"
     });
     if (!browserResponse.ok) throw new Error(`browser_http_${browserResponse.status}`);
-    const html = await browserResponse.text();
-    if (html.length > 8 * 1024 * 1024) throw new Error("browser_body_too_large");
-    const extracted = stripHtml(html);
+    const rawBody = await browserResponse.text();
+    if (rawBody.length > 8 * 1024 * 1024) throw new Error("browser_body_too_large");
+    const unwrapped = unwrapBrowserRunPayload(rawBody);
+    const html = unwrapped.body;
+    const extracted = htmlToPlainText(html);
+    const pageTitle = unwrapped.title ?? extracted.title ?? job.payload.title ?? null;
     if (extracted.text.length < 100) throw new Error("browser_extraction_too_small");
 
     const urlHash = await sha256Hex(canonicalUrl);
@@ -103,7 +87,7 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
       requestedUrl: job.payload.url,
       canonicalUrl,
       fetchedAt,
-      title: extracted.title ?? job.payload.title ?? null,
+      title: pageTitle,
       extractedText: extracted.text,
       rawBody: html,
       acquisition: "browser-run-content",
@@ -116,7 +100,7 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
       contentId,
       rawR2Key,
       fetchedAt,
-      discoveryTitle: job.payload.title,
+      discoveryTitle: job.payload.title ?? pageTitle ?? undefined,
       discoverySnippet: job.payload.snippet,
       publishedAt: job.payload.publishedAt,
       acquisition: "browser"
