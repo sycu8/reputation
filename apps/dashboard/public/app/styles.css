@@ -439,6 +439,7 @@ dialog form { padding: 24px; }
 }
 .listening-hero h2 { margin-bottom: 6px; }
 .listening-hero p { max-width: 62ch; }
+<<<<<<< HEAD
 .overview-hero {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(220px, 0.8fr);
@@ -594,6 +595,7 @@ dialog form { padding: 24px; }
   0%, 100% { transform: scale(0.96); opacity: 0.55; }
   50% { transform: scale(1.06); opacity: 1; }
 }
+.alerts-guide { margin-bottom: 14px; }
 .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .tag {
   display: inline-flex;

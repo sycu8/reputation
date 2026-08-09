@@ -84,7 +84,7 @@ const titles = {
   overview: ["Overview", "Hear what the market is saying about you — across monitors and channels."],
   mentions: ["Mentions", "Filter by time, channel, and sentiment. Inspect every story clearly."],
   insights: ["Insights", "Brand sentiment, audience mix, and competitor listening side-by-side."],
-  alerts: ["Alerts", "Open the source story for every alert. Filter by date and severity score."],
+  alerts: ["Alerts", "Newest published stories first. Filter, open the source, then Ack or Resolve."],
   monitors: ["Monitors", "Manage brand and competitor keyword / Boolean monitors."],
   reports: ["Reports", "Presentation-ready listening rollups for stakeholders."],
   settings: ["Settings", "API endpoint, plan comparison, and Stripe upgrade."],
@@ -1012,6 +1012,20 @@ async function loadMentions() {
   renderMentions();
 }
 
+function alertPublicationMs(alert) {
+  const mention = alert?.mention || {};
+  return (
+    parseMentionDate(mention.published_at)?.getTime()
+    || parseMentionDate(mention.discovered_at)?.getTime()
+    || parseMentionDate(alert?.created_at)?.getTime()
+    || 0
+  );
+}
+
+function sortAlertsByPublication(alerts) {
+  return (alerts || []).slice().sort((left, right) => alertPublicationMs(right) - alertPublicationMs(left));
+}
+
 function renderAlerts() {
   const list = $("#alertList");
   list.innerHTML = "";
@@ -1093,7 +1107,20 @@ async function loadAlerts() {
   if (severity) params.set("severity", severity);
   if (stateFilter) params.set("state", stateFilter);
   const data = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}/alerts?${params}`);
-  state.alerts = data.alerts || [];
+  let alerts = data.alerts || [];
+  // Prefer publication time for From–To when the story timestamp is parseable.
+  if (from || to) {
+    const fromMs = from ? Date.parse(`${from}T00:00:00.000Z`) : null;
+    const toMs = to ? Date.parse(`${to}T23:59:59.999Z`) : null;
+    alerts = alerts.filter((alert) => {
+      const ms = alertPublicationMs(alert);
+      if (!ms) return true;
+      if (fromMs !== null && !Number.isNaN(fromMs) && ms < fromMs) return false;
+      if (toMs !== null && !Number.isNaN(toMs) && ms > toMs) return false;
+      return true;
+    });
+  }
+  state.alerts = sortAlertsByPublication(alerts);
   renderAlerts();
 }
 
