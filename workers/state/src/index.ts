@@ -548,7 +548,7 @@ export class MonitorDO extends SqliteObject {
       if (request.method === "POST" && url.pathname === "/internal/feedback") return await this.addFeedback(request);
       if (request.method === "POST" && url.pathname === "/internal/alerts/upsert") return await this.upsertAlert(request);
       if (request.method === "POST" && url.pathname === "/internal/alerts/deliveries/upsert") return await this.upsertAlertDelivery(request);
-      if (request.method === "GET" && url.pathname === "/internal/alerts") return this.listAlerts();
+      if (request.method === "GET" && url.pathname === "/internal/alerts") return this.listAlerts(url);
       {
         const deliveryMatch = url.pathname.match(/^\/internal\/alerts\/([^/]+)\/deliveries$/);
         if (deliveryMatch && request.method === "GET") return this.listAlertDeliveries(deliveryMatch[1] ?? "");
@@ -871,8 +871,83 @@ export class MonitorDO extends SqliteObject {
     return json({ alertId: id, created: true }, 201);
   }
 
-  private listAlerts(): Response {
-    const alerts = rows(this.sql.exec<Record<string, unknown>>(`SELECT * FROM alerts ORDER BY created_at DESC LIMIT 200`));
+  private listAlerts(url: URL): Response {
+    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get("limit") ?? "100")));
+    const from = url.searchParams.get("from");
+    const to = url.searchParams.get("to");
+    const minSeverity = Number(url.searchParams.get("minSeverity") ?? "0");
+    const severity = url.searchParams.get("severity");
+    const state = url.searchParams.get("state");
+    const clauses: string[] = ["1=1"];
+    const params: unknown[] = [];
+    // Prefer alert created_at for timeframe; fallback join keeps mention timestamps for display.
+    if (from && /^\d{4}-\d{2}-\d{2}/.test(from)) {
+      clauses.push("a.created_at >= ?");
+      params.push(from.length <= 10 ? `${from}T00:00:00.000Z` : from);
+    }
+    if (to && /^\d{4}-\d{2}-\d{2}/.test(to)) {
+      clauses.push("a.created_at <= ?");
+      params.push(to.length <= 10 ? `${to}T23:59:59.999Z` : to);
+    }
+    if (Number.isFinite(minSeverity) && minSeverity > 0) {
+      clauses.push("COALESCE(m.severity_score, 0) >= ?");
+      params.push(minSeverity);
+    }
+    if (severity && ["critical", "high", "medium", "low"].includes(severity)) {
+      clauses.push("a.severity = ?");
+      params.push(severity);
+    }
+    if (state && ["pending", "sent", "acknowledged", "resolved", "failed"].includes(state)) {
+      clauses.push("a.state = ?");
+      params.push(state);
+    }
+    params.push(limit);
+    const alerts = rows(this.sql.exec<Record<string, unknown>>(
+      `SELECT
+         a.id, a.mention_id, a.type, a.severity, a.state, a.dedupe_key, a.reason,
+         a.created_at, a.sent_at, a.acknowledged_at, a.resolved_at,
+         m.title AS mention_title,
+         m.excerpt AS mention_excerpt,
+         m.canonical_url AS mention_url,
+         m.source AS mention_source,
+         m.sentiment AS mention_sentiment,
+         m.severity_score AS mention_severity_score,
+         m.published_at AS mention_published_at,
+         m.discovered_at AS mention_discovered_at,
+         m.topic AS mention_topic
+       FROM alerts a
+       LEFT JOIN mentions m ON m.id = a.mention_id
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY a.created_at DESC
+       LIMIT ?`,
+      ...params
+    )).map((row) => ({
+      id: row.id,
+      mention_id: row.mention_id,
+      type: row.type,
+      severity: row.severity,
+      state: row.state,
+      dedupe_key: row.dedupe_key,
+      reason: row.reason,
+      created_at: row.created_at,
+      sent_at: row.sent_at,
+      acknowledged_at: row.acknowledged_at,
+      resolved_at: row.resolved_at,
+      mention: row.mention_id
+        ? {
+            id: row.mention_id,
+            title: row.mention_title ?? null,
+            excerpt: row.mention_excerpt ?? null,
+            canonical_url: row.mention_url ?? null,
+            source: row.mention_source ?? null,
+            sentiment: row.mention_sentiment ?? null,
+            severity_score: row.mention_severity_score ?? null,
+            published_at: row.mention_published_at ?? null,
+            discovered_at: row.mention_discovered_at ?? null,
+            topic: row.mention_topic ?? null
+          }
+        : null
+    }));
     return json({ alerts });
   }
 

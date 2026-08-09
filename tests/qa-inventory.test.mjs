@@ -139,11 +139,23 @@ test("A12 alert ack/resolve workflow", async () => {
   assert.equal(listed.status, 200);
   const alerts = (await listed.json()).alerts;
   assert.ok(alerts.length > 0);
+  assert.ok(alerts.some((item) => item.mention && (item.mention.canonical_url || item.mention.title || item.mention_id || item.mention.id)));
   const pending = alerts.find((item) => item.state === "pending") || alerts[0];
   const ack = await apiCall(api, world.env, "PATCH", `/v1/workspaces/${ws}/monitors/${monitorId}/alerts/${pending.id}`, { state: "acknowledged" }, cookie);
   assert.equal(ack.status, 200);
   const resolve = await apiCall(api, world.env, "PATCH", `/v1/workspaces/${ws}/monitors/${monitorId}/alerts/${pending.id}`, { state: "resolved" }, cookie);
   assert.equal(resolve.status, 200);
+
+  const filtered = await apiCall(
+    api,
+    world.env,
+    "GET",
+    `/v1/workspaces/${ws}/monitors/${monitorId}/alerts?minSeverity=0&limit=20`,
+    undefined,
+    cookie
+  );
+  assert.equal(filtered.status, 200);
+  assert.ok(Array.isArray((await filtered.json()).alerts));
 });
 
 test("SUPER_ADMIN_EMAILS promotes an existing account on /v1/me", async () => {
@@ -353,7 +365,11 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /id="adminPanel"/);
   assert.match(html, /id="adminNavBtn"/);
   assert.match(html, /id="reportSentimentBars"/);
-  assert.match(html, /id="insightsPanel"/);
+  assert.match(html, /id="alertFrom"/);
+  assert.match(html, /id="alertMinSeverity"/);
+  assert.match(js, /alert\.mention/);
+  assert.match(js, /Open source/);
+  assert.match(js, /params\.set\("minSeverity"/);
   assert.match(html, /id="mentionFrom"/);
   assert.match(html, /id="mentionTo"/);
   assert.match(html, /Hear what the market is saying about you/);

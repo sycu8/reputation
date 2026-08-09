@@ -181,6 +181,34 @@
           <label class="inline">Monitor
             <select id="alertMonitorSelect"></select>
           </label>
+          <label class="inline">From
+            <input id="alertFrom" type="date" />
+          </label>
+          <label class="inline">To
+            <input id="alertTo" type="date" />
+          </label>
+          <label class="inline">Min score
+            <input id="alertMinSeverity" type="number" min="0" max="100" value="0" title="Minimum mention severity score" />
+          </label>
+          <label class="inline">Severity
+            <select id="alertSeverity">
+              <option value="">Any</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+          <label class="inline">State
+            <select id="alertState">
+              <option value="">Any</option>
+              <option value="pending">Pending</option>
+              <option value="failed">Failed</option>
+              <option value="acknowledged">Acknowledged</option>
+              <option value="resolved">Resolved</option>
+            </select>
+          </label>
+          <button id="alertFilterBtn" class="secondary" type="button">Apply</button>
           <button id="alertRefreshBtn" class="secondary" type="button">Refresh</button>
         </div>
         <div id="alertList" class="list-pane tall"></div>
