@@ -1,0 +1,64 @@
+name: Deploy Cloudspace
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deploy environment suffix
+        type: choice
+        options:
+          - production
+          - staging
+        default: production
+      skip_routes:
+        description: Skip DNS/Workers route updates
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloudspace-${{ github.event.inputs.environment || 'production' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || '4c15704ef706b9c8954cd6f9feb678d8' }}
+      DEPLOY_ENV: ${{ github.event.inputs.environment || 'production' }}
+      SKIP_ROUTES: ${{ github.event.inputs.skip_routes == 'true' && '1' || '' }}
+      SUPER_ADMIN_EMAILS: ${{ secrets.SUPER_ADMIN_EMAILS }}
+      BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      BILLING_WEBHOOK_SECRET: ${{ secrets.BILLING_WEBHOOK_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Require Cloudflare token
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Repository secret CLOUDFLARE_API_TOKEN is missing or empty."
+            echo "Add it under Settings → Secrets and variables → Actions, then re-run this workflow."
+            exit 1
+          fi
+          echo "CLOUDFLARE_API_TOKEN is set (${#CLOUDFLARE_API_TOKEN} chars)"
+          echo "CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID}"
+          echo "DEPLOY_ENV=${DEPLOY_ENV}"
+          echo "SKIP_ROUTES=${SKIP_ROUTES:-0}"
+
+      - run: npm install
+
+      - name: Validate
+        run: npm run validate
+
+      - name: Deploy to Cloudspace
+        run: npm run deploy:cloudspace
