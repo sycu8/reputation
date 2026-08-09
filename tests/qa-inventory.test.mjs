@@ -412,6 +412,10 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /sortAlertsByPublication/);
   assert.match(js, /alertPublicationMs/);
   assert.match(js, /Not resolved stories only by default/);
+  assert.match(js, /readableMentionBody/);
+  assert.match(js, /mentionBodyHtml/);
+  assert.match(js, /mentionTitle/);
+  assert.match(css, /\.mention-body/);
   assert.match(js, /params\.set\("minSeverity"/);
   assert.match(html, /id="mentionFrom"/);
   assert.match(html, /id="mentionTo"/);

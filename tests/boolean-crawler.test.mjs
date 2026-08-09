@@ -6,7 +6,7 @@ import {
   parseBooleanQuery,
   tokenize
 } from "../packages/boolean-query/src/index.ts";
-import { assertPublicHttpUrl, normalizeUrl } from "../packages/crawler-core/src/index.ts";
+import { assertPublicHttpUrl, excerptForStorage, htmlToPlainText, normalizeUrl, readableContentText, unwrapBrowserRunPayload } from "../packages/crawler-core/src/index.ts";
 
 test("Boolean parser honors NOT > AND > OR and implicit AND", () => {
   const ast = parseBooleanQuery('"Acme Corp" refund OR complaint NOT school');
@@ -39,4 +39,32 @@ test("URL normalization removes tracking and SSRF guard blocks private literals"
   assert.throws(() => assertPublicHttpUrl("http://127.0.0.1/admin"), /ssrf_blocked/);
   assert.throws(() => assertPublicHttpUrl("http://10.0.0.4/"), /ssrf_blocked/);
   assert.doesNotThrow(() => assertPublicHttpUrl("https://example.com/page"));
+});
+
+test("Browser Run JSON envelopes unwrap into readable plain text", () => {
+  const envelope = JSON.stringify({
+    success: true,
+    result: "<html><head><title>HN Hiring</title></head><body><h1>Who is hiring?</h1><p>Cloudflare is hiring.\nRemote OK.</p></body></html>",
+    meta: { title: "HN Hiring — Who is Hiring?", status: 200 }
+  });
+  const unwrapped = unwrapBrowserRunPayload(envelope);
+  assert.equal(unwrapped.title, "HN Hiring — Who is Hiring?");
+  assert.match(unwrapped.body, /Who is hiring/);
+  const plain = htmlToPlainText(unwrapped.body);
+  assert.equal(plain.title, "HN Hiring");
+  assert.match(plain.text, /Cloudflare is hiring/);
+  assert.doesNotMatch(plain.text, /success/);
+  assert.doesNotMatch(readableContentText(envelope), /\\n/);
+  assert.doesNotMatch(readableContentText(envelope), /"success"/);
+  const excerpt = excerptForStorage(envelope, 80);
+  assert.ok(excerpt.length <= 80);
+  assert.doesNotMatch(excerpt, /\{"success"/);
+});
+
+test("readableContentText recovers truncated Browser Run blobs", () => {
+  const truncated = '{"success":true,"result":" \\n \\n HN Hiring — Who is Hiring?\\nCloudflare revenue grew.\\n';
+  const text = readableContentText(truncated);
+  assert.match(text, /HN Hiring/);
+  assert.match(text, /Cloudflare revenue/);
+  assert.doesNotMatch(text, /success/);
 });

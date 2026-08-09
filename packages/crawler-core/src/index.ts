@@ -114,3 +114,93 @@ export function claimLeaseUntil(nowIso: string, leaseSec: number): string {
   const leaseMs = Math.max(1, Math.floor(leaseSec)) * 1000;
   return new Date((Date.parse(nowIso) || Date.now()) + leaseMs).toISOString();
 }
+
+/**
+ * Browser Run `content` / `markdown` responses are JSON envelopes.
+ * Older crawlers accidentally stored the raw envelope as extracted text.
+ */
+export function unwrapBrowserRunPayload(raw: string): { body: string; title: string | null } {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return { body: "", title: null };
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        success?: unknown;
+        result?: unknown;
+        meta?: { title?: unknown };
+      };
+      if (parsed && parsed.success === true && typeof parsed.result === "string") {
+        const title = typeof parsed.meta?.title === "string" && parsed.meta.title.trim()
+          ? parsed.meta.title.trim()
+          : null;
+        return { body: parsed.result, title };
+      }
+    } catch {
+      // Fall through to regex for truncated / partially escaped blobs.
+    }
+    const match = trimmed.match(/"result"\s*:\s*"((?:\\.|[^"\\])*)(?:"|$)/);
+    if (match?.[1] != null) {
+      try {
+        return { body: JSON.parse(`"${match[1]}"`) as string, title: null };
+      } catch {
+        return {
+          body: match[1]
+            .replace(/\\n/g, "\n")
+            .replace(/\\t/g, "\t")
+            .replace(/\\r/g, "\r")
+            .replace(/\\"/g, '"')
+            .replace(/\\\\/g, "\\"),
+          title: null
+        };
+      }
+    }
+  }
+  return { body: trimmed, title: null };
+}
+
+/** Convert HTML (or plain text) into readable plain text with paragraph breaks. */
+export function htmlToPlainText(html: string): { title: string | null; text: string } {
+  const source = String(html ?? "");
+  const title = source.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.replace(/\s+/g, " ").trim() ?? null;
+  const text = source
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|li|tr|section|article)>/gi, "\n\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  return { title, text };
+}
+
+/** Normalize crawl/AI payloads into human-readable content (fixes Browser Run JSON leftovers). */
+export function readableContentText(raw: string): string {
+  const unwrapped = unwrapBrowserRunPayload(raw);
+  const looksHtml = /<\/?[a-z][\s\S]*>/i.test(unwrapped.body);
+  const text = looksHtml ? htmlToPlainText(unwrapped.body).text : unwrapped.body
+    .replace(/\r\n?/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  return text;
+}
+
+export function excerptForStorage(raw: string, maxLen = 600): string {
+  const text = readableContentText(raw).replace(/\s+/g, " ").trim();
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, Math.max(0, maxLen - 1)).trimEnd()}…`;
+}

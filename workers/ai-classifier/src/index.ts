@@ -1,4 +1,4 @@
-import { idempotencyKey, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
+import { excerptForStorage, idempotencyKey, readableContentText, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import { calculateSeverity, severityBand, type Sentiment } from "../../../packages/severity/src/index.ts";
 import { shouldClusterAlert } from "../../../packages/virality/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
@@ -142,14 +142,18 @@ async function processMessage(message: Message<JobEnvelope<AiCandidatePayload>>,
   const existing = await stub.fetch(`https://do.internal/internal/mentions/exists/${encodeURIComponent(job.payload.contentId)}`);
   if (existing.ok && ((await existing.json()) as { exists: boolean }).exists) return;
 
-  const { classification, model, fallback } = await classify(env, job.payload);
+  const { classification, model, fallback } = await classify(env, {
+    ...job.payload,
+    text: readableContentText(job.payload.text),
+    title: readableContentText(job.payload.title).split("\n")[0] || job.payload.title
+  });
   const severityScore = calculateSeverity({
     sentiment: classification.sentiment,
     sentimentConfidence: classification.confidence,
     relevanceScore: job.payload.relevanceScore,
     riskCategories: classification.riskCategories
   });
-  const excerpt = job.payload.text.replace(/\s+/g, " ").slice(0, 600);
+  const excerpt = excerptForStorage(job.payload.text, 900);
   const write = await stub.fetch("https://do.internal/internal/mentions/upsert", {
     method: "POST",
     body: JSON.stringify({
