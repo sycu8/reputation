@@ -19,7 +19,9 @@ const MONITORS = [
     queries: [
       "Cloudflare",
       "\"Cloudflare Workers\" OR Workers.dev",
-      "\"Cloudflare Outage\" OR \"Cloudflare downtime\""
+      "\"Cloudflare Outage\" OR \"Cloudflare downtime\"",
+      "\"Durable Objects\" OR \"Workers AI\" OR \"R2\" Cloudflare",
+      "\"Cloudflare Radar\" OR \"Cloudflare Warp\""
     ]
   },
   {
@@ -27,8 +29,10 @@ const MONITORS = [
     type: "brand",
     queries: [
       "OrangeCloud OR PulseWatch OR reputation.orangecloud.vn",
+      "\"Orange Cloud\" OR OrangeCloud Vietnam",
       "\"social listening\" OR \"reputation monitoring\"",
-      "\"giám sát\" OR \"lắng nghe mạng xã hội\""
+      "\"giám sát\" OR \"lắng nghe mạng xã hội\"",
+      "\"brand monitoring\" OR \"media monitoring\""
     ]
   },
   {
@@ -37,7 +41,9 @@ const MONITORS = [
     queries: [
       "\"AI agent\" OR \"AI agents\"",
       "OpenAI OR ChatGPT OR AgentCN",
-      "ransomware OR \"data breach\" OR cybersecurity"
+      "Claude OR Anthropic OR Gemini",
+      "ransomware OR \"data breach\" OR cybersecurity",
+      "\"prompt injection\" OR \"AI safety\""
     ]
   }
 ];

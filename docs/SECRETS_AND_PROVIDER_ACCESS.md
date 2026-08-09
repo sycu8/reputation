@@ -11,8 +11,9 @@ Required at deploy/operator level:
 ## Discovery/search
 
 Always-on free discovery (no API key):
-- Public news RSS via Hacker News (`hnrss.org`) and Bing News RSS (publisher URLs unwrapped from apiclick)
-- Optional static `RSS_FEED_URLS` / `SITEMAP_URLS` (comma-separated) — production ships BBC / VNExpress / Guardian defaults
+- Public news RSS via Hacker News (`hnrss.org`), Bing News RSS (publisher URLs unwrapped from apiclick), and Google News RSS (interstitial URLs skipped)
+- Public Reddit search Atom/RSS (`reddit.com/search.rss`) for post permalinks only — OAuth Reddit remains preferred for commercial scale
+- Optional static `RSS_FEED_URLS` / `SITEMAP_URLS` (comma-separated) — production ships BBC / Guardian / TechCrunch / VNExpress / Ars / Verge / Wired / Cloudflare Blog / security + VN tech feeds
 
 Optional paid/search upgrade:
 - `BRAVE_SEARCH_API_KEY` on `reputa-discovery-*` for Brave web + news search
