@@ -71,13 +71,16 @@ function parseCookies(request: Request): Map<string, string> {
 function sessionCookie(name: string, value: string, expiresAt: string, secure: boolean): string {
   // Secure cookies use SameSite=None so credentialed CORS works across
   // workers.dev dashboard ↔ API hosts (workers.dev is on the public suffix list).
+  // Partitioned (CHIPS) keeps the cookie usable when Chrome blocks third-party cookies.
   const sameSite = secure ? "None" : "Lax";
-  return `${name}=${value}; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=${sameSite}; Expires=${new Date(expiresAt).toUTCString()}`;
+  const partitioned = secure ? " Partitioned;" : "";
+  return `${name}=${value}; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=${sameSite};${partitioned} Expires=${new Date(expiresAt).toUTCString()}`;
 }
 
 function clearCookie(name: string, secure: boolean): string {
   const sameSite = secure ? "None" : "Lax";
-  return `${name}=; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=${sameSite}; Max-Age=0`;
+  const partitioned = secure ? " Partitioned;" : "";
+  return `${name}=; Path=/; HttpOnly; ${secure ? "Secure; " : ""}SameSite=${sameSite};${partitioned} Max-Age=0`;
 }
 
 function useSecureCookies(env: Env): boolean {
@@ -182,7 +185,12 @@ class HttpError extends Error {
 
 async function resolveAuth(request: Request, env: Env): Promise<AuthContext> {
   const cookieName = env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT;
-  const raw = parseCookies(request).get(cookieName);
+  let raw = parseCookies(request).get(cookieName) ?? null;
+  if (!raw) {
+    const header = request.headers.get("authorization") || request.headers.get("Authorization") || "";
+    const match = header.match(/^Bearer\s+(\S+)/i);
+    if (match?.[1]) raw = match[1];
+  }
   if (!raw) throw new HttpError(401, "authentication_required");
   const [userShard, sessionId, sessionSecret] = raw.split(".");
   if (!userShard || !sessionId || !sessionSecret) throw new HttpError(401, "invalid_session");
@@ -245,7 +253,11 @@ async function signup(request: Request, env: Env): Promise<Response> {
   const cookieName = env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT;
   const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
   return json(
-    { user: { id: account.userId, email: account.email, globalRole: account.globalRole }, workspace: { id: workspaceId, name: workspaceName, role: "owner" } },
+    {
+      user: { id: account.userId, email: account.email, globalRole: account.globalRole },
+      workspace: { id: workspaceId, name: workspaceName, role: "owner" },
+      session: { token: cookieValue, expiresAt: account.expiresAt }
+    },
     201,
     { "set-cookie": sessionCookie(cookieName, cookieValue, account.expiresAt, useSecureCookies(env)) }
   );
@@ -263,7 +275,10 @@ async function login(request: Request, env: Env): Promise<Response> {
   );
   const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
   return json(
-    { user: { id: account.userId, email: account.email, globalRole: account.globalRole } },
+    {
+      user: { id: account.userId, email: account.email, globalRole: account.globalRole },
+      session: { token: cookieValue, expiresAt: account.expiresAt }
+    },
     200,
     { "set-cookie": sessionCookie(env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT, cookieValue, account.expiresAt, useSecureCookies(env)) }
   );
@@ -510,7 +525,7 @@ function corsPreflight(request: Request, env: Env): Response {
       "access-control-allow-origin": origin,
       "access-control-allow-credentials": "true",
       "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "content-type, authorization",
       "access-control-max-age": "600",
       "vary": "Origin"
     }

@@ -85,6 +85,7 @@ Data: sanitized fixtures from `scripts/seed-local-qa.mjs` (fake brands/emails on
 | BUG-11 | Critical | Auth signup | POST `/v1/auth/signup` on Workers | Account created | 500 `Pbkdf2 failed: iteration counts above 100000` (`PASSWORD_ITERATIONS=210000`) | observability + curl | **Fixed** — cap PBKDF2 at 100_000 (Workers WebCrypto max) |
 | BUG-12 | Medium | Queue workers | GET `reputa-processor-production` `/` | Health JSON | `Handler does not export a fetch() function.` | observability | **Fixed** — queue workers export health `fetch()` |
 | BUG-13 | Medium | Dashboard assets | Visit `/app` without trailing slash after landing split | Serve app | `html_handling: none` skipped directory index | CF Assets behavior | **Fixed** — `force-trailing-slash` + `/app` redirects |
+| BUG-14 | Critical | Auth signup/login | Sign up on workers.dev dashboard | Session established; app signed in | `authentication_required` after signup — cross-site cookies blocked by Chrome; bootstrap `/v1/me` had no cookie | browser toast | **Fixed** — return `session.token`, accept `Authorization: Bearer`, CHIPS `Partitioned` cookies |
 
 ## Regression
 

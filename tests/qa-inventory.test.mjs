@@ -215,9 +215,26 @@ test("production auth cookies are Secure + SameSite=None for cross-origin dashbo
     email: world.accounts.owner.email,
     password: QA_PASSWORD
   });
+  assert.equal(login.status, 200);
+  const body = await login.json();
+  assert.ok(body.session?.token);
   const setCookie = login.headers.get("set-cookie") || "";
   assert.match(setCookie, /Secure/i);
   assert.match(setCookie, /SameSite=None/i);
+  assert.match(setCookie, /Partitioned/i);
+
+  const viaBearer = await api.fetch(
+    new Request("https://api.local/v1/me", {
+      method: "GET",
+      headers: {
+        Origin: "https://reputa-dashboard-production.sycu-lee.workers.dev",
+        Authorization: `Bearer ${body.session.token}`
+      }
+    }),
+    world.env
+  );
+  assert.equal(viaBearer.status, 200);
+  assert.equal((await viaBearer.json()).user.email, world.accounts.owner.email);
 });
 
 test("shardFromSessionCookie strips cookie name prefix", () => {
@@ -257,6 +274,9 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /not_relevant/);
   assert.match(js, /resolveDefaultApiBase/);
   assert.match(js, /reputa-api-production\.sycu-lee\.workers\.dev/);
+  assert.match(js, /pulsewatch-session/);
+  assert.match(js, /Bearer/);
+  assert.match(js, /rememberSession/);
   assert.match(html, /PulseWatch by OrangeCloud/);
   assert.match(html, /PulseWatch Starter/);
   assert.match(html, /PulseWatch Pro/);

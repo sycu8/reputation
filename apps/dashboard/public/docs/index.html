@@ -139,7 +139,8 @@ curl -sS -b cookies.txt "$API/v1/me"</code></pre>
         <ul>
           <li>Cookie name: <code>reputa_session</code> (overridable via <code>SESSION_COOKIE_NAME</code>)</li>
           <li>Value shape: <code>&lt;userShard&gt;.&lt;sessionId&gt;.&lt;sessionSecret&gt;</code></li>
-          <li>Flags: <code>HttpOnly</code>, <code>Path=/</code>; <code>Secure</code> + <code>SameSite=None</code> on <code>production</code> / <code>staging</code> (cross-origin workers.dev); <code>SameSite=Lax</code> on local QA</li>
+          <li>Flags: <code>HttpOnly</code>, <code>Path=/</code>; <code>Secure</code> + <code>SameSite=None</code> + <code>Partitioned</code> on <code>production</code> / <code>staging</code> (cross-origin workers.dev / CHIPS); <code>SameSite=Lax</code> on local QA</li>
+          <li>Clients may also send <code>Authorization: Bearer &lt;shard.sessionId.sessionSecret&gt;</code> using the <code>session.token</code> returned by signup/login (needed when third-party cookies are blocked).</li>
           <li>Clients must send <code>credentials: "include"</code> (browser) or <code>-b / -c</code> cookie jars (curl)</li>
         </ul>
         <h3>CORS</h3>

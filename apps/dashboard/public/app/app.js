@@ -108,13 +108,48 @@ function updateRoleChrome() {
   $("#adminNavBtn")?.classList.toggle("hidden", !isSuperAdmin());
 }
 
+const SESSION_TOKEN_KEY = "pulsewatch-session";
+
+function getSessionToken() {
+  try {
+    return sessionStorage.getItem(SESSION_TOKEN_KEY) || localStorage.getItem(SESSION_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setSessionToken(token) {
+  try {
+    if (token) {
+      sessionStorage.setItem(SESSION_TOKEN_KEY, token);
+      localStorage.setItem(SESSION_TOKEN_KEY, token);
+    } else {
+      sessionStorage.removeItem(SESSION_TOKEN_KEY);
+      localStorage.removeItem(SESSION_TOKEN_KEY);
+    }
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+function rememberSession(data) {
+  const token = data?.session?.token;
+  if (typeof token === "string" && token.split(".").length >= 3) setSessionToken(token);
+  return data;
+}
+
 async function api(path, options = {}) {
+  const headers = { "content-type": "application/json", ...(options.headers || {}) };
+  const token = getSessionToken();
+  if (token && !headers.authorization && !headers.Authorization) {
+    headers.authorization = `Bearer ${token}`;
+  }
   let response;
   try {
     response = await fetch(`${state.apiBase}${path}`, {
       credentials: "include",
-      headers: { "content-type": "application/json", ...(options.headers || {}) },
-      ...options
+      ...options,
+      headers
     });
   } catch {
     throw new Error(`Failed to reach API at ${state.apiBase}. Check Settings → API base URL.`);
@@ -532,6 +567,7 @@ function renderSignedOut() {
   state.user = null;
   state.workspace = null;
   state.workspaces = [];
+  setSessionToken(null);
   updateRoleChrome();
   $("#logoutBtn").classList.add("hidden");
   $("#workspaceSwitchWrap").classList.add("hidden");
@@ -591,8 +627,9 @@ async function bootstrap() {
     renderWorkspaceSwitcher();
     await refreshMonitors();
     await renderSignedIn();
-  } catch {
+  } catch (error) {
     renderSignedOut();
+    throw error;
   }
 }
 
@@ -600,20 +637,24 @@ $("#signupForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   try {
-    await api("/v1/auth/signup", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) });
+    rememberSession(await api("/v1/auth/signup", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
     await bootstrap();
     notify("Account created");
-  } catch (error) { notify(error.message); }
+  } catch (error) {
+    notify(error.message || "signup_failed");
+  }
 });
 
 $("#loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   try {
-    await api("/v1/auth/login", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) });
+    rememberSession(await api("/v1/auth/login", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
     await bootstrap();
     notify("Signed in");
-  } catch (error) { notify(error.message); }
+  } catch (error) {
+    notify(error.message || "login_failed");
+  }
 });
 
 $("#logoutBtn").addEventListener("click", async () => {
@@ -759,7 +800,9 @@ for (const button of document.querySelectorAll(".nav")) {
 
 $("#apiForm").querySelector('[name="apiBase"]').value = state.apiBase;
 initTheme();
-bootstrap().finally(() => {
+bootstrap().catch(() => {
+  /* signed-out on first paint is normal */
+}).finally(() => {
   if (location.hash === "#signup") {
     $("#signupForm")?.scrollIntoView({ behavior: "smooth", block: "center" });
     $("#signupForm")?.querySelector('input[name="email"]')?.focus();
