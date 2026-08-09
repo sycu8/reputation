@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "reputa-ai-classifier-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "vars": { "SENTIMENT_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+  "ai": { "binding": "AI" },
+  "durable_objects": {
+    "bindings": [{ "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-dev" }]
+  },
+  "queues": {
+    "consumers": [
+      { "queue": "reputa-ai-normal-dev", "max_batch_size": 10, "max_batch_timeout": 3, "max_retries": 2, "dead_letter_queue": "reputa-ai-dlq-dev" },
+      { "queue": "reputa-ai-priority-dev", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 3, "dead_letter_queue": "reputa-ai-dlq-dev" }
+    ],
+    "producers": [{ "binding": "ALERTS", "queue": "reputa-alerts-dev" }]
+  },
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_ai_dev" }],
+  "env": {
+    "production": {
+      "name": "reputa-ai-classifier-production",
+      "vars": { "SENTIMENT_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast" },
+      "ai": { "binding": "AI" },
+      "durable_objects": {
+        "bindings": [{ "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-production" }]
+      },
+      "queues": {
+        "consumers": [
+          { "queue": "reputa-ai-normal-production", "max_batch_size": 10, "max_batch_timeout": 3, "max_retries": 2, "dead_letter_queue": "reputa-ai-dlq-production" },
+          { "queue": "reputa-ai-priority-production", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 3, "dead_letter_queue": "reputa-ai-dlq-production" }
+        ],
+        "producers": [{ "binding": "ALERTS", "queue": "reputa-alerts-production" }]
+      },
+      "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_ai_production" }]
+    }
+  }
+}

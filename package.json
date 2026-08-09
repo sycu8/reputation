@@ -1,0 +1,30 @@
+{
+  "name": "social-listening-cloudflare",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "workers/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "node scripts/lint.mjs",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "validate": "npm run typecheck && npm run lint && npm test",
+    "wrangler:types": "npm run wrangler:types:state && npm run wrangler:types:api && npm run wrangler:types:browser",
+    "build": "npm run validate",
+    "wrangler:types:state": "wrangler types --config workers/state/wrangler.jsonc",
+    "wrangler:types:api": "wrangler types --config apps/api-worker/wrangler.jsonc",
+    "wrangler:types:browser": "wrangler types --config workers/crawler-browser/wrangler.jsonc",
+    "deploy:cloudspace": "node scripts/deploy-cloudspace.mjs",
+    "qa:seed": "node --experimental-strip-types scripts/seed-local-qa.mjs",
+    "qa:local": "node --experimental-strip-types scripts/local-qa-server.mjs",
+    "qa:inventory": "node --experimental-strip-types --test tests/qa-inventory.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "wrangler": "^4.0.0"
+  }
+}

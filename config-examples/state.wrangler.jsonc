@@ -1,0 +1,57 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "reputa-state-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-09",
+  "observability": { "enabled": true },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "TENANT_DO", "class_name": "TenantDirectoryDO" },
+      { "name": "MONITOR_DO", "class_name": "MonitorDO" },
+      { "name": "DOMAIN_DO", "class_name": "DomainCoordinatorDO" },
+      { "name": "BROWSER_POOL_DO", "class_name": "BrowserPoolDO" },
+      { "name": "TENANT_BUDGET_DO", "class_name": "TenantBudgetDO" }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "TenantDirectoryDO",
+        "MonitorDO",
+        "DomainCoordinatorDO",
+        "BrowserPoolDO",
+        "TenantBudgetDO"
+      ]
+    }
+  ],
+
+  "env": {
+    "staging": {
+      "name": "reputa-state-stg",
+      "durable_objects": {
+        "bindings": [
+          { "name": "TENANT_DO", "class_name": "TenantDirectoryDO" },
+          { "name": "MONITOR_DO", "class_name": "MonitorDO" },
+          { "name": "DOMAIN_DO", "class_name": "DomainCoordinatorDO" },
+          { "name": "BROWSER_POOL_DO", "class_name": "BrowserPoolDO" },
+          { "name": "TENANT_BUDGET_DO", "class_name": "TenantBudgetDO" }
+        ]
+      }
+    },
+    "production": {
+      "name": "reputa-state-prod",
+      "durable_objects": {
+        "bindings": [
+          { "name": "TENANT_DO", "class_name": "TenantDirectoryDO" },
+          { "name": "MONITOR_DO", "class_name": "MonitorDO" },
+          { "name": "DOMAIN_DO", "class_name": "DomainCoordinatorDO" },
+          { "name": "BROWSER_POOL_DO", "class_name": "BrowserPoolDO" },
+          { "name": "TENANT_BUDGET_DO", "class_name": "TenantBudgetDO" }
+        ]
+      }
+    }
+  }
+}

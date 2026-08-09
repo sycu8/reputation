@@ -1,0 +1,5 @@
+{
+  "name": "@reputa/crawler-core",
+  "private": true,
+  "type": "module"
+}

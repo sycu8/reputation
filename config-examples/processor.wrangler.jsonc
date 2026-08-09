@@ -1,0 +1,107 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "reputa-processor-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-09",
+  "observability": { "enabled": true },
+
+  "ai": { "binding": "AI" },
+  "r2_buckets": [
+    { "binding": "R2_RAW", "bucket_name": "reputa-raw-content-dev" }
+  ],
+  "vectorize": [
+    { "binding": "VECTORIZE", "index_name": "reputa-content-dev" }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-dev" }
+    ]
+  },
+  "queues": {
+    "consumers": [
+      {
+        "queue": "reputa-process-content-dev",
+        "max_batch_size": 20,
+        "max_batch_timeout": 3,
+        "max_retries": 3,
+        "dead_letter_queue": "reputa-process-dlq-dev"
+      }
+    ],
+    "producers": [
+      { "binding": "AI_NORMAL", "queue": "reputa-process-ai-normal-dev" },
+      { "binding": "AI_PRIORITY", "queue": "reputa-process-ai-priority-dev" }
+    ]
+  },
+  "analytics_engine_datasets": [
+    { "binding": "ANALYTICS", "dataset": "reputa_runtime_dev" }
+  ],
+
+  "env": {
+    "staging": {
+      "name": "reputa-processor-stg",
+      "ai": { "binding": "AI" },
+      "r2_buckets": [
+        { "binding": "R2_RAW", "bucket_name": "reputa-raw-content-stg" }
+      ],
+      "vectorize": [
+        { "binding": "VECTORIZE", "index_name": "reputa-content-stg" }
+      ],
+      "durable_objects": {
+        "bindings": [
+          { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-stg" }
+        ]
+      },
+      "queues": {
+        "consumers": [
+          {
+            "queue": "reputa-process-content-stg",
+            "max_batch_size": 20,
+            "max_batch_timeout": 3,
+            "max_retries": 3,
+            "dead_letter_queue": "reputa-process-dlq-stg"
+          }
+        ],
+        "producers": [
+          { "binding": "AI_NORMAL", "queue": "reputa-process-ai-normal-stg" },
+          { "binding": "AI_PRIORITY", "queue": "reputa-process-ai-priority-stg" }
+        ]
+      },
+      "analytics_engine_datasets": [
+        { "binding": "ANALYTICS", "dataset": "reputa_runtime_stg" }
+      ]
+    },
+    "production": {
+      "name": "reputa-processor-prod",
+      "ai": { "binding": "AI" },
+      "r2_buckets": [
+        { "binding": "R2_RAW", "bucket_name": "reputa-raw-content-prod" }
+      ],
+      "vectorize": [
+        { "binding": "VECTORIZE", "index_name": "reputa-content-prod" }
+      ],
+      "durable_objects": {
+        "bindings": [
+          { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-prod" }
+        ]
+      },
+      "queues": {
+        "consumers": [
+          {
+            "queue": "reputa-process-content-prod",
+            "max_batch_size": 20,
+            "max_batch_timeout": 3,
+            "max_retries": 3,
+            "dead_letter_queue": "reputa-process-dlq-prod"
+          }
+        ],
+        "producers": [
+          { "binding": "AI_NORMAL", "queue": "reputa-process-ai-normal-prod" },
+          { "binding": "AI_PRIORITY", "queue": "reputa-process-ai-priority-prod" }
+        ]
+      },
+      "analytics_engine_datasets": [
+        { "binding": "ANALYTICS", "dataset": "reputa_runtime_prod" }
+      ]
+    }
+  }
+}

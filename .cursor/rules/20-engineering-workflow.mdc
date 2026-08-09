@@ -1,0 +1,24 @@
+---
+description: Safe Cursor implementation, review, and validation workflow
+globs: "**/*"
+alwaysApply: true
+---
+# Engineering workflow
+
+Before editing a non-trivial area:
+1. Inspect current implementation, tests and configs.
+2. State the smallest implementation plan and files affected.
+3. Identify auth/data/deployment/security impact.
+
+While editing:
+- Do not rewrite unrelated code.
+- Do not introduce new dependencies unless justified.
+- Never commit secrets or fake production data.
+- Preserve tenant isolation, RBAC, idempotency and rollback compatibility.
+- Add/update tests following current test patterns.
+
+After editing:
+- Run the relevant actual repo scripts.
+- Report commands and exact results.
+- Update `BUILD_STATUS.md` only with verified facts.
+- For auth, billing, storage migrations, source access or deployment, do a production-readiness review before proceeding.

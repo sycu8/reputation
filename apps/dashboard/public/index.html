@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PulseWatch</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="brand">PulseWatch</div>
+        <div class="tagline">Reputation monitoring</div>
+      </div>
+      <nav>
+        <button data-view="overview" class="nav active">Overview</button>
+        <button data-view="mentions" class="nav">Mentions</button>
+        <button data-view="alerts" class="nav">Alerts</button>
+        <button data-view="monitors" class="nav">Monitors</button>
+        <button data-view="reports" class="nav">Reports</button>
+        <button data-view="settings" class="nav">Settings</button>
+        <button data-view="source-health" class="nav">Source health</button>
+        <button data-view="admin" class="nav hidden" id="adminNavBtn">Admin</button>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="sessionState">Signed out</span>
+        <button id="logoutBtn" class="ghost hidden">Sign out</button>
+      </div>
+    </aside>
+
+    <section class="content">
+      <header class="topbar">
+        <div>
+          <h1 id="pageTitle">Overview</h1>
+          <p id="pageSubtitle">Track mentions, alerts, and coverage across your monitors.</p>
+        </div>
+        <div class="topbar-actions">
+          <label class="inline workspace-switch hidden" id="workspaceSwitchWrap">
+            Workspace
+            <select id="workspaceSelect" aria-label="Workspace switcher"></select>
+          </label>
+          <button id="newMonitorBtn" class="primary hidden">New monitor</button>
+        </div>
+      </header>
+
+      <section id="authPanel" class="auth-grid">
+        <form id="signupForm" class="auth-form">
+          <div class="eyebrow">Create account</div>
+          <h2>Start monitoring</h2>
+          <label>Email<input name="email" type="email" required /></label>
+          <label>Password<input name="password" type="password" minlength="10" required /></label>
+          <label>Workspace<input name="workspaceName" required placeholder="Acme Reputation" /></label>
+          <button class="primary" type="submit">Create account</button>
+        </form>
+        <form id="loginForm" class="auth-form">
+          <div class="eyebrow">Welcome back</div>
+          <h2>Sign in</h2>
+          <label>Email<input name="email" type="email" required /></label>
+          <label>Password<input name="password" type="password" required /></label>
+          <button class="secondary" type="submit">Sign in</button>
+        </form>
+      </section>
+
+      <section id="overviewPanel" class="view-panel hidden">
+        <div class="metrics">
+          <div><span>Active monitors</span><strong id="monitorCount">0</strong></div>
+          <div><span>Mentions</span><strong id="mentionCount">0</strong></div>
+          <div><span>Open alerts</span><strong id="alertCount">0</strong></div>
+          <div><span>Source coverage</span><strong id="sourceCoverage">—</strong></div>
+        </div>
+        <div class="workspace-strip">
+          <div>
+            <div class="eyebrow">Workspace</div>
+            <h2 id="workspaceName">No workspace selected</h2>
+          </div>
+          <span id="workspaceRole" class="status-chip">—</span>
+        </div>
+        <div id="overviewSourceList" class="source-grid"></div>
+      </section>
+
+      <section id="mentionsPanel" class="view-panel hidden">
+        <div class="toolbar">
+          <label class="inline">Monitor
+            <select id="mentionMonitorSelect"></select>
+          </label>
+          <label class="inline">Sentiment
+            <select id="mentionSentiment">
+              <option value="">Any</option>
+              <option value="negative">Negative</option>
+              <option value="neutral">Neutral</option>
+              <option value="positive">Positive</option>
+            </select>
+          </label>
+          <label class="inline">Min severity
+            <input id="mentionMinSeverity" type="number" min="0" max="100" value="0" />
+          </label>
+          <label class="inline">Source
+            <input id="mentionSource" placeholder="news, reddit…" />
+          </label>
+          <button id="mentionFilterBtn" class="secondary" type="button">Apply</button>
+        </div>
+        <div class="split-pane">
+          <div id="mentionList" class="list-pane"></div>
+          <div id="mentionDetail" class="detail-pane empty">Select a mention to inspect.</div>
+        </div>
+      </section>
+
+      <section id="alertsPanel" class="view-panel hidden">
+        <div class="toolbar">
+          <label class="inline">Monitor
+            <select id="alertMonitorSelect"></select>
+          </label>
+          <button id="alertRefreshBtn" class="secondary" type="button">Refresh</button>
+        </div>
+        <div id="alertList" class="list-pane tall"></div>
+      </section>
+
+      <section id="monitorsPanel" class="view-panel hidden">
+        <div id="monitorList" class="monitor-list"></div>
+      </section>
+
+      <section id="reportsPanel" class="view-panel hidden">
+        <div class="toolbar">
+          <button id="reportRefreshBtn" class="secondary" type="button">Refresh aggregates</button>
+        </div>
+        <div class="metrics" id="reportMetrics">
+          <div><span>Mentions scanned</span><strong id="reportMentionTotal">0</strong></div>
+          <div><span>Negative</span><strong id="reportNegative">0</strong></div>
+          <div><span>Open alerts</span><strong id="reportOpenAlerts">0</strong></div>
+          <div><span>Monitors</span><strong id="reportMonitorTotal">0</strong></div>
+        </div>
+        <div class="plain-section">
+          <div class="eyebrow">Live workspace rollup</div>
+          <h2>Sentiment & sources</h2>
+          <p class="hint">Aggregated from current monitor mention and alert APIs (not the reports-worker R2 stubs).</p>
+          <div id="reportSentimentBars" class="bar-list"></div>
+          <div id="reportSourceBars" class="bar-list"></div>
+          <div id="reportMonitorBreakdown" class="monitor-list"></div>
+        </div>
+      </section>
+
+      <section id="settingsPanel" class="view-panel hidden">
+        <form id="apiForm" class="plain-section">
+          <div class="eyebrow">API configuration</div>
+          <h2>Development endpoint</h2>
+          <label>API base URL<input name="apiBase" placeholder="http://localhost:8787" /></label>
+          <p class="hint">Notification channels (email / Telegram) are configured per tenant via <code>NOTIFY_CONFIG</code> KV. Delivery receipts are stored on each alert.</p>
+          <button class="secondary" type="submit">Save</button>
+        </form>
+        <form id="billingForm" class="plain-section hidden">
+          <div class="eyebrow">Billing</div>
+          <h2>Plan checkout</h2>
+          <p class="hint">Owners and admins can start a stub checkout. Viewer roles cannot.</p>
+          <label>Plan
+            <select name="plan" required>
+              <option value="starter">Starter — $29</option>
+              <option value="pro" selected>Pro — $49</option>
+              <option value="business">Business — $99</option>
+            </select>
+          </label>
+          <button class="primary" type="submit">Start checkout</button>
+          <div id="billingCheckoutResult" class="hint"></div>
+        </form>
+      </section>
+
+      <section id="sourceHealthPanel" class="view-panel hidden">
+        <div id="sourceHealthList" class="source-grid"></div>
+      </section>
+
+      <section id="adminPanel" class="view-panel hidden">
+        <div class="toolbar">
+          <button id="adminRefreshBtn" class="secondary" type="button">Refresh tenants</button>
+        </div>
+        <div class="plain-section">
+          <div class="eyebrow">Super admin</div>
+          <h2>Tenant registry</h2>
+          <p class="hint">Listed from <code>CONFIG_KV</code> registry keys written on workspace create.</p>
+          <div id="adminTenantList" class="monitor-list"></div>
+        </div>
+        <div class="plain-section">
+          <div class="eyebrow">Platform</div>
+          <h2>Admin source health</h2>
+          <div id="adminSourceHealthList" class="source-grid"></div>
+        </div>
+      </section>
+
+      <div id="toast" class="toast hidden"></div>
+    </section>
+  </main>
+
+  <dialog id="monitorDialog">
+    <form id="monitorForm">
+      <div class="eyebrow">New monitor</div>
+      <h2>Create monitor</h2>
+      <label>Name<input name="name" required placeholder="Acme Company" autocomplete="off" /></label>
+      <label>Type
+        <select name="type" required>
+          <option value="company" selected>Company</option>
+          <option value="brand">Brand</option>
+          <option value="person">Person</option>
+          <option value="product">Product</option>
+        </select>
+      </label>
+      <label>Initial keyword / Boolean query<input name="query" required placeholder='"Acme" AND NOT "Acme School"' autocomplete="off" /></label>
+      <div class="dialog-actions">
+        <button type="button" id="cancelMonitor" class="ghost">Cancel</button>
+        <button type="submit" class="primary">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

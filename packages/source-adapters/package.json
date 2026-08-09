@@ -1,0 +1,5 @@
+{
+  "name": "@reputa/source-adapters",
+  "private": true,
+  "type": "module"
+}

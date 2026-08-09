@@ -1,0 +1,128 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "reputa-crawler-browser-dev",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "browser": { "binding": "BROWSER" },
+
+  "r2_buckets": [
+    { "binding": "R2_RAW", "bucket_name": "reputa-raw-content-dev" }
+  ],
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DOMAIN_DO",
+        "class_name": "DomainCoordinatorDO",
+        "script_name": "reputa-state-dev"
+      },
+      {
+        "name": "BROWSER_POOL_DO",
+        "class_name": "BrowserPoolDO",
+        "script_name": "reputa-state-dev"
+      }
+    ]
+  },
+
+  "queues": {
+    "consumers": [
+      {
+        "queue": "reputa-crawl-browser-dev",
+        "max_batch_size": 5,
+        "max_batch_timeout": 2,
+        "max_retries": 2,
+        "dead_letter_queue": "reputa-crawl-dlq-dev"
+      }
+    ],
+    "producers": [
+      { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-dev" }
+    ]
+  },
+
+  "analytics_engine_datasets": [
+    { "binding": "ANALYTICS", "dataset": "reputa_runtime_dev" }
+  ],
+
+  "env": {
+    "staging": {
+      "name": "reputa-crawler-browser-stg",
+      "browser": { "binding": "BROWSER" },
+      "r2_buckets": [
+        { "binding": "R2_RAW", "bucket_name": "reputa-raw-content-stg" }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "DOMAIN_DO",
+            "class_name": "DomainCoordinatorDO",
+            "script_name": "reputa-state-stg"
+          },
+          {
+            "name": "BROWSER_POOL_DO",
+            "class_name": "BrowserPoolDO",
+            "script_name": "reputa-state-stg"
+          }
+        ]
+      },
+      "queues": {
+        "consumers": [
+          {
+            "queue": "reputa-crawl-browser-stg",
+            "max_batch_size": 5,
+            "max_batch_timeout": 2,
+            "max_retries": 2,
+            "dead_letter_queue": "reputa-crawl-dlq-stg"
+          }
+        ],
+        "producers": [
+          { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-stg" }
+        ]
+      },
+      "analytics_engine_datasets": [
+        { "binding": "ANALYTICS", "dataset": "reputa_runtime_stg" }
+      ]
+    },
+
+    "production": {
+      "name": "reputa-crawler-browser-prod",
+      "browser": { "binding": "BROWSER" },
+      "r2_buckets": [
+        { "binding": "R2_RAW", "bucket_name": "reputa-raw-content-prod" }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "DOMAIN_DO",
+            "class_name": "DomainCoordinatorDO",
+            "script_name": "reputa-state-prod"
+          },
+          {
+            "name": "BROWSER_POOL_DO",
+            "class_name": "BrowserPoolDO",
+            "script_name": "reputa-state-prod"
+          }
+        ]
+      },
+      "queues": {
+        "consumers": [
+          {
+            "queue": "reputa-crawl-browser-prod",
+            "max_batch_size": 5,
+            "max_batch_timeout": 2,
+            "max_retries": 2,
+            "dead_letter_queue": "reputa-crawl-dlq-prod"
+          }
+        ],
+        "producers": [
+          { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-prod" }
+        ]
+      },
+      "analytics_engine_datasets": [
+        { "binding": "ANALYTICS", "dataset": "reputa_runtime_prod" }
+      ]
+    }
+  }
+}
