@@ -21,5 +21,26 @@
       { "binding": "CRAWL_BROWSER", "queue": "reputa-crawl-browser-dev" }
     ]
   },
-  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_discovery_dev" }]
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_discovery_dev" }],
+  "env": {
+    "production": {
+      "name": "reputa-discovery-production",
+      "durable_objects": {
+        "bindings": [
+          { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-production" }
+        ]
+      },
+      "queues": {
+        "consumers": [
+          { "queue": "reputa-discovery-normal-production", "max_batch_size": 20, "max_batch_timeout": 5, "max_retries": 3, "dead_letter_queue": "reputa-discovery-dlq-production" },
+          { "queue": "reputa-discovery-priority-production", "max_batch_size": 10, "max_batch_timeout": 1, "max_retries": 5, "dead_letter_queue": "reputa-discovery-dlq-production" }
+        ],
+        "producers": [
+          { "binding": "CRAWL_STATIC", "queue": "reputa-crawl-static-production" },
+          { "binding": "CRAWL_BROWSER", "queue": "reputa-crawl-browser-production" }
+        ]
+      },
+      "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_discovery_production" }]
+    }
+  }
 }

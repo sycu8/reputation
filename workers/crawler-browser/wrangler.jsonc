@@ -18,5 +18,26 @@
     ],
     "producers": [{ "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-dev" }]
   },
-  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_crawl_browser_dev" }]
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_crawl_browser_dev" }],
+  "env": {
+    "production": {
+      "name": "reputa-crawler-browser-production",
+      "browser": { "binding": "BROWSER", "remote": true },
+      "durable_objects": {
+        "bindings": [
+          { "name": "DOMAIN_DO", "class_name": "DomainCoordinatorDO", "script_name": "reputa-state-production" },
+          { "name": "BROWSER_POOL_DO", "class_name": "BrowserPoolDO", "script_name": "reputa-state-production" }
+        ]
+      },
+      "kv_namespaces": [{ "binding": "CRAWL_CACHE", "id": "00000000000000000000000000000002" }],
+      "r2_buckets": [{ "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-production" }],
+      "queues": {
+        "consumers": [
+          { "queue": "reputa-crawl-browser-production", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 3, "dead_letter_queue": "reputa-crawl-dlq-production" }
+        ],
+        "producers": [{ "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-production" }]
+      },
+      "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_crawl_browser_production" }]
+    }
+  }
 }

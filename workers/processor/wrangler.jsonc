@@ -14,5 +14,22 @@
       { "binding": "AI_PRIORITY", "queue": "reputa-ai-priority-dev" }
     ]
   },
-  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_processor_dev" }]
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_processor_dev" }],
+  "env": {
+    "production": {
+      "name": "reputa-processor-production",
+      "durable_objects": {
+        "bindings": [{ "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-production" }]
+      },
+      "r2_buckets": [{ "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-production" }],
+      "queues": {
+        "consumers": [{ "queue": "reputa-process-content-production", "max_batch_size": 20, "max_batch_timeout": 2, "max_retries": 3, "dead_letter_queue": "reputa-process-dlq-production" }],
+        "producers": [
+          { "binding": "AI_NORMAL", "queue": "reputa-ai-normal-production" },
+          { "binding": "AI_PRIORITY", "queue": "reputa-ai-priority-production" }
+        ]
+      },
+      "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_processor_production" }]
+    }
+  }
 }

@@ -17,7 +17,8 @@
     "build": "npm run validate",
     "wrangler:types:state": "wrangler types --config workers/state/wrangler.jsonc",
     "wrangler:types:api": "wrangler types --config apps/api-worker/wrangler.jsonc",
-    "wrangler:types:browser": "wrangler types --config workers/crawler-browser/wrangler.jsonc"
+    "wrangler:types:browser": "wrangler types --config workers/crawler-browser/wrangler.jsonc",
+    "deploy:cloudspace": "node scripts/deploy-cloudspace.mjs"
   },
   "devDependencies": {
     "typescript": "^5.8.3",

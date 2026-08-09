@@ -14,5 +14,22 @@
       { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-dev" }
     ]
   },
-  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_crawl_fetch_dev" }]
+  "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_crawl_fetch_dev" }],
+  "env": {
+    "production": {
+      "name": "reputa-crawler-fetch-production",
+      "kv_namespaces": [{ "binding": "CRAWL_CACHE", "id": "00000000000000000000000000000002" }],
+      "r2_buckets": [{ "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-production" }],
+      "queues": {
+        "consumers": [
+          { "queue": "reputa-crawl-static-production", "max_batch_size": 20, "max_batch_timeout": 2, "max_retries": 3, "dead_letter_queue": "reputa-crawl-dlq-production" }
+        ],
+        "producers": [
+          { "binding": "CRAWL_BROWSER", "queue": "reputa-crawl-browser-production" },
+          { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-production" }
+        ]
+      },
+      "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_crawl_fetch_production" }]
+    }
+  }
 }

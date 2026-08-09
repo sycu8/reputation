@@ -73,18 +73,23 @@ Local:
 
 ## Genuine external blockers
 
-1. **Cloudflare auth** — Wrangler + Bindings MCP unauthenticated in this cloud agent.
+1. **Cloudflare auth** — Wrangler + Bindings MCP unauthenticated in this cloud agent. Deploy script ready: `npm run deploy:cloudspace` once `CLOUDFLARE_API_TOKEN` is provided.
 2. **Provider secrets** — Brave, social APIs, Telegram, Email sender, billing webhook secret not present (by design).
 3. **Zone verification** — cannot confirm `orangecloud.vn` is in Cloudspace until Cloudflare auth exists.
-4. Placeholder KV namespace IDs (`000…`) must be replaced with provisioned IDs before deploy.
+4. Placeholder KV namespace IDs (`000…`) are patched at deploy time by `scripts/deploy-cloudspace.mjs` (not committed).
 
 ## Operator unblock for production deploy
 
-1. In Cursor desktop: authenticate Cloudflare Bindings MCP to Cloudspace.
-2. Export/set `CLOUDFLARE_API_TOKEN` with Workers/R2/KV/Queues/DO/Browser/AI/Email permissions for account `4c15704ef706b9c8954cd6f9feb678d8`.
-3. Confirm `wrangler whoami` shows Cloudspace and that `orangecloud.vn` zone is in that account.
-4. Follow `docs/DEPLOYMENT_CLOUDSPACE.md`: provision resources → replace placeholder IDs → deploy state first → workers → routes → secrets → smoke tests.
-5. Set secrets: `SUPER_ADMIN_EMAILS`, `BRAVE_SEARCH_API_KEY`, optional social keys, `TELEGRAM_BOT_TOKEN`, `BILLING_WEBHOOK_SECRET`.
+Paste into the agent chat (or set as cloud secret) then say “deploy”:
+
+```bash
+export CLOUDFLARE_API_TOKEN='<token with Workers Scripts, KV, R2, Queues, DO, AI, Browser Rendering, Zone Workers Routes>'
+export CLOUDFLARE_ACCOUNT_ID='4c15704ef706b9c8954cd6f9feb678d8'
+export SUPER_ADMIN_EMAILS='sycu.lee@gmail.com'   # optional
+npm run deploy:cloudspace
+```
+
+Token create: Cloudflare Dashboard → My Profile → API Tokens → Create Token (custom) for account **Cloudspace**.
 
 ## Next recommended steps after auth
 
