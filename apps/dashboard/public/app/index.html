@@ -202,15 +202,15 @@
         <form id="billingForm" class="plain-section hidden">
           <div class="eyebrow">Billing</div>
           <h2>Plan checkout</h2>
-          <p class="hint">Owners and admins can start a stub checkout. Viewer roles cannot. Super Admin is not a customer plan.</p>
+          <p class="hint">Owners and admins can open the Stripe payment link for their plan. Viewer roles cannot. Super Admin is not a customer plan.</p>
           <label>Plan
             <select name="plan" required>
-              <option value="starter">PulseWatch Starter</option>
-              <option value="pro" selected>PulseWatch Pro</option>
-              <option value="business">PulseWatch Business</option>
+              <option value="starter">PulseWatch Starter — $29/mo</option>
+              <option value="pro" selected>PulseWatch Pro — $49/mo</option>
+              <option value="business">PulseWatch Business — $99/mo</option>
             </select>
           </label>
-          <button class="primary" type="submit">Start checkout</button>
+          <button class="primary" type="submit">Pay with Stripe</button>
           <div id="billingCheckoutResult" class="hint"></div>
         </form>
       </section>

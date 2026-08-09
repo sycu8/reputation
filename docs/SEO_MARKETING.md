@@ -26,9 +26,9 @@ Product app: `/app/` (`apps/dashboard/public/app/index.html`) — sign-in for wo
 
 ## Plan naming (public)
 
-- PulseWatch Starter
-- PulseWatch Pro
-- PulseWatch Business
+- PulseWatch Starter — https://buy.stripe.com/8x200j4O2674e5U8aUcZa02
+- PulseWatch Pro — https://buy.stripe.com/6oU7sLgwKgLI0f4cracZa03
+- PulseWatch Business — https://buy.stripe.com/8x29ATfsGfHE1j8dvecZa04
 
 Never index or promote Super Admin as a customer plan.
 

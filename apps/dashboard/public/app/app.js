@@ -735,6 +735,12 @@ $("#apiForm").addEventListener("submit", (event) => {
   notify("API endpoint saved");
 });
 
+const STRIPE_PAYMENT_LINKS = {
+  starter: "https://buy.stripe.com/8x200j4O2674e5U8aUcZa02",
+  pro: "https://buy.stripe.com/6oU7sLgwKgLI0f4cracZa03",
+  business: "https://buy.stripe.com/8x29ATfsGfHE1j8dvecZa04"
+};
+
 $("#billingForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!state.workspace) {
@@ -746,29 +752,16 @@ $("#billingForm")?.addEventListener("submit", async (event) => {
     return;
   }
   const formEl = event.currentTarget;
-  const plan = new FormData(formEl).get("plan");
-  const origin = window.location.origin;
-  try {
-    const data = await api(`/v1/workspaces/${state.workspace.workspaceId}/billing/checkout`, {
-      method: "POST",
-      body: JSON.stringify({
-        plan,
-        successUrl: `${origin}/?billing=success`,
-        cancelUrl: `${origin}/?billing=cancel`
-      })
-    });
-    const url = data.checkout?.url || data.checkout?.checkoutUrl || "";
-    const result = $("#billingCheckoutResult");
-    if (url) {
-      result.innerHTML = `Checkout ready (${escapeHtml(data.provider || "stub")}): <a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a>`;
-      notify("Checkout session created");
-    } else {
-      result.textContent = JSON.stringify(data.checkout || data);
-      notify("Checkout created");
-    }
-  } catch (error) {
-    notify(error.message);
+  const plan = String(new FormData(formEl).get("plan") || "");
+  const url = STRIPE_PAYMENT_LINKS[plan];
+  const result = $("#billingCheckoutResult");
+  if (!url) {
+    notify("invalid_plan");
+    return;
   }
+  result.innerHTML = `Opening Stripe for <strong>${escapeHtml(plan)}</strong>: <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>`;
+  window.open(url, "_blank", "noopener,noreferrer");
+  notify("Opening Stripe checkout");
 });
 
 $("#mentionFilterBtn").addEventListener("click", () => loadMentions().catch((error) => notify(error.message)));

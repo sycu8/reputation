@@ -53,13 +53,15 @@ Asset: `apps/dashboard/public/brand-mark.svg` (conversation bubble + radar signa
 
 ## Public plan names
 
-| Technical key | Public label |
-|---|---|
-| `starter` | PulseWatch Starter |
-| `pro` | PulseWatch Pro |
-| `business` | PulseWatch Business |
+| Technical key | Public label | Stripe payment link |
+|---|---|---|
+| `starter` | PulseWatch Starter | https://buy.stripe.com/8x200j4O2674e5U8aUcZa02 |
+| `pro` | PulseWatch Pro | https://buy.stripe.com/6oU7sLgwKgLI0f4cracZa03 |
+| `business` | PulseWatch Business | https://buy.stripe.com/8x29ATfsGfHE1j8dvecZa04 |
 
 Do **not** expose the internal Super Admin plan in pricing UI or marketing.
+
+Landing pricing CTAs and in-app Settings → Billing open these Stripe Payment Links.
 
 ## What not to rename
 
