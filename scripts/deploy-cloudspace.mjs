@@ -268,53 +268,62 @@ async function main() {
   const zone = process.env.SKIP_ROUTES === "1" ? null : await verifyZone();
   if (zone && SUFFIX === "production") {
     // Ensure proxied DNS for the custom hostname so Workers routes can serve traffic.
-    const dnsName = HOSTNAME;
-    const dnsList = await cf(`/zones/${zone.id}/dns_records?name=${encodeURIComponent(dnsName)}&per_page=100`);
-    const existingDns = (dnsList || []).find((item) => item.name === dnsName || item.name === `${dnsName}.`);
-    if (!existingDns) {
-      await cf(`/zones/${zone.id}/dns_records`, {
-        method: "POST",
-        body: JSON.stringify({
-          type: "AAAA",
-          name: "reputation",
-          content: "100::",
-          proxied: true,
-          ttl: 1,
-          comment: "PulseWatch workers route placeholder"
-        })
-      });
-      console.log(`DNS created: ${dnsName} AAAA 100:: (proxied)`);
-    } else if (!existingDns.proxied) {
-      await cf(`/zones/${zone.id}/dns_records/${existingDns.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ proxied: true })
-      });
-      console.log(`DNS proxied enabled: ${dnsName} (${existingDns.type})`);
-    } else {
-      console.log(`DNS reuse: ${dnsName} ${existingDns.type} ${existingDns.content} (proxied)`);
+    // Token may lack Zone DNS write — warn and continue so Workers deploy still succeeds.
+    try {
+      const dnsName = HOSTNAME;
+      const dnsList = await cf(`/zones/${zone.id}/dns_records?name=${encodeURIComponent(dnsName)}&per_page=100`);
+      const existingDns = (dnsList || []).find((item) => item.name === dnsName || item.name === `${dnsName}.`);
+      if (!existingDns) {
+        await cf(`/zones/${zone.id}/dns_records`, {
+          method: "POST",
+          body: JSON.stringify({
+            type: "AAAA",
+            name: "reputation",
+            content: "100::",
+            proxied: true,
+            ttl: 1,
+            comment: "PulseWatch workers route placeholder"
+          })
+        });
+        console.log(`DNS created: ${dnsName} AAAA 100:: (proxied)`);
+      } else if (!existingDns.proxied) {
+        await cf(`/zones/${zone.id}/dns_records/${existingDns.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ proxied: true })
+        });
+        console.log(`DNS proxied enabled: ${dnsName} (${existingDns.type})`);
+      } else {
+        console.log(`DNS reuse: ${dnsName} ${existingDns.type} ${existingDns.content} (proxied)`);
+      }
+    } catch (error) {
+      console.warn(`DNS step skipped (add Zone.DNS edit to the API token, or create proxied AAAA 100:: for ${HOSTNAME} manually): ${error instanceof Error ? error.message : error}`);
     }
 
     // Prefer Workers routes on the zone hostname
-    const routes = [
-      { pattern: `${HOSTNAME}/api/*`, script: "reputa-api-production" },
-      { pattern: `${HOSTNAME}/*`, script: "reputa-dashboard-production" }
-    ];
-    for (const route of routes) {
-      const existing = await cf(`/zones/${zone.id}/workers/routes`);
-      const found = (existing || []).find((item) => item.pattern === route.pattern);
-      if (found) {
-        await cf(`/zones/${zone.id}/workers/routes/${found.id}`, {
-          method: "PUT",
-          body: JSON.stringify({ pattern: route.pattern, script: route.script })
-        });
-        console.log(`Route updated: ${route.pattern} -> ${route.script}`);
-      } else {
-        await cf(`/zones/${zone.id}/workers/routes`, {
-          method: "POST",
-          body: JSON.stringify({ pattern: route.pattern, script: route.script })
-        });
-        console.log(`Route created: ${route.pattern} -> ${route.script}`);
+    try {
+      const routes = [
+        { pattern: `${HOSTNAME}/api/*`, script: "reputa-api-production" },
+        { pattern: `${HOSTNAME}/*`, script: "reputa-dashboard-production" }
+      ];
+      for (const route of routes) {
+        const existing = await cf(`/zones/${zone.id}/workers/routes`);
+        const found = (existing || []).find((item) => item.pattern === route.pattern);
+        if (found) {
+          await cf(`/zones/${zone.id}/workers/routes/${found.id}`, {
+            method: "PUT",
+            body: JSON.stringify({ pattern: route.pattern, script: route.script })
+          });
+          console.log(`Route updated: ${route.pattern} -> ${route.script}`);
+        } else {
+          await cf(`/zones/${zone.id}/workers/routes`, {
+            method: "POST",
+            body: JSON.stringify({ pattern: route.pattern, script: route.script })
+          });
+          console.log(`Route created: ${route.pattern} -> ${route.script}`);
+        }
       }
+    } catch (error) {
+      console.warn(`Workers route step skipped: ${error instanceof Error ? error.message : error}`);
     }
   }
 
