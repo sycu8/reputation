@@ -393,7 +393,6 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /id="mentionFrom"/);
   assert.match(html, /id="mentionTo"/);
   assert.match(html, /Hear what the market is saying about you/);
-<<<<<<< HEAD
   assert.match(html, /data-go-view="mentions"/);
   assert.match(html, /data-go-view="insights"/);
   assert.match(html, /overview-journeys/);
@@ -401,14 +400,12 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /goToView/);
   assert.match(js, /renderOverviewAlertTeaser/);
   assert.match(css, /\.journey-card/);
-=======
   assert.match(html, /Profile pages to collect/);
   assert.match(html, /name="website"/);
   assert.match(html, /name="facebook"/);
   assert.match(html, /name="linkedin"/);
   assert.match(js, /monitorProfileLinks/);
   assert.match(js, /profile\s*[,}]/);
->>>>>>> origin/cursor/monitor-profile-links-8cdc
   assert.match(html, /Print \/ export report/);
   assert.match(js, /mentionTagsHtml/);
   assert.match(js, /sentiment-negative/);

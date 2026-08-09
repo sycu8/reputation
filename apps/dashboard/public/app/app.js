@@ -84,13 +84,8 @@ const titles = {
   overview: ["Overview", "Hear what the market is saying about you — across monitors and channels."],
   mentions: ["Mentions", "Filter by time, channel, and sentiment. Inspect every story clearly."],
   insights: ["Insights", "Brand sentiment, audience mix, and competitor listening side-by-side."],
-<<<<<<< HEAD
   alerts: ["Alerts", "Newest published stories first. Filter, open the source, then Ack or Resolve."],
-  monitors: ["Monitors", "Manage brand and competitor keyword / Boolean monitors."],
-=======
-  alerts: ["Alerts", "Open the source story for every alert. Filter by date and severity score."],
   monitors: ["Monitors", "Manage brand and competitor monitors, including official website and social pages."],
->>>>>>> origin/cursor/monitor-profile-links-8cdc
   reports: ["Reports", "Presentation-ready listening rollups for stakeholders."],
   settings: ["Settings", "API endpoint, plan comparison, and Stripe upgrade."],
   "source-health": ["Source health", "Availability matrix for discovery sources."],
