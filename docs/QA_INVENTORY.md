@@ -87,6 +87,7 @@ Data: sanitized fixtures from `scripts/seed-local-qa.mjs` (fake brands/emails on
 | BUG-12 | Medium | Queue workers | GET `reputa-processor-production` `/` | Health JSON | `Handler does not export a fetch() function.` | observability | **Fixed** — queue workers export health `fetch()` |
 | BUG-13 | Medium | Dashboard assets | Visit `/app` without trailing slash after landing split | Serve app | `html_handling: none` skipped directory index | CF Assets behavior | **Fixed** — `force-trailing-slash` + `/app` redirects |
 | BUG-14 | Critical | Auth signup/login | Sign up on workers.dev dashboard | Session established; app signed in | `authentication_required` after signup — cross-site cookies blocked by Chrome; bootstrap `/v1/me` had no cookie | browser toast | **Fixed** — return `session.token`, accept `Authorization: Bearer`, CHIPS `Partitioned` cookies |
+| BUG-15 | Critical | Custom host auth | Sign up on `reputation.orangecloud.vn/app/` | Signup 201 + session | `authentication_required` on public `/api/v1/auth/*` — Workers route kept `/api` prefix so paths never matched public routes | curl `/api/health` 401 | **Fixed** — API worker strips `/api` prefix before routing |
 
 ## Regression
 

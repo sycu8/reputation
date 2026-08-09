@@ -384,6 +384,28 @@ async function main() {
     } else if (SUFFIX === "production" && !/SameSite=None/i.test(setCookie)) {
       console.warn("Signup smoke warning: production session cookie should be SameSite=None for workers.dev CORS");
     }
+
+    if (SUFFIX === "production") {
+      const customHealth = await fetch(`https://${HOSTNAME}/api/health`, { signal: AbortSignal.timeout(20000) });
+      console.log(`Smoke custom /api/health -> ${customHealth.status}`);
+      if (customHealth.status !== 200) {
+        console.warn(`Custom /api/health smoke failed: ${await customHealth.text()}`);
+      }
+      const customSignup = await fetch(`https://${HOSTNAME}/api/v1/auth/signup`, {
+        method: "POST",
+        headers: { Origin: `https://${HOSTNAME}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          email: `deploy-api-prefix-${Date.now()}@example.com`,
+          password: "Deploy-Smoke-Passphrase-2026!",
+          workspaceName: "API Prefix Smoke"
+        }),
+        signal: AbortSignal.timeout(20000)
+      });
+      console.log(`Smoke custom /api/v1/auth/signup -> ${customSignup.status}`);
+      if (customSignup.status !== 201) {
+        console.warn(`Custom /api signup smoke failed: ${await customSignup.text()}`);
+      }
+    }
   } catch (error) {
     console.warn(`Auth/CORS smoke failed: ${error instanceof Error ? error.message : error}`);
   }
