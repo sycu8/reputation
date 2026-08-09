@@ -5,8 +5,8 @@ function isLocalDashboardHost() {
   return location.port === "8788" || host === "localhost" || host === "127.0.0.1";
 }
 
-/** Dedicated API worker — avoids custom-host /api Cloudflare challenges and route quirks. */
-const PRODUCTION_API_BASE = "https://reputa-api-production.sycu-lee.workers.dev";
+/** Production API on the custom host (`/api/*` → API Worker). */
+const PRODUCTION_API_BASE = "https://reputation.orangecloud.vn/api";
 
 function resolveDefaultApiBase() {
   if (isLocalDashboardHost()) {
@@ -21,12 +21,12 @@ function isUsableApiBase(value) {
     const url = new URL(value);
     if (location.protocol === "https:" && url.protocol === "http:") return false;
     if (!isLocalDashboardHost() && url.port === "8787") return false;
-    // Same-origin /api still works after path-prefix strip, but prefer dedicated API by default.
+    // Same-origin /api works after path-prefix strip on the custom host.
     if (url.hostname === location.hostname) {
       const path = url.pathname.replace(/\/$/, "");
       if (path !== "/api") return false;
     }
-    // Never point at the dashboard or other non-API workers.dev scripts.
+    // Dedicated API worker remains a valid manual override.
     if (url.hostname.endsWith(".workers.dev") && !url.hostname.startsWith("reputa-api-")) return false;
     return Boolean(url.origin);
   } catch {
@@ -39,9 +39,12 @@ function defaultApiBase() {
   if (stored && isUsableApiBase(stored)) {
     try {
       const url = new URL(stored);
-      // Migrate custom-host /api bases to the dedicated API worker for reliability.
-      if (!isLocalDashboardHost() && url.pathname.replace(/\/$/, "") === "/api") {
-        localStorage.removeItem("apiBase");
+      // Migrate older workers.dev defaults to the custom-host API base.
+      if (
+        !isLocalDashboardHost()
+        && url.hostname === "reputa-api-production.sycu-lee.workers.dev"
+      ) {
+        localStorage.setItem("apiBase", PRODUCTION_API_BASE);
         return PRODUCTION_API_BASE;
       }
     } catch {
