@@ -336,6 +336,7 @@ async function main() {
     console.warn("Could not resolve workers subdomain; using fallback sycu-lee");
   }
   const workersHost = `reputa-api-${SUFFIX === "dev" ? "dev" : SUFFIX}.${workersSubdomain}.workers.dev`;
+  const dashboardHost = `reputa-dashboard-${SUFFIX === "dev" ? "dev" : SUFFIX}.${workersSubdomain}.workers.dev`;
 
   const apiCandidates = SUFFIX === "production"
     ? [`https://${workersHost}/health`, `https://${HOSTNAME}/api/health`]
@@ -349,6 +350,50 @@ async function main() {
     } catch (error) {
       console.warn(`Smoke failed ${url}: ${error instanceof Error ? error.message : error}`);
     }
+  }
+
+  // Auth/CORS smoke — workers.dev dashboard must be allowed for credentialed browser calls.
+  try {
+    const dashOrigin = `https://${dashboardHost}`;
+    const preflight = await fetch(`https://${workersHost}/v1/auth/login`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: dashOrigin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type"
+      },
+      signal: AbortSignal.timeout(20000)
+    });
+    const acao = preflight.headers.get("access-control-allow-origin");
+    console.log(`Smoke CORS ${dashOrigin} -> ${preflight.status} ACAO=${acao || "(none)"}`);
+    if (preflight.status !== 204 || acao !== dashOrigin) {
+      console.warn("CORS smoke failed: dashboard origin is not allowed by API ALLOWED_ORIGINS");
+    }
+
+    const probeEmail = `deploy-smoke-${Date.now()}@example.com`;
+    const signup = await fetch(`https://${workersHost}/v1/auth/signup`, {
+      method: "POST",
+      headers: { Origin: dashOrigin, "content-type": "application/json" },
+      body: JSON.stringify({ email: probeEmail, password: "Deploy-Smoke-Passphrase-2026!", workspaceName: "Deploy Smoke" }),
+      signal: AbortSignal.timeout(20000)
+    });
+    const setCookie = signup.headers.get("set-cookie") || "";
+    console.log(`Smoke signup -> ${signup.status}; SameSite=${/SameSite=([^;]+)/i.exec(setCookie)?.[1] || "(missing)"}`);
+    if (signup.status !== 201) {
+      console.warn(`Signup smoke failed: ${await signup.text()}`);
+    } else if (SUFFIX === "production" && !/SameSite=None/i.test(setCookie)) {
+      console.warn("Signup smoke warning: production session cookie should be SameSite=None for workers.dev CORS");
+    }
+  } catch (error) {
+    console.warn(`Auth/CORS smoke failed: ${error instanceof Error ? error.message : error}`);
+  }
+
+  try {
+    const dash = await fetch(`https://${dashboardHost}/`, { signal: AbortSignal.timeout(20000) });
+    const app = await fetch(`https://${dashboardHost}/app/`, { signal: AbortSignal.timeout(20000) });
+    console.log(`Smoke dashboard / -> ${dash.status}; /app/ -> ${app.status}`);
+  } catch (error) {
+    console.warn(`Dashboard smoke failed: ${error instanceof Error ? error.message : error}`);
   }
 
   console.log("\nDeploy finished. Resource inventory:", RESOURCES_PATH);

@@ -20,6 +20,13 @@ function isUsableApiBase(value) {
     const url = new URL(value);
     if (location.protocol === "https:" && url.protocol === "http:") return false;
     if (!isLocalDashboardHost() && url.port === "8787") return false;
+    // Same-origin bases must use the /api Workers route prefix.
+    if (url.hostname === location.hostname) {
+      const path = url.pathname.replace(/\/$/, "");
+      if (path !== "/api") return false;
+    }
+    // Never point at the dashboard or other non-API workers.dev scripts.
+    if (url.hostname.endsWith(".workers.dev") && !url.hostname.startsWith("reputa-api-")) return false;
     return Boolean(url.origin);
   } catch {
     return false;

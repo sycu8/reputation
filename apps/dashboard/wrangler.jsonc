@@ -20,7 +20,8 @@
   "assets": {
     "directory": "./public",
     "not_found_handling": "single-page-application",
-    "html_handling": "none"
+    // Ensure /app and /docs resolve to their index.html (landing stays at /).
+    "html_handling": "force-trailing-slash"
   },
   "env": {
     "staging": {
