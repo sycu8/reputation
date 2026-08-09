@@ -393,9 +393,9 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /FEEDBACK_ACTIONS/);
   assert.match(js, /canManageMonitors/);
   assert.match(js, /STRIPE_PAYMENT_LINKS/);
-  assert.match(js, /buy\.stripe\.com\/8x200j4O2674e5U8aUcZa02/);
-  assert.match(js, /buy\.stripe\.com\/6oU7sLgwKgLI0f4cracZa03/);
-  assert.match(js, /buy\.stripe\.com\/8x29ATfsGfHE1j8dvecZa04/);
+  assert.match(js, /buy\.stripe\.com\/bJe4gz4O21QO0f4dvecZa05/);
+  assert.match(js, /buy\.stripe\.com\/00w00j2FU1QO8LA8aUcZa06/);
+  assert.match(js, /buy\.stripe\.com\/fZufZh3JY0MK3rg2QAcZa07/);
   assert.match(js, /\/v1\/admin\/tenants/);
   assert.match(js, /not_relevant/);
   assert.match(js, /resolveDefaultApiBase/);
@@ -405,15 +405,28 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /Bearer/);
   assert.match(js, /rememberSession/);
   assert.match(js, /missing_session_token/);
+  assert.match(js, /PLAN_CATALOG/);
+  assert.match(js, /PulseWatch Free/);
+  assert.match(js, /\$9\.99/);
+  assert.match(js, /\$19\.99/);
+  assert.match(js, /\$39\.99/);
+  assert.match(js, /data-plan-checkout/);
   assert.match(html, /PulseWatch by OrangeCloud/);
+  assert.match(html, /PulseWatch Free/);
   assert.match(html, /PulseWatch Starter/);
   assert.match(html, /PulseWatch Pro/);
   assert.match(html, /PulseWatch Business/);
   assert.match(html, /Pay with Stripe/);
-  assert.match(html, /Upgrade with Stripe/);
+  assert.match(html, /Plans &amp; upgrade/);
   assert.match(html, /brand-mark\.svg/);
+  assert.match(html, /Start on Free/);
+  assert.match(html, /id="workspacePlan"/);
+  assert.match(html, /\$9\.99/);
+  assert.match(html, /\$19\.99/);
+  assert.match(html, /\$39\.99/);
   assert.doesNotMatch(html, /OrangeCloud Reputation/);
   assert.doesNotMatch(html, /option value="starter">Starter</);
+  assert.doesNotMatch(html, /\$29\/mo|\$49\/mo|\$99\/mo/);
 });
 
 test("marketing landing page uses PulseWatch brand guide surfaces", async () => {
@@ -426,9 +439,14 @@ test("marketing landing page uses PulseWatch brand guide surfaces", async () => 
   assert.match(html, /about you\./);
   assert.match(html, /PulseWatch by OrangeCloud/);
   assert.match(html, /id="pricing"/);
+  assert.match(html, /PulseWatch Free/);
   assert.match(html, /PulseWatch Starter/);
   assert.match(html, /PulseWatch Pro/);
   assert.match(html, /PulseWatch Business/);
+  assert.match(html, /\$9\.99/);
+  assert.match(html, /\$19\.99/);
+  assert.match(html, /\$39\.99/);
+  assert.match(html, /Start free/);
   assert.match(html, /href="\/app\/#signup"/);
   assert.match(html, /Open PulseWatch/);
   assert.match(html, /Create account/);
@@ -441,6 +459,7 @@ test("marketing landing page uses PulseWatch brand guide surfaces", async () => 
   assert.doesNotMatch(html, /OrangeCloud Reputation/);
   assert.doesNotMatch(html, /buy\.stripe\.com/);
   assert.doesNotMatch(html, /Subscribe with Stripe/);
+  assert.doesNotMatch(html, /\$29|\$49|\$99/);
   assert.doesNotMatch(html, /id="signupForm"|id="loginForm"|\/v1\/auth\//);
 });
 
@@ -486,6 +505,7 @@ test("D13 API docs page documents core v1 surfaces", async () => {
   assert.match(html, /\/v1\/admin\/tenants/);
   assert.match(html, /PulseWatch by OrangeCloud/);
   assert.match(html, /PulseWatch Starter/);
+  assert.match(html, /PulseWatch Free|free/);
   assert.doesNotMatch(html, /OrangeCloud Reputation/);
   assert.doesNotMatch(html, /<td><code>super_admin<\/code><\/td>/);
   assert.match(css, /--accent/);

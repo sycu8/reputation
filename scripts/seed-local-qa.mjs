@@ -128,6 +128,11 @@ export async function buildSeededEnv(options = {}) {
   const ops = await signup("ops@pulsewatch.example", "PulseWatch Ops");
 
   const acmeId = owner.body.workspace.id;
+  const acmePlan = await env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(acmeId)).fetch("https://do.internal/internal/workspace/plan", {
+    method: "PATCH",
+    body: JSON.stringify({ plan: "starter", actorUserId: owner.body.user.id })
+  });
+  if (!acmePlan.ok) throw new Error(`acme_plan_upgrade_${acmePlan.status}`);
   await env.TENANT_DIRECTORY.get(env.TENANT_DIRECTORY.idFromName(acmeId)).fetch("https://do.internal/internal/memberships", {
     method: "POST",
     body: JSON.stringify({ actorUserId: owner.body.user.id, userId: viewer.body.user.id, role: "viewer" })
