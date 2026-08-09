@@ -283,6 +283,10 @@ test("custom-hostname /api prefix routes to the same handlers", async () => {
   );
   assert.equal(me.status, 200);
   assert.equal((await me.json()).user.email, probeEmail);
+
+  const wrongMethod = await api.fetch(new Request("https://api.local/v1/auth/login"), world.env);
+  assert.equal(wrongMethod.status, 405);
+  assert.equal((await wrongMethod.json()).error, "method_not_allowed");
 });
 
 test("shardFromSessionCookie strips cookie name prefix", () => {
@@ -324,10 +328,12 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /\/v1\/admin\/tenants/);
   assert.match(js, /not_relevant/);
   assert.match(js, /resolveDefaultApiBase/);
+  assert.match(js, /PRODUCTION_API_BASE/);
   assert.match(js, /reputa-api-production\.sycu-lee\.workers\.dev/);
   assert.match(js, /pulsewatch-session/);
   assert.match(js, /Bearer/);
   assert.match(js, /rememberSession/);
+  assert.match(js, /missing_session_token/);
   assert.match(html, /PulseWatch by OrangeCloud/);
   assert.match(html, /PulseWatch Starter/);
   assert.match(html, /PulseWatch Pro/);

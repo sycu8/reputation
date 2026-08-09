@@ -693,6 +693,19 @@ async function route(request: Request, env: Env, context: RouteContext): Promise
     }
   }
 
+  // Known public paths with wrong method used to fall through to resolveAuth →
+  // misleading authentication_required (e.g. GET /v1/auth/login).
+  if (
+    pathname === "/health"
+    || pathname === "/v1/source-health"
+    || pathname === "/v1/auth/signup"
+    || pathname === "/v1/auth/login"
+    || pathname === "/v1/billing/webhook"
+    || pathname === "/v1/queries/validate"
+  ) {
+    throw new HttpError(405, "method_not_allowed");
+  }
+
   const auth = await resolveAuth(request, env);
   if (request.method === "POST" && pathname === "/v1/auth/logout") return logout(request, env);
   if (request.method === "GET" && pathname === "/v1/me") return json({ user: { id: auth.userId, email: auth.email, globalRole: auth.globalRole } });
