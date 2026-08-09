@@ -1,6 +1,7 @@
 const SESSION_TOKEN_KEY = "pulsewatch-session";
 const SESSION_EMAIL_KEY = "pulsewatch-session-email";
-const PRODUCTION_API_BASE = "https://reputation.orangecloud.vn/api";
+const PRODUCTION_API_BASE = "https://reputa-api-production.sycu-lee.workers.dev";
+const CUSTOM_HOST_API_BASE = "https://reputation.orangecloud.vn/api";
 
 const year = document.querySelector("#year");
 if (year) year.textContent = String(new Date().getFullYear());
@@ -59,7 +60,18 @@ function resolveApiBase() {
     const stored = localStorage.getItem("apiBase");
     if (stored) {
       const url = new URL(stored);
-      if (!(location.protocol === "https:" && url.protocol === "http:")) return stored.replace(/\/$/, "");
+      const custom = new URL(CUSTOM_HOST_API_BASE);
+      if (location.protocol === "https:" && url.protocol === "http:") {
+        /* ignore insecure override */
+      } else if (
+        url.hostname === custom.hostname
+        && url.pathname.replace(/\/$/, "") === custom.pathname.replace(/\/$/, "")
+      ) {
+        localStorage.setItem("apiBase", PRODUCTION_API_BASE);
+        return PRODUCTION_API_BASE;
+      } else {
+        return stored.replace(/\/$/, "");
+      }
     }
   } catch {
     /* ignore */
