@@ -345,6 +345,7 @@ dialog form { padding: 24px; }
 }
 .listening-hero h2 { margin-bottom: 6px; }
 .listening-hero p { max-width: 62ch; }
+.alerts-guide { margin-bottom: 14px; }
 .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .tag {
   display: inline-flex;

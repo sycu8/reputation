@@ -918,7 +918,7 @@ export class MonitorDO extends SqliteObject {
        FROM alerts a
        LEFT JOIN mentions m ON m.id = a.mention_id
        WHERE ${clauses.join(" AND ")}
-       ORDER BY a.created_at DESC
+       ORDER BY COALESCE(m.discovered_at, a.created_at) DESC, a.created_at DESC
        LIMIT ?`,
       ...params
     )).map((row) => ({
