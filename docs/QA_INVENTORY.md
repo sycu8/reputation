@@ -18,7 +18,8 @@ Data: sanitized fixtures from `scripts/seed-local-qa.mjs` (fake brands/emails on
 
 | ID | Route/view | Entry | Primary inputs | Acceptance |
 |---|---|---|---|---|
-| D1 | Auth / Overview signed-out | load `/` | signup+login forms | Shows signup+login; sessionState=Signed out |
+| D0 | Marketing landing (public) | load `/` | browse Product/Solutions/Pricing | No login required; CTAs to `/app/` only for product access |
+| D1 | Auth signed-out | load `/app/` | signup+login forms | Auth gate only (not marketing); link back to `/`; sessionState=Signed out |
 | D2 | Overview signed-in | nav Overview | — | Metrics >0 with seed; workspace name/role visible |
 | D3 | Mentions | nav Mentions | monitor, sentiment, minSeverity, source, Apply | List+detail; filters narrow results |
 | D4 | Alerts | nav Alerts | monitor, Refresh, Ack, Resolve | Lists alerts; Ack/Resolve update state |

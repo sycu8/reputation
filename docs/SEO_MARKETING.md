@@ -4,8 +4,8 @@ Production site: https://reputation.orangecloud.vn
 
 ## Homepage
 
-Marketing landing: `/` (`apps/dashboard/public/index.html`)  
-Product app: `/app/` (`apps/dashboard/public/app/index.html`)
+Marketing landing: `/` (`apps/dashboard/public/index.html`) — public, no login  
+Product app: `/app/` (`apps/dashboard/public/app/index.html`) — sign-in for workspace
 
 | Field | Value |
 |---|---|

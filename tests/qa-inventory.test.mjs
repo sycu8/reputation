@@ -300,11 +300,28 @@ test("marketing landing page uses PulseWatch brand guide surfaces", async () => 
   assert.match(html, /PulseWatch Pro/);
   assert.match(html, /PulseWatch Business/);
   assert.match(html, /href="\/app\/"/);
+  assert.match(html, /No account needed to browse this page/);
   assert.match(html, /og:title/);
   assert.match(css, /#F97316/);
   assert.match(css, /#0B1220/);
   assert.match(js, /IntersectionObserver/);
   assert.doesNotMatch(html, /OrangeCloud Reputation/);
+  assert.doesNotMatch(html, /id="signupForm"|id="loginForm"|\/v1\/auth\//);
+});
+
+test("product app signed-out gate is not a marketing landing", async () => {
+  const { readFileSync } = await import("node:fs");
+  const html = readFileSync(new URL("../apps/dashboard/public/app/index.html", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../apps/dashboard/public/app/styles.css", import.meta.url), "utf8");
+  const js = readFileSync(new URL("../apps/dashboard/public/app/app.js", import.meta.url), "utf8");
+  assert.match(html, /is-signed-out/);
+  assert.match(html, /Back to PulseWatch/);
+  assert.match(html, /Sign in to your workspace/);
+  assert.match(html, /id="signupForm"/);
+  assert.match(html, /id="loginForm"/);
+  assert.match(css, /body\.is-signed-out \.sidebar/);
+  assert.match(js, /classList\.add\("is-signed-out"\)/);
+  assert.doesNotMatch(html, /Know what the Internet is saying about you/);
 });
 test("password hashing stays within Workers PBKDF2 iteration limit", async () => {
   const { readFileSync } = await import("node:fs");
