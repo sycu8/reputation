@@ -462,6 +462,8 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /Bearer/);
   assert.match(js, /rememberSession/);
   assert.match(js, /missing_session_token/);
+  assert.match(js, /enterAppAfterAuth/);
+  assert.match(js, /clearAuthHash/);
   assert.match(js, /PLAN_CATALOG/);
   assert.match(js, /PulseWatch Free/);
   assert.match(js, /\$9\.99/);
@@ -511,11 +513,17 @@ test("marketing landing page uses PulseWatch brand guide surfaces", async () => 
   assert.match(html, /Open PulseWatch/);
   assert.match(html, /Create account/);
   assert.match(html, /href="\/app\/"/);
+  assert.match(html, /data-auth-guest/);
+  assert.match(html, /data-auth-user/);
+  assert.match(html, /Open workspace/);
   assert.match(html, /product showcase/);
   assert.match(html, /og:title/);
   assert.match(css, /#F97316/);
   assert.match(css, /#0B1220/);
   assert.match(js, /IntersectionObserver/);
+  assert.match(js, /refreshLandingAuth/);
+  assert.match(js, /pulsewatch-session/);
+  assert.match(js, /setAuthMode/);
   assert.doesNotMatch(html, /OrangeCloud Reputation/);
   assert.doesNotMatch(html, /buy\.stripe\.com/);
   assert.doesNotMatch(html, /Subscribe with Stripe/);
@@ -535,6 +543,9 @@ test("product app signed-out gate is not a marketing landing", async () => {
   assert.match(html, /id="loginForm"/);
   assert.match(css, /body\.is-signed-out \.sidebar/);
   assert.match(js, /classList\.add\("is-signed-out"\)/);
+  assert.match(js, /enterAppAfterAuth/);
+  assert.match(js, /clearAuthHash/);
+  assert.match(js, /clearOnFailure/);
   assert.doesNotMatch(html, /Know what the Internet is saying about you/);
 });
 test("password hashing stays within Workers PBKDF2 iteration limit", async () => {
