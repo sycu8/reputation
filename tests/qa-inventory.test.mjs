@@ -220,7 +220,7 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /id="adminPanel"/);
   assert.match(html, /id="adminNavBtn"/);
   assert.match(html, /id="reportSentimentBars"/);
-  assert.match(html, /href="\/api\.html"/);
+  assert.match(html, /href="\/docs\/"/);
   assert.match(js, /FEEDBACK_ACTIONS/);
   assert.match(js, /canManageMonitors/);
   assert.match(js, /billing\/checkout/);
@@ -230,8 +230,8 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
 
 test("D13 API docs page documents core v1 surfaces", async () => {
   const { readFileSync } = await import("node:fs");
-  const html = readFileSync(new URL("../apps/dashboard/public/api.html", import.meta.url), "utf8");
-  const css = readFileSync(new URL("../apps/dashboard/public/api.css", import.meta.url), "utf8");
+  const html = readFileSync(new URL("../apps/dashboard/public/docs/index.html", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../apps/dashboard/public/docs/docs.css", import.meta.url), "utf8");
   assert.match(html, /PulseWatch API Reference/);
   assert.match(html, /\/v1\/auth\/signup/);
   assert.match(html, /\/v1\/workspaces\/\{workspaceId\}\/monitors/);

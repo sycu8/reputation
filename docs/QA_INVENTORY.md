@@ -30,7 +30,7 @@ Data: sanitized fixtures from `scripts/seed-local-qa.mjs` (fake brands/emails on
 | D10 | Sign out | Sign out | — | Returns to auth; /v1/me unauthorized |
 | D11 | Mention feedback | Mentions detail | Relevant / Not relevant / Wrong sentiment / Resolved / Flag | POST feedback succeeds; toast confirms |
 | D12 | Admin console | nav Admin (super_admin only) | Refresh tenants | Lists tenant registry + admin source health; hidden for non-ops |
-| D13 | API docs | nav API docs / `/api.html` | TOC, copy base URL | Professional reference for all public `/v1` routes |
+| D13 | API docs | nav API docs / `/docs/` | TOC, copy base URL | Professional reference for all public `/v1` routes |
 
 ## API surface
 
