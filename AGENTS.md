@@ -1,7 +1,7 @@
 # AGENTS.md — Social Listening SaaS
 
 ## Product mission
-Build a multi-tenant, Cloudflare-native social listening SaaS that continuously monitors public web and supported social sources for people, brands, products, and companies; returns the latest relevant mentions; classifies sentiment toward the monitored entity; and alerts customers about significant negative mentions with a P95 detection target under 15 minutes.
+Build **PulseWatch by OrangeCloud**, a multi-tenant, Cloudflare-native social listening SaaS that continuously monitors public web and supported social sources for people, brands, products, and companies; returns the latest relevant mentions; classifies sentiment toward the monitored entity; and alerts customers about significant negative mentions with a P95 detection target under 15 minutes.
 
 ## Non-negotiable architecture
 - Cloudflare-first deployment.

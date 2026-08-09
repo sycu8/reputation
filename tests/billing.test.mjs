@@ -122,6 +122,9 @@ test("plan entitlements and price id mapping", () => {
   assert.equal(planFromPriceId("stub_price_business"), "business");
   assert.equal(planFromPriceId("unknown"), null);
   assert.equal(PLAN_ENTITLEMENTS.starter.monitorMaxActive, 3);
+  assert.equal(PLAN_ENTITLEMENTS.starter.displayName, "PulseWatch Starter");
+  assert.equal(PLAN_ENTITLEMENTS.pro.displayName, "PulseWatch Pro");
+  assert.equal(PLAN_ENTITLEMENTS.business.displayName, "PulseWatch Business");
   assert.equal(monitorLimitFor("starter", false).value, 3);
   assert.deepEqual(monitorLimitFor("business", true), { unlimited: true });
 });

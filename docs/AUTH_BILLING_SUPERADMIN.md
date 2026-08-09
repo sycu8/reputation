@@ -10,12 +10,13 @@ The application runtime and persistent product state remain Cloudflare-native. P
 
 Canonical monthly plan keys (technical entitlements only — commercial pricing is not stored in this repository):
 
-| Plan key | Target | Monitors | Included relevant mentions/month | Default scan interval | Team seats |
-|---|---|---:|---:|---|---:|
-| Starter | individual / small brand | 3 | 10,000 | 15 min | 1 |
-| Pro | professional / creator / SMB | 10 | 50,000 | 10 min | 5 |
-| Business | business / agency-light | 30 | 200,000 | 5 min on active sources, adaptive otherwise | 15 |
-| Super Admin | Internal only | unlimited logical entitlements | unlimited logical entitlements | operator-controlled | unlimited |
+| Plan key | Public label | Target | Monitors | Included relevant mentions/month | Default scan interval | Team seats |
+|---|---|---|---:|---:|---|---:|
+| `starter` | PulseWatch Starter | individual / small brand | 3 | 10,000 | 15 min | 1 |
+| `pro` | PulseWatch Pro | professional / creator / SMB | 10 | 50,000 | 10 min | 5 |
+| `business` | PulseWatch Business | business / agency-light | 30 | 200,000 | 5 min on active sources, adaptive otherwise | 15 |
+
+Internal-only: Super Admin is a **role bypass**, not a customer plan. Never expose it in pricing UI or marketing.
 
 The exact limits are product defaults, not hard-coded pricing. Store plan definitions as versioned configuration so they can change without migrations. Billing provider price IDs map to these keys outside the public docs.
 

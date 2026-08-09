@@ -3,7 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PulseWatch</title>
+  <title>PulseWatch | Social Listening &amp; Reputation Monitoring by OrangeCloud</title>
+  <meta name="description" content="PulseWatch by OrangeCloud monitors online mentions across the public web and supported social platforms, analyzes sentiment, and alerts you to important negative conversations." />
+  <link rel="canonical" href="https://reputation.orangecloud.vn/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://reputation.orangecloud.vn/" />
+  <meta property="og:title" content="Know What's Being Said Before It Spreads | PulseWatch" />
+  <meta property="og:description" content="Continuous social listening and reputation monitoring for people, professionals and businesses." />
+  <meta property="og:site_name" content="PulseWatch by OrangeCloud" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Know What's Being Said Before It Spreads | PulseWatch" />
+  <meta name="twitter:description" content="Continuous social listening and reputation monitoring for people, professionals and businesses." />
   <script>
     (function () {
       try {
@@ -21,15 +31,20 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="icon" href="/brand-mark.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <main class="shell">
     <aside class="sidebar">
-      <div class="brand-block">
-        <div class="brand">PulseWatch</div>
-        <div class="tagline">Reputation monitoring</div>
-      </div>
+      <a class="brand-lockup" href="/" aria-label="PulseWatch by OrangeCloud">
+        <img class="brand-mark" src="/brand-mark.svg" width="40" height="40" alt="" />
+        <span class="brand-text">
+          <span class="brand">PulseWatch</span>
+          <span class="brand-by">by OrangeCloud</span>
+        </span>
+      </a>
+      <p class="tagline">Know what's being said. Before it spreads.</p>
       <nav>
         <button data-view="overview" class="nav active">Overview</button>
         <button data-view="mentions" class="nav">Mentions</button>
@@ -48,9 +63,9 @@
     </aside>
 
     <section class="content">
-      <header class="topbar">
+      <header class="topbar" id="appTopbar">
         <div>
-          <h1 id="pageTitle">Overview</h1>
+          <p id="pageTitle" class="page-heading">Overview</p>
           <p id="pageSubtitle">Track mentions, alerts, and coverage across your monitors.</p>
         </div>
         <div class="topbar-actions">
@@ -66,22 +81,36 @@
         </div>
       </header>
 
-      <section id="authPanel" class="auth-grid">
-        <form id="signupForm" class="auth-form">
-          <div class="eyebrow">Create account</div>
-          <h2>Start monitoring</h2>
-          <label>Email<input name="email" type="email" required /></label>
-          <label>Password<input name="password" type="password" minlength="10" required /></label>
-          <label>Workspace<input name="workspaceName" required placeholder="Acme Reputation" /></label>
-          <button class="primary" type="submit">Create account</button>
-        </form>
-        <form id="loginForm" class="auth-form">
-          <div class="eyebrow">Welcome back</div>
-          <h2>Sign in</h2>
-          <label>Email<input name="email" type="email" required /></label>
-          <label>Password<input name="password" type="password" required /></label>
-          <button class="secondary" type="submit">Sign in</button>
-        </form>
+      <section id="authPanel" class="auth-home">
+        <div class="auth-hero">
+          <div class="brand-lockup brand-lockup-hero" aria-hidden="true">
+            <img class="brand-mark" src="/brand-mark.svg" width="56" height="56" alt="" />
+            <span class="brand-text">
+              <span class="brand">PulseWatch</span>
+              <span class="brand-by">by OrangeCloud</span>
+            </span>
+          </div>
+          <h1 class="auth-h1">Know what the Internet is saying about you.</h1>
+          <p class="auth-lede">Know what's being said. Before it spreads.</p>
+          <p class="auth-support">PulseWatch by OrangeCloud monitors public-web and supported social mentions, scores sentiment, and alerts you to important negative conversations.</p>
+        </div>
+        <div class="auth-grid">
+          <form id="signupForm" class="auth-form">
+            <div class="eyebrow">Create account</div>
+            <h2>Start monitoring</h2>
+            <label>Email<input name="email" type="email" required autocomplete="email" /></label>
+            <label>Password<input name="password" type="password" minlength="10" required autocomplete="new-password" /></label>
+            <label>Workspace<input name="workspaceName" required placeholder="Acme Listening" autocomplete="organization" /></label>
+            <button class="primary" type="submit">Create account</button>
+          </form>
+          <form id="loginForm" class="auth-form">
+            <div class="eyebrow">Welcome back</div>
+            <h2>Sign in to PulseWatch</h2>
+            <label>Email<input name="email" type="email" required autocomplete="email" /></label>
+            <label>Password<input name="password" type="password" required autocomplete="current-password" /></label>
+            <button class="secondary" type="submit">Sign in</button>
+          </form>
+        </div>
       </section>
 
       <section id="overviewPanel" class="view-panel hidden">
@@ -154,7 +183,7 @@
         </div>
         <div class="plain-section">
           <div class="eyebrow">Live workspace rollup</div>
-          <h2>Sentiment & sources</h2>
+          <h2>Sentiment &amp; sources</h2>
           <p class="hint">Aggregated from current monitor mention and alert APIs (not the reports-worker R2 stubs).</p>
           <div id="reportSentimentBars" class="bar-list"></div>
           <div id="reportSourceBars" class="bar-list"></div>
@@ -173,12 +202,12 @@
         <form id="billingForm" class="plain-section hidden">
           <div class="eyebrow">Billing</div>
           <h2>Plan checkout</h2>
-          <p class="hint">Owners and admins can start a stub checkout. Viewer roles cannot.</p>
+          <p class="hint">Owners and admins can start a stub checkout. Viewer roles cannot. Super Admin is not a customer plan.</p>
           <label>Plan
             <select name="plan" required>
-              <option value="starter">Starter</option>
-              <option value="pro" selected>Pro</option>
-              <option value="business">Business</option>
+              <option value="starter">PulseWatch Starter</option>
+              <option value="pro" selected>PulseWatch Pro</option>
+              <option value="business">PulseWatch Business</option>
             </select>
           </label>
           <button class="primary" type="submit">Start checkout</button>
@@ -206,6 +235,17 @@
           <div id="adminSourceHealthList" class="source-grid"></div>
         </div>
       </section>
+
+      <footer class="site-footer">
+        <div class="brand-lockup brand-lockup-footer">
+          <img class="brand-mark" src="/brand-mark.svg" width="28" height="28" alt="" />
+          <span class="brand-text">
+            <span class="brand">PulseWatch</span>
+            <span class="brand-by">by OrangeCloud</span>
+          </span>
+        </div>
+        <p>Know what's being said. Before it spreads. · <a href="https://reputation.orangecloud.vn/">reputation.orangecloud.vn</a></p>
+      </footer>
 
       <div id="toast" class="toast hidden"></div>
     </section>

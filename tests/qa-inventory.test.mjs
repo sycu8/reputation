@@ -257,7 +257,16 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /not_relevant/);
   assert.match(js, /resolveDefaultApiBase/);
   assert.match(js, /reputa-api-production\.sycu-lee\.workers\.dev/);
-  assert.match(js, /location\.origin\}\/api/);
+  assert.match(html, /PulseWatch \| Social Listening/);
+  assert.match(html, /PulseWatch by OrangeCloud/);
+  assert.match(html, /Know what the Internet is saying about you/);
+  assert.match(html, /PulseWatch Starter/);
+  assert.match(html, /PulseWatch Pro/);
+  assert.match(html, /PulseWatch Business/);
+  assert.match(html, /og:title/);
+  assert.match(html, /brand-mark\.svg/);
+  assert.doesNotMatch(html, /OrangeCloud Reputation/);
+  assert.doesNotMatch(html, /option value="starter">Starter</);
 });
 
 test("D13 API docs page documents core v1 surfaces", async () => {
@@ -269,10 +278,13 @@ test("D13 API docs page documents core v1 surfaces", async () => {
   assert.match(html, /\/v1\/workspaces\/\{workspaceId\}\/monitors/);
   assert.match(html, /billing\/checkout/);
   assert.match(html, /\/v1\/admin\/tenants/);
-  assert.match(html, /Boolean query language/);
-  assert.match(html, /id="themeToggle"/);
+  assert.match(html, /PulseWatch by OrangeCloud/);
+  assert.match(html, /PulseWatch Starter/);
+  assert.doesNotMatch(html, /OrangeCloud Reputation/);
+  assert.doesNotMatch(html, /<td><code>super_admin<\/code><\/td>/);
   assert.match(css, /--accent/);
   assert.match(css, /data-theme="light"/);
+  assert.match(css, /#F97316/);
 });
 
 test("theme helper and dashboard expose light/dark mode toggle", async () => {

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Provision + deploy Reputation Orangecloud to Cloudflare account Cloudspace.
+ * Provision + deploy PulseWatch (hostname reputation.orangecloud.vn) to Cloudflare account Cloudspace.
  *
  * Required env:
  *   CLOUDFLARE_API_TOKEN

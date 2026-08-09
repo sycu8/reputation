@@ -8,6 +8,9 @@ This repository documentation is the canonical handoff package for the multi-ten
 2. `docs/TECHNICAL_SPEC.md`
 3. `docs/DATA_MODEL.md`
 4. `docs/AUTH_BILLING_SUPERADMIN.md`
+4a. `docs/BRAND_KIT.md`
+4b. `docs/SEO_MARKETING.md`
+4c. `docs/MARKETING_COPY_BANK.md`
 5. `docs/QUEUE_CONTRACTS.md`
 6. `docs/CRAWLER_AND_SOURCES.md`
 7. `docs/SOURCE_COVERAGE_MATRIX.md`

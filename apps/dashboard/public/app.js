@@ -148,11 +148,14 @@ function setView(view) {
   if (!state.user) {
     if (view === "settings") {
       $("#settingsPanel").classList.remove("hidden");
+      $("#appTopbar")?.classList.remove("hidden");
     } else {
       $("#authPanel").classList.remove("hidden");
+      $("#appTopbar")?.classList.add("hidden");
     }
     return;
   }
+  $("#appTopbar")?.classList.remove("hidden");
   const panel = panelFor(view);
   if (panel) panel.classList.remove("hidden");
 }

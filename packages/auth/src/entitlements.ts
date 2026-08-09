@@ -2,6 +2,8 @@ export type CustomerPlan = "starter" | "pro" | "business";
 
 export interface PlanEntitlements {
   plan: CustomerPlan;
+  /** Customer-facing plan label. Super Admin is never a public plan. */
+  displayName: string;
   monitorMaxActive: number;
   mentionMonthlyIncluded: number;
   scanMinIntervalSeconds: number;
@@ -12,6 +14,7 @@ export interface PlanEntitlements {
 export const PLAN_ENTITLEMENTS: Record<CustomerPlan, PlanEntitlements> = {
   starter: {
     plan: "starter",
+    displayName: "PulseWatch Starter",
     monitorMaxActive: 3,
     mentionMonthlyIncluded: 10_000,
     scanMinIntervalSeconds: 900,
@@ -19,6 +22,7 @@ export const PLAN_ENTITLEMENTS: Record<CustomerPlan, PlanEntitlements> = {
   },
   pro: {
     plan: "pro",
+    displayName: "PulseWatch Pro",
     monitorMaxActive: 10,
     mentionMonthlyIncluded: 50_000,
     scanMinIntervalSeconds: 600,
@@ -26,12 +30,17 @@ export const PLAN_ENTITLEMENTS: Record<CustomerPlan, PlanEntitlements> = {
   },
   business: {
     plan: "business",
+    displayName: "PulseWatch Business",
     monitorMaxActive: 30,
     mentionMonthlyIncluded: 200_000,
     scanMinIntervalSeconds: 300,
     teamMaxSeats: 15
   }
 };
+
+export function planDisplayName(plan: string): string {
+  return PLAN_ENTITLEMENTS[plan as CustomerPlan]?.displayName ?? plan;
+}
 
 export interface EntitlementDecision {
   unlimited: boolean;

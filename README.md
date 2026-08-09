@@ -1,6 +1,13 @@
 # PulseWatch — Cloudflare-native Social Listening SaaS
 
-Working implementation of the social-listening specification in this repository.
+**PulseWatch by OrangeCloud** continuously monitors public web and supported social sources for people, brands, products, and companies — then surfaces relevant mentions, sentiment, and high-precision negative alerts.
+
+- Product: **PulseWatch**
+- Endorsed brand: **PulseWatch by OrangeCloud**
+- Production URL: https://reputation.orangecloud.vn
+- Tagline: *Know what's being said. Before it spreads.*
+
+Brand and SEO copy: [`docs/BRAND_KIT.md`](docs/BRAND_KIT.md), [`docs/SEO_MARKETING.md`](docs/SEO_MARKETING.md), [`docs/MARKETING_COPY_BANK.md`](docs/MARKETING_COPY_BANK.md).
 
 ## Current implemented path
 
@@ -23,6 +30,16 @@ Interactive reference (auth, RBAC, every `/v1` route):
 - Dashboard nav **API docs**, or open `/docs/index.html`
 - Written guide: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)
 
+## Customer plans (public labels)
+
+Technical entitlement keys remain `starter` / `pro` / `business`. Customer-facing names:
+
+- PulseWatch Starter
+- PulseWatch Pro
+- PulseWatch Business
+
+Commercial pricing is not stored in this repository. The internal Super Admin role is not a customer plan.
+
 ## Cloudflare resources
 
 Deploy order:
@@ -39,7 +56,7 @@ Deploy order:
 10. `workers/alerts`
 11. `apps/dashboard`
 
-Replace the placeholder KV IDs and `example.com` hostnames before deployment.
+Replace the placeholder KV IDs before deployment. Worker/script names (`reputa-*`) are technical identifiers and intentionally keep the historical hostname namespace.
 
 ## Required secrets / operator configuration
 
@@ -90,8 +107,9 @@ See `BUILD_STATUS.md` before continuing work.
 
 For Cursor, start with `CURSOR_MASTER_PROMPT.md` or tell Cursor Agent to read `CURSOR_START_HERE.md`. Persistent project rules are included in `.cursor/rules/`.
 
-Production deployment target carried by this handoff:
+Production deployment target:
+- Product: PulseWatch by OrangeCloud
 - Cloudflare account: Cloudspace
-- Hostname: `reputation.orangecloud.vn`
+- Hostname: `reputation.orangecloud.vn` (technical DNS/hostname; product name is PulseWatch)
 
 See `docs/DEPLOYMENT_CLOUDSPACE.md` and `docs/SECRETS_AND_PROVIDER_ACCESS.md` before provisioning/deployment.

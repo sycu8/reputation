@@ -1,17 +1,21 @@
-# Cursor Start Here — Reputation Orangecloud
+# Cursor Start Here — PulseWatch by OrangeCloud
 
 You are the primary senior engineer responsible for completing and deploying this repository.
 
 ## Target
 
-Build and deploy the commercial multi-tenant social-listening SaaS described in this repository.
+Build and deploy **PulseWatch by OrangeCloud**, the commercial multi-tenant social-listening SaaS described in this repository.
 
 Production target:
+- Product name: **PulseWatch**
+- Endorsed brand: **PulseWatch by OrangeCloud**
 - Cloudflare account: **Cloudspace**
 - Account ID (deployment target reference only): `4c15704ef706b9c8954cd6f9feb678d8`
-- Production hostname: `reputation.orangecloud.vn`
+- Production hostname: `reputation.orangecloud.vn` (technical hostname; do not treat as product display name)
 - Owner/super-admin: explicit `super_admin` role with commercial quota bypass, while still respecting platform safety/rate limits.
 - Core SLA: important supported-source negative alerts P95 `< 15 minutes`.
+
+Brand docs: `docs/BRAND_KIT.md`, `docs/SEO_MARKETING.md`, `docs/MARKETING_COPY_BANK.md`.
 
 ## Mandatory first pass — analyze only
 

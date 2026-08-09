@@ -3,8 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PulseWatch API Reference</title>
-  <meta name="description" content="HTTP API reference for PulseWatch — authentication, workspaces, monitors, Boolean queries, mentions, alerts, billing, and admin." />
+  <title>PulseWatch API Reference | PulseWatch by OrangeCloud</title>
+  <meta name="description" content="HTTP API reference for PulseWatch by OrangeCloud — authentication, workspaces, monitors, Boolean queries, mentions, alerts, billing, and admin." />
+  <meta property="og:title" content="PulseWatch API Reference" />
+  <meta property="og:description" content="Session-authenticated multi-tenant API for monitors, mentions, alerts, and billing." />
+  <meta property="og:site_name" content="PulseWatch by OrangeCloud" />
+  <link rel="icon" href="/brand-mark.svg" type="image/svg+xml" />
   <script>
     (function () {
       try {
@@ -28,8 +32,12 @@
   <div class="page-bg" aria-hidden="true"></div>
 
   <header class="site-header">
-    <a class="brand-link" href="/">
-      <span class="brand">PulseWatch</span>
+    <a class="brand-link" href="/" aria-label="PulseWatch by OrangeCloud">
+      <img class="brand-mark" src="/brand-mark.svg" width="32" height="32" alt="" />
+      <span class="brand-text">
+        <span class="brand">PulseWatch</span>
+        <span class="brand-by">by OrangeCloud</span>
+      </span>
       <span class="brand-sub">API</span>
     </a>
     <nav class="header-nav" aria-label="Documentation">
@@ -46,8 +54,8 @@
   </header>
 
   <section class="hero">
-    <p class="eyebrow">HTTP reference · v1</p>
-    <h1>PulseWatch</h1>
+    <p class="eyebrow">HTTP reference · v1 · PulseWatch by OrangeCloud</p>
+    <h1>PulseWatch API</h1>
     <p class="lede">Session-authenticated multi-tenant API for monitors, Boolean queries, mentions, alerts, and billing — built for Cloudflare Workers.</p>
     <div class="hero-actions">
       <button type="button" class="primary" id="copyBaseBtn" data-copy="https://reputation.orangecloud.vn/api">Copy production base URL</button>
@@ -209,17 +217,16 @@ curl -sS -b cookies.txt "$API/v1/me"</code></pre>
 
       <section id="entitlements">
         <h2>Entitlements</h2>
-        <p>Workspaces carry a technical plan key (<code>starter</code> | <code>pro</code> | <code>business</code>) that gates monitor counts and related quotas. Commercial pricing is not published in this repository — checkout uses the billing provider catalog.</p>
+        <p>Workspaces carry a technical plan key (<code>starter</code> | <code>pro</code> | <code>business</code>) mapped to public labels <strong>PulseWatch Starter</strong>, <strong>PulseWatch Pro</strong>, and <strong>PulseWatch Business</strong>. Commercial pricing is not published in this repository — checkout uses the billing provider catalog. The internal Super Admin bypass is not a customer plan.</p>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>Plan key</th><th>Active monitors</th><th>Default scan floor</th></tr>
+              <tr><th>Plan key</th><th>Public label</th><th>Active monitors</th><th>Default scan floor</th></tr>
             </thead>
             <tbody>
-              <tr><td><code>starter</code></td><td>3</td><td>≥ 300s (5 min) for customers</td></tr>
-              <tr><td><code>pro</code></td><td>10</td><td>≥ 300s</td></tr>
-              <tr><td><code>business</code></td><td>30</td><td>≥ 300s</td></tr>
-              <tr><td><code>super_admin</code></td><td>unlimited</td><td>≥ 60s allowed</td></tr>
+              <tr><td><code>starter</code></td><td>PulseWatch Starter</td><td>3</td><td>≥ 300s (5 min) for customers</td></tr>
+              <tr><td><code>pro</code></td><td>PulseWatch Pro</td><td>10</td><td>≥ 300s</td></tr>
+              <tr><td><code>business</code></td><td>PulseWatch Business</td><td>30</td><td>≥ 300s</td></tr>
             </tbody>
           </table>
         </div>
@@ -711,9 +718,12 @@ curl -sS -b cookies.txt "$API/v1/me"</code></pre>
   </div>
 
   <footer class="site-footer">
-    <div>
-      <span class="brand">PulseWatch</span>
-      <span>API reference</span>
+    <div class="brand-lockup">
+      <img class="brand-mark" src="/brand-mark.svg" width="28" height="28" alt="" />
+      <span class="brand-text">
+        <span class="brand">PulseWatch</span>
+        <span class="brand-by">by OrangeCloud</span>
+      </span>
     </div>
     <a href="/">Return to app</a>
   </footer>

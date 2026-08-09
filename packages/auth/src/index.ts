@@ -53,3 +53,6 @@ export function isSuperAdminEmail(email: string, configured: string | undefined)
     .filter(Boolean)
     .includes(normalized);
 }
+
+export { monitorLimitFor, PLAN_ENTITLEMENTS, planDisplayName } from "./entitlements.ts";
+export type { CustomerPlan, PlanEntitlements, EntitlementDecision } from "./entitlements.ts";
