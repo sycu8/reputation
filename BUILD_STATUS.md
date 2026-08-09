@@ -48,7 +48,7 @@ Local (this agent):
 | News (Brave news) | `disabled` until Brave key |
 | Public news RSS (HN/Bing/Google News) | **always on** (`public-web`) |
 | Public Reddit search RSS | **always on** (`public-web`) — post permalinks only |
-| Static RSS/Atom | `public-web` via `RSS_FEED_URLS` (expanded tech/VN/security set) |
+| Static RSS/Atom | `public-web` via always-on default tech/startup registry + optional `RSS_FEED_URLS` |
 | Sitemap | `public-web` when `SITEMAP_URLS` configured |
 | YouTube / X | empty until secrets |
 | Reddit OAuth | empty until credentials; free RSS still collects |

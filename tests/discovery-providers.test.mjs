@@ -2,15 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   BraveWebDiscoveryProvider,
+  DEFAULT_PUBLIC_RSS_FEEDS,
   FacebookDiscoveryProvider,
   LinkedInDiscoveryProvider,
   RedditDiscoveryProvider,
+  RssFeedDiscoveryProvider,
   SOURCE_CAPABILITY_DEFAULTS,
+  TECH_STARTUP_SITE_CLAUSES,
   TikTokDiscoveryProvider,
   XDiscoveryProvider,
   YouTubeDiscoveryProvider,
   createFederatedDiscoveryProviders,
   createSocialDiscoveryProviders,
+  mergeRssFeedUrls,
   parseRssOrAtom,
   parseSitemap,
   sourceHealthSnapshot
@@ -103,6 +107,13 @@ test("federated list includes brave when key set", () => {
   assert.ok(withoutKey.some((p) => p.id === "public-reddit-rss"), "free public Reddit RSS must always be enabled");
   assert.ok(withoutKey.some((p) => p.id === "hn-algolia"), "HN Algolia must always be enabled");
   assert.ok(withoutKey.some((p) => p.id === "public-tag-feeds"), "DEV/Medium tag feeds must always be enabled");
+  assert.ok(withoutKey.some((p) => p.id === "rss-feeds"), "default tech/startup RSS registry must always be enabled");
+  const defaultRss = withoutKey.find((p) => p.id === "rss-feeds");
+  assert.ok(defaultRss instanceof RssFeedDiscoveryProvider);
+  assert.ok(defaultRss.feedUrls.length >= 50);
+  assert.ok(defaultRss.feedUrls.some((url) => url.includes("techcrunch.com")));
+  assert.ok(defaultRss.feedUrls.some((url) => url.includes("producthunt.com")));
+  assert.ok(defaultRss.feedUrls.some((url) => url.includes("crunchbase.com")));
 
   const withFeeds = createFederatedDiscoveryProviders({
     RSS_FEED_URLS: "https://example.com/feed.xml",
@@ -110,8 +121,42 @@ test("federated list includes brave when key set", () => {
   });
   assert.ok(withFeeds.some((p) => p.id === "rss-feeds"));
   assert.ok(withFeeds.some((p) => p.id === "sitemaps"));
+  const merged = withFeeds.find((p) => p.id === "rss-feeds");
+  assert.ok(merged instanceof RssFeedDiscoveryProvider);
+  assert.ok(merged.feedUrls.includes("https://example.com/feed.xml"));
   assert.doesNotThrow(() => assertPublicHttpUrl("https://example.com/feed.xml"));
   assert.doesNotThrow(() => assertPublicHttpUrl("https://example.com/sitemap.xml"));
+});
+
+test("default RSS registry covers famous tech and startup publishers", () => {
+  assert.ok(DEFAULT_PUBLIC_RSS_FEEDS.length >= 50);
+  for (const needle of [
+    "techcrunch.com",
+    "theverge.com",
+    "arstechnica",
+    "wired.com",
+    "venturebeat.com",
+    "technologyreview.com",
+    "crunchbase.com",
+    "sifted.eu",
+    "techinasia.com",
+    "producthunt.com",
+    "ycombinator.com",
+    "github.blog",
+    "openai.com",
+    "stripe.com",
+    "vnexpress.net"
+  ]) {
+    assert.ok(
+      DEFAULT_PUBLIC_RSS_FEEDS.some((url) => url.includes(needle)),
+      `missing feed for ${needle}`
+    );
+  }
+  assert.ok(TECH_STARTUP_SITE_CLAUSES.length >= 4);
+  assert.ok(TECH_STARTUP_SITE_CLAUSES.every((clause) => clause.includes("site:")));
+  const merged = mergeRssFeedUrls(DEFAULT_PUBLIC_RSS_FEEDS, ["https://techcrunch.com/feed/", "https://custom.example/feed.xml"]);
+  assert.equal(merged.filter((url) => url.includes("techcrunch.com/feed")).length, 1);
+  assert.ok(merged.includes("https://custom.example/feed.xml"));
 });
 
 test("public news RSS resolves Bing apiclick to publisher URLs", async () => {

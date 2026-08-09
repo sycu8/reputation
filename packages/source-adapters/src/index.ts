@@ -1,5 +1,16 @@
 import { assertPublicHttpUrl } from "../../crawler-core/src/index.ts";
 import { evaluateBooleanAst, type BooleanAst } from "../../boolean-query/src/index.ts";
+import {
+  DEFAULT_PUBLIC_RSS_FEEDS,
+  TECH_STARTUP_SITE_CLAUSES,
+  mergeRssFeedUrls
+} from "./default-rss-feeds.ts";
+
+export {
+  DEFAULT_PUBLIC_RSS_FEEDS,
+  TECH_STARTUP_SITE_CLAUSES,
+  mergeRssFeedUrls
+} from "./default-rss-feeds.ts";
 
 export type SourceType =
   | "web"
@@ -387,7 +398,7 @@ export class RssFeedDiscoveryProvider implements DiscoveryProvider {
   }
 }
 
-/** Free query-scoped public news RSS (HN + Bing + Yahoo + Google News). No API key required. */
+/** Free query-scoped public news RSS (HN + Bing + Yahoo + Google News + tech/startup site clusters). No API key required. */
 export class PublicNewsRssDiscoveryProvider implements DiscoveryProvider {
   readonly id = "public-news-rss";
   readonly source: SourceType = "news";
@@ -406,7 +417,15 @@ export class PublicNewsRssDiscoveryProvider implements DiscoveryProvider {
       `https://www.bing.com/news/search?q=${encoded}&format=rss&cc=vn`,
       `https://news.yahoo.com/rss/search?p=${encoded}`,
       `https://news.google.com/rss/search?q=${encoded}&hl=en-US&gl=US&ceid=US:en`,
-      `https://news.google.com/rss/search?q=${encoded}&hl=vi&gl=VN&ceid=VN:vi`
+      `https://news.google.com/rss/search?q=${encoded}&hl=vi&gl=VN&ceid=VN:vi`,
+      // Famous tech + startup publisher clusters (wider page coverage beyond homepage feeds).
+      ...TECH_STARTUP_SITE_CLAUSES.flatMap((clause) => {
+        const scoped = encodeURIComponent(`${clause} ${q}`);
+        return [
+          `https://www.bing.com/news/search?q=${scoped}&format=rss`,
+          `https://news.google.com/rss/search?q=${scoped}&hl=en-US&gl=US&ceid=US:en`
+        ];
+      })
     ];
     const out: DiscoveryResult[] = [];
     const seen = new Set<string>();
@@ -1040,7 +1059,7 @@ export function createFederatedDiscoveryProviders(env: {
     providers.push(new BraveWebDiscoveryProvider(env.BRAVE_SEARCH_API_KEY));
     providers.push(new BraveNewsDiscoveryProvider(env.BRAVE_SEARCH_API_KEY));
   }
-  const feedUrls = splitCsvUrls(env.RSS_FEED_URLS);
+  const feedUrls = mergeRssFeedUrls(DEFAULT_PUBLIC_RSS_FEEDS, splitCsvUrls(env.RSS_FEED_URLS));
   if (feedUrls.length > 0) providers.push(new RssFeedDiscoveryProvider(feedUrls));
   const sitemapUrls = splitCsvUrls(env.SITEMAP_URLS);
   if (sitemapUrls.length > 0) providers.push(new SitemapDiscoveryProvider(sitemapUrls));
