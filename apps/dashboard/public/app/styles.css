@@ -142,9 +142,24 @@ nav { display: grid; gap: 6px; }
 }
 .nav:hover, .nav.active { background: rgba(255, 255, 255, 0.08); color: #fff; }
 .nav.active { transform: translateX(2px); }
+.nav:active { transform: translateX(2px) scale(0.99); }
 a.nav-link { display: block; text-decoration: none; }
 .sidebar-foot { margin-top: auto; display: grid; gap: 8px; color: #94a3b8; font-size: 13px; }
 .content { padding: 32px; max-width: 1280px; width: 100%; margin: 0 auto; display: flex; flex-direction: column; min-height: 100vh; }
+.view-panel {
+  animation: panelIn 280ms ease;
+}
+body.is-entering-app .content {
+  animation: panelIn 320ms ease;
+}
+button.primary, button.secondary, .primary, .secondary {
+  transition: transform 150ms ease, background 150ms ease, border-color 150ms ease, box-shadow 150ms ease, opacity 150ms ease;
+}
+button.primary:hover, .primary:hover { transform: translateY(-1px); }
+button.primary:active, button.secondary:active, button.is-busy {
+  transform: translateY(1px) scale(0.985);
+}
+button.is-busy { opacity: 0.72; cursor: wait; }
 .topbar { display: flex; justify-content: space-between; gap: 24px; align-items: start; margin-bottom: 24px; }
 .topbar-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .workspace-switch select { min-width: 180px; }
@@ -357,6 +372,31 @@ html[data-theme="dark"] .avail.licensed-provider { background: rgba(34, 197, 94,
   display: grid; gap: 6px; padding: 14px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface-soft);
 }
 .monitor-row { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.monitor-row-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.danger-btn {
+  color: #fecaca !important;
+  border-color: rgba(239, 68, 68, 0.35) !important;
+}
+.danger-btn:hover {
+  color: #fff !important;
+  background: rgba(239, 68, 68, 0.18) !important;
+  border-color: rgba(239, 68, 68, 0.55) !important;
+}
+body.is-booting #authPanel { display: none !important; }
+body.is-booting .content::before {
+  content: "Restoring session…";
+  display: block;
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  animation: riseIn 420ms ease;
+}
 .monitor-row strong, .list-item strong, .source-item strong { display: block; color: var(--ink); }
 .monitor-row small, .list-item small, .source-item small, .hint { color: var(--muted); }
 .list-item { cursor: pointer; transition: border-color 140ms ease, transform 140ms ease; text-align: left; width: 100%; background: var(--surface-list); }
@@ -442,6 +482,7 @@ a.alert-source-link {
 .site-footer a { color: inherit; }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes riseIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes panelIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes markPulse {
   0%, 100% { transform: scale(1); filter: drop-shadow(0 0 10px rgba(249, 115, 22, 0.28)); }
   50% { transform: scale(1.04); filter: drop-shadow(0 0 16px rgba(249, 115, 22, 0.45)); }

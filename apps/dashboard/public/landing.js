@@ -1,5 +1,7 @@
 const SESSION_TOKEN_KEY = "pulsewatch-session";
-const PRODUCTION_API_BASE = "https://reputation.orangecloud.vn/api";
+const SESSION_EMAIL_KEY = "pulsewatch-session-email";
+const PRODUCTION_API_BASE = "https://reputa-api-production.sycu-lee.workers.dev";
+const CUSTOM_HOST_API_BASE = "https://reputation.orangecloud.vn/api";
 
 const year = document.querySelector("#year");
 if (year) year.textContent = String(new Date().getFullYear());
@@ -41,6 +43,13 @@ if ("IntersectionObserver" in window) {
   reveals.forEach((node) => node.classList.add("is-visible"));
 }
 
+document.addEventListener("click", (event) => {
+  const action = event.target.closest(".btn, .text-link, .nav-links a");
+  if (!action) return;
+  action.classList.add("is-pressed");
+  window.setTimeout(() => action.classList.remove("is-pressed"), 180);
+});
+
 function isLocalHost() {
   const host = window.location.hostname || "127.0.0.1";
   return location.port === "8788" || host === "localhost" || host === "127.0.0.1";
@@ -51,7 +60,18 @@ function resolveApiBase() {
     const stored = localStorage.getItem("apiBase");
     if (stored) {
       const url = new URL(stored);
-      if (!(location.protocol === "https:" && url.protocol === "http:")) return stored.replace(/\/$/, "");
+      const custom = new URL(CUSTOM_HOST_API_BASE);
+      if (location.protocol === "https:" && url.protocol === "http:") {
+        /* ignore insecure override */
+      } else if (
+        url.hostname === custom.hostname
+        && url.pathname.replace(/\/$/, "") === custom.pathname.replace(/\/$/, "")
+      ) {
+        localStorage.setItem("apiBase", PRODUCTION_API_BASE);
+        return PRODUCTION_API_BASE;
+      } else {
+        return stored.replace(/\/$/, "");
+      }
     }
   } catch {
     /* ignore */
@@ -71,6 +91,28 @@ function getSessionToken() {
   }
 }
 
+function getCachedEmail() {
+  try {
+    return sessionStorage.getItem(SESSION_EMAIL_KEY) || localStorage.getItem(SESSION_EMAIL_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function setCachedEmail(email) {
+  try {
+    if (email) {
+      sessionStorage.setItem(SESSION_EMAIL_KEY, email);
+      localStorage.setItem(SESSION_EMAIL_KEY, email);
+    } else {
+      sessionStorage.removeItem(SESSION_EMAIL_KEY);
+      localStorage.removeItem(SESSION_EMAIL_KEY);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 function setAuthMode(signedIn, email = "") {
   document.querySelectorAll("[data-auth-guest]").forEach((node) => {
     node.hidden = signedIn;
@@ -79,19 +121,27 @@ function setAuthMode(signedIn, email = "") {
   document.querySelectorAll("[data-auth-user]").forEach((node) => {
     node.hidden = !signedIn;
     node.classList.toggle("hidden", !signedIn);
-    if (node.matches(".nav-account") && email) {
+    if (node.matches("[data-auth-email]") && email) {
       node.textContent = email;
+      node.setAttribute("title", email);
     }
   });
   document.body.classList.toggle("is-signed-in", signedIn);
+  document.body.classList.add("auth-chrome-ready");
 }
 
 async function refreshLandingAuth() {
   const token = getSessionToken();
   if (!token) {
+    setCachedEmail("");
     setAuthMode(false);
     return;
   }
+
+  const cached = getCachedEmail();
+  // Optimistic signed-in chrome so homepage CTAs update without waiting on /v1/me.
+  setAuthMode(true, cached || "Account");
+
   try {
     const response = await fetch(`${resolveApiBase()}/v1/me`, {
       credentials: "include",
@@ -100,13 +150,33 @@ async function refreshLandingAuth() {
         authorization: `Bearer ${token}`
       }
     });
-    if (!response.ok) throw new Error("auth");
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        setCachedEmail("");
+        setAuthMode(false);
+        return;
+      }
+      throw new Error("auth");
+    }
     const data = await response.json();
-    const email = data?.user?.email || "Account";
+    const email = data?.user?.email || cached || "Account";
+    setCachedEmail(email === "Account" ? "" : email);
     setAuthMode(true, email);
   } catch {
-    setAuthMode(false);
+    // Network blip: keep optimistic signed-in chrome when a session token exists.
+    setAuthMode(true, cached || "Account");
   }
 }
 
 refreshLandingAuth();
+window.addEventListener("pageshow", () => {
+  refreshLandingAuth();
+});
+window.addEventListener("focus", () => {
+  refreshLandingAuth();
+});
+window.addEventListener("storage", (event) => {
+  if (event.key === SESSION_TOKEN_KEY || event.key === SESSION_EMAIL_KEY) {
+    refreshLandingAuth();
+  }
+});
