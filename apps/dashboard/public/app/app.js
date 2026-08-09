@@ -568,6 +568,7 @@ function renderSignedOut() {
   state.workspace = null;
   state.workspaces = [];
   setSessionToken(null);
+  document.body.classList.add("is-signed-out");
   updateRoleChrome();
   $("#logoutBtn").classList.add("hidden");
   $("#workspaceSwitchWrap").classList.add("hidden");
@@ -577,6 +578,7 @@ function renderSignedOut() {
 }
 
 async function renderSignedIn() {
+  document.body.classList.remove("is-signed-out");
   $("#logoutBtn").classList.remove("hidden");
   $("#sessionState").textContent = state.user?.email || "Signed in";
   $("#workspaceName").textContent = state.workspace?.workspaceName || "Workspace";
@@ -775,6 +777,13 @@ $("#alertRefreshBtn").addEventListener("click", () => loadAlerts().catch((error)
 $("#alertMonitorSelect").addEventListener("change", () => loadAlerts().catch((error) => notify(error.message)));
 $("#reportRefreshBtn")?.addEventListener("click", () => loadReports().catch((error) => notify(error.message)));
 $("#adminRefreshBtn")?.addEventListener("click", () => loadAdmin().catch((error) => notify(error.message)));
+
+$("#authSettingsLink")?.addEventListener("click", () => {
+  setView("settings");
+});
+$("#backToAuthLink")?.addEventListener("click", () => {
+  setView("overview");
+});
 
 for (const button of document.querySelectorAll(".nav")) {
   button.addEventListener("click", async () => {

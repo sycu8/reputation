@@ -26,7 +26,7 @@
   <link rel="icon" href="/brand-mark.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="/app/styles.css" />
 </head>
-<body>
+<body class="is-signed-out">
   <main class="shell">
     <aside class="sidebar">
       <a class="brand-lockup" href="/" aria-label="PulseWatch by OrangeCloud">
@@ -74,17 +74,17 @@
       </header>
 
       <section id="authPanel" class="auth-home">
-        <div class="auth-hero">
-          <div class="brand-lockup brand-lockup-hero" aria-hidden="true">
-            <img class="brand-mark" src="/brand-mark.svg" width="56" height="56" alt="" />
+        <a class="auth-back" href="/">← Back to PulseWatch</a>
+        <div class="auth-intro">
+          <div class="brand-lockup brand-lockup-hero">
+            <img class="brand-mark" src="/brand-mark.svg" width="48" height="48" alt="" />
             <span class="brand-text">
               <span class="brand">PulseWatch</span>
               <span class="brand-by">by OrangeCloud</span>
             </span>
           </div>
-          <h1 class="auth-h1">Know what the Internet is saying about you.</h1>
-          <p class="auth-lede">Know what's being said. Before it spreads.</p>
-          <p class="auth-support">PulseWatch by OrangeCloud monitors public-web and supported social mentions, scores sentiment, and alerts you to important negative conversations.</p>
+          <h1 class="auth-h1">Sign in to your workspace</h1>
+          <p class="auth-support">The marketing site is public. Sign in here only when you need the product dashboard.</p>
         </div>
         <div class="auth-grid">
           <form id="signupForm" class="auth-form">
@@ -97,12 +97,15 @@
           </form>
           <form id="loginForm" class="auth-form">
             <div class="eyebrow">Welcome back</div>
-            <h2>Sign in to PulseWatch</h2>
+            <h2>Sign in</h2>
             <label>Email<input name="email" type="email" required autocomplete="email" /></label>
             <label>Password<input name="password" type="password" required autocomplete="current-password" /></label>
             <button class="secondary" type="submit">Sign in</button>
           </form>
         </div>
+        <p class="auth-foot">
+          <button type="button" class="text-btn" data-view="settings" id="authSettingsLink">API endpoint settings</button>
+        </p>
       </section>
 
       <section id="overviewPanel" class="view-panel hidden">
@@ -184,6 +187,11 @@
       </section>
 
       <section id="settingsPanel" class="view-panel hidden">
+        <p class="auth-foot signed-out-only">
+          <button type="button" class="text-btn" id="backToAuthLink">← Back to sign in</button>
+          ·
+          <a class="text-btn" href="/">Public homepage</a>
+        </p>
         <form id="apiForm" class="plain-section">
           <div class="eyebrow">API configuration</div>
           <h2>Development endpoint</h2>

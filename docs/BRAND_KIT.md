@@ -27,8 +27,8 @@ Asset: `apps/dashboard/public/brand-mark.svg` (conversation bubble + radar signa
 
 ## Surfaces
 
-- Marketing homepage: `/` — `apps/dashboard/public/index.html`
-- Product app: `/app/` — `apps/dashboard/public/app/index.html`
+- Marketing homepage: `/` — `apps/dashboard/public/index.html` (public; no login)
+- Product app: `/app/` — `apps/dashboard/public/app/index.html` (auth required for workspace)
 - API docs: `/docs/index.html`
 
 ## Palette

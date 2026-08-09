@@ -166,27 +166,49 @@ a.nav-link { display: block; text-decoration: none; }
 }
 h2 { margin: 6px 0 14px; font-family: var(--font-display); font-size: 22px; letter-spacing: -0.03em; color: var(--ink); }
 p { color: var(--muted); margin: 6px 0 0; }
-.auth-home { display: grid; gap: 28px; max-width: 920px; animation: riseIn 420ms ease; }
-.auth-hero { display: grid; gap: 12px; max-width: 640px; }
-.brand-lockup-hero .brand { font-size: 28px; color: var(--ink); }
+body.is-signed-out .shell { grid-template-columns: 1fr; }
+body.is-signed-out .sidebar { display: none; }
+body.is-signed-out .content {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 40px 24px 64px;
+}
+.auth-home { display: grid; gap: 24px; max-width: 880px; margin: 0 auto; animation: riseIn 420ms ease; }
+.auth-back {
+  justify-self: start;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+}
+.auth-back:hover { color: var(--accent-strong); }
+.auth-intro { display: grid; gap: 10px; max-width: 560px; }
+.brand-lockup-hero .brand { font-size: 26px; color: var(--ink); }
 .brand-lockup-hero .brand-by { color: var(--slate); }
 .auth-h1 {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   font-family: var(--font-display);
-  font-size: clamp(28px, 4vw, 40px);
+  font-size: clamp(26px, 3.6vw, 34px);
   font-weight: 800;
-  letter-spacing: -0.045em;
-  line-height: 1.1;
+  letter-spacing: -0.04em;
+  line-height: 1.15;
   color: var(--ink);
-  animation: riseIn 520ms ease;
 }
-.auth-lede {
-  margin: 0;
-  font-size: 18px;
+.auth-support { max-width: 48ch; margin: 0; }
+.auth-foot { margin: 0; }
+body:not(.is-signed-out) .signed-out-only { display: none; }
+a.text-btn { display: inline; }
+.text-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 13px;
   font-weight: 600;
-  color: var(--accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
-.auth-support { max-width: 54ch; }
+.text-btn:hover { color: var(--accent-strong); }
 .auth-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
 .auth-form, .plain-section, .metrics > div, .workspace-strip, .list-pane, .detail-pane {
   background: var(--panel);
