@@ -418,14 +418,10 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /PulseWatch Pro/);
   assert.match(html, /PulseWatch Business/);
   assert.match(html, /Pay with Stripe/);
-<<<<<<< HEAD
   assert.match(html, /Plans &amp; upgrade/);
-=======
-  assert.match(html, /Upgrade with Stripe/);
   assert.match(html, /reputation\.orangecloud\.vn\/api/);
   assert.match(html, /reputation\.orangecloud\.vn\//);
   assert.doesNotMatch(html, /Prefer that over <code>\/api<\/code>/);
->>>>>>> origin/cursor/default-api-orangecloud-8cdc
   assert.match(html, /brand-mark\.svg/);
   assert.match(html, /Start on Free/);
   assert.match(html, /id="workspacePlan"/);
