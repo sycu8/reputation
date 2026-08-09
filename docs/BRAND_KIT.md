@@ -23,7 +23,13 @@ Preferred vertical lockup:
 - **by OrangeCloud** is secondary (smaller, muted).
 - Do **not** use an “R” monogram. The mark represents pulse, radar, monitoring signal, and conversation activity.
 
-Asset: `apps/dashboard/public/brand-mark.svg`
+Asset: `apps/dashboard/public/brand-mark.svg` (conversation bubble + radar signal)
+
+## Surfaces
+
+- Marketing homepage: `/` — `apps/dashboard/public/index.html`
+- Product app: `/app/` — `apps/dashboard/public/app/index.html`
+- API docs: `/docs/index.html`
 
 ## Palette
 
