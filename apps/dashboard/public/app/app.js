@@ -371,6 +371,28 @@ function setView(view) {
   if (panel) panel.classList.remove("hidden");
 }
 
+async function goToView(view) {
+  if (!view) return;
+  setView(view);
+  if (!state.user) return;
+  try {
+    if (view === "overview") await loadOverviewStats();
+    if (view === "mentions") await loadMentions();
+    if (view === "insights") await loadInsights();
+    if (view === "alerts") await loadAlerts();
+    if (view === "monitors") renderMonitors();
+    if (view === "reports") await loadReports();
+    if (view === "settings") updateRoleChrome();
+    if (view === "source-health") {
+      await refreshSourceHealth();
+      renderSourceGrid($("#sourceHealthList"), state.sourceHealth);
+    }
+    if (view === "admin") await loadAdmin();
+  } catch (error) {
+    notify(error.message);
+  }
+}
+
 function fillMonitorSelects() {
   for (const select of [$("#mentionMonitorSelect"), $("#alertMonitorSelect"), $("#insightsBrandSelect"), $("#insightsCompetitorSelect")]) {
     if (!select) continue;
@@ -527,8 +549,81 @@ async function loadOverviewStats() {
   $("#alertCount").textContent = String(stats.openAlerts);
   const available = state.sourceHealth.filter((item) => !["degraded", "disabled", "contract-required"].includes(item.availability)).length;
   $("#sourceCoverage").textContent = state.sourceHealth.length ? `${available}/${state.sourceHealth.length}` : "—";
+  if ($("#overviewPulseTotal")) $("#overviewPulseTotal").textContent = String(stats.mentionTotal);
+  renderOverviewPulse(stats);
   renderChannelSentimentGrid($("#overviewChannelSentiment"), stats.channelSentiment, "Collect mentions to see channel sentiment.");
+  renderOverviewAlertTeaser(stats);
   renderSourceGrid($("#overviewSourceList"), state.sourceHealth.slice(0, 6));
+}
+
+function renderOverviewPulse(stats) {
+  const stack = $("#overviewPulseStack");
+  const legend = $("#overviewPulseLegend");
+  if (!stack || !legend) return;
+  const counts = stats?.sentimentCounts || { positive: 0, neutral: 0, negative: 0, unknown: 0 };
+  const total = Math.max(
+    (counts.positive || 0) + (counts.neutral || 0) + (counts.negative || 0) + (counts.unknown || 0),
+    1
+  );
+  stack.innerHTML = `
+    <span class="seg pos" style="width:${((counts.positive || 0) / total) * 100}%"></span>
+    <span class="seg neu" style="width:${((counts.neutral || 0) / total) * 100}%"></span>
+    <span class="seg neg" style="width:${((counts.negative || 0) / total) * 100}%"></span>
+    <span class="seg unk" style="width:${((counts.unknown || 0) / total) * 100}%"></span>
+  `;
+  legend.innerHTML = `
+    <span class="sentiment-positive">${counts.positive || 0} positive</span>
+    <span class="sentiment-neutral">${counts.neutral || 0} neutral</span>
+    <span class="sentiment-negative">${counts.negative || 0} negative</span>
+  `;
+}
+
+function renderOverviewAlertTeaser(stats) {
+  const target = $("#overviewAlertTeaser");
+  if (!target) return;
+  const rows = [];
+  for (const monitor of stats?.perMonitor || []) {
+    for (const mention of monitor.mentionsRaw || []) {
+      if (String(mention.sentiment || "").toLowerCase() !== "negative") continue;
+      rows.push({
+        monitorName: monitor.name,
+        title: mention.title || mention.excerpt || "Negative mention",
+        source: mention.source,
+        score: mention.severity_score,
+        published_at: mention.published_at,
+        discovered_at: mention.discovered_at,
+        url: mention.canonical_url
+      });
+    }
+  }
+  rows.sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+  const top = rows.slice(0, 4);
+  target.innerHTML = "";
+  if (!top.length) {
+    target.innerHTML = `
+      <div class="empty overview-empty-cta">
+        <p>No negative signals in the current sample.</p>
+        <button type="button" class="secondary" data-go-view="mentions">Explore mentions anyway</button>
+      </div>
+    `;
+    return;
+  }
+  for (const item of top) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "overview-teaser-item";
+    card.dataset.goView = "alerts";
+    card.innerHTML = `
+      <div class="tag-row">
+        <span class="tag tag-channel">${escapeHtml(contentTypeLabel(item.source))}</span>
+        ${sentimentTagHtml("negative")}
+        <span class="tag tag-severity">Score ${escapeHtml(Number.isFinite(Number(item.score)) ? Math.round(Number(item.score)) : "—")}</span>
+      </div>
+      <strong>${escapeHtml(item.title)}</strong>
+      <small>${escapeHtml(item.monitorName)} · ${escapeHtml(formatMentionTimeLine(item))}</small>
+    `;
+    target.appendChild(card);
+  }
 }
 
 function renderReports() {
@@ -1119,26 +1214,18 @@ $("#backToAuthLink")?.addEventListener("click", () => {
 
 for (const button of document.querySelectorAll(".nav")) {
   button.addEventListener("click", async () => {
-    setView(button.dataset.view);
-    try {
-      if (!state.user) return;
-      if (button.dataset.view === "overview") await loadOverviewStats();
-      if (button.dataset.view === "mentions") await loadMentions();
-      if (button.dataset.view === "insights") await loadInsights();
-      if (button.dataset.view === "alerts") await loadAlerts();
-      if (button.dataset.view === "monitors") renderMonitors();
-      if (button.dataset.view === "reports") await loadReports();
-      if (button.dataset.view === "settings") updateRoleChrome();
-      if (button.dataset.view === "source-health") {
-        await refreshSourceHealth();
-        renderSourceGrid($("#sourceHealthList"), state.sourceHealth);
-      }
-      if (button.dataset.view === "admin") await loadAdmin();
-    } catch (error) {
-      notify(error.message);
-    }
+    await goToView(button.dataset.view);
   });
 }
+
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-go-view]");
+  if (!trigger) return;
+  const view = trigger.dataset.goView;
+  if (!view) return;
+  event.preventDefault();
+  goToView(view);
+});
 
 $("#apiForm").querySelector('[name="apiBase"]').value = state.apiBase;
 initTheme();

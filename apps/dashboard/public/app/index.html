@@ -110,17 +110,51 @@
       </section>
 
       <section id="overviewPanel" class="view-panel hidden">
-        <div class="listening-hero">
-          <div class="eyebrow">Market voice</div>
-          <h2>Hear what the market is saying about you</h2>
-          <p>Track sentiment, channels, and competitors in one listening workspace — then turn it into a shareable report.</p>
+        <div class="overview-hero">
+          <div class="overview-hero-copy">
+            <div class="eyebrow">Market voice</div>
+            <h2>Hear what the market is saying about you</h2>
+            <p>Pulse of mentions, sentiment, and risk — then jump into the story, competitors, or a shareable report.</p>
+            <div class="overview-hero-actions">
+              <button type="button" class="primary" data-go-view="mentions">Browse mentions</button>
+              <button type="button" class="secondary" data-go-view="insights">Compare competitors</button>
+              <button type="button" class="ghost overview-ghost" data-go-view="reports">Open report</button>
+            </div>
+          </div>
+          <div class="overview-hero-pulse" id="overviewSentimentPulse" aria-label="Sentiment mix">
+            <div class="pulse-ring" aria-hidden="true"></div>
+            <div class="pulse-stats">
+              <strong id="overviewPulseTotal">0</strong>
+              <span>mentions heard</span>
+            </div>
+            <div class="sentiment-stack pulse-stack" id="overviewPulseStack" aria-hidden="true"></div>
+            <div class="channel-sentiment-legend" id="overviewPulseLegend"></div>
+          </div>
         </div>
-        <div class="metrics">
-          <div><span>Active monitors</span><strong id="monitorCount">0</strong></div>
-          <div><span>Mentions</span><strong id="mentionCount">0</strong></div>
-          <div><span>Open alerts</span><strong id="alertCount">0</strong></div>
-          <div><span>Source coverage</span><strong id="sourceCoverage">—</strong></div>
+
+        <div class="metrics overview-metrics">
+          <button type="button" class="metric-card" data-go-view="monitors">
+            <span>Active monitors</span>
+            <strong id="monitorCount">0</strong>
+            <em>Manage brand &amp; rivals →</em>
+          </button>
+          <button type="button" class="metric-card" data-go-view="mentions">
+            <span>Mentions</span>
+            <strong id="mentionCount">0</strong>
+            <em>Read the feed →</em>
+          </button>
+          <button type="button" class="metric-card metric-card-alert" data-go-view="alerts">
+            <span>Open alerts</span>
+            <strong id="alertCount">0</strong>
+            <em>Triage risk now →</em>
+          </button>
+          <button type="button" class="metric-card" data-go-view="source-health">
+            <span>Source coverage</span>
+            <strong id="sourceCoverage">—</strong>
+            <em>Check channels →</em>
+          </button>
         </div>
+
         <div class="workspace-strip">
           <div>
             <div class="eyebrow">Workspace</div>
@@ -128,8 +162,63 @@
           </div>
           <span id="workspaceRole" class="status-chip">—</span>
         </div>
-        <div id="overviewChannelSentiment" class="channel-sentiment-grid"></div>
-        <div id="overviewSourceList" class="source-grid"></div>
+
+        <div class="overview-split">
+          <article class="plain-section">
+            <div class="section-head">
+              <div>
+                <div class="eyebrow">Sentiment by channel</div>
+                <h2>Where the tone shifts</h2>
+              </div>
+              <button type="button" class="secondary" data-go-view="insights">Full insights</button>
+            </div>
+            <div id="overviewChannelSentiment" class="channel-sentiment-grid"></div>
+          </article>
+          <article class="plain-section">
+            <div class="section-head">
+              <div>
+                <div class="eyebrow">Needs attention</div>
+                <h2>Latest risk signals</h2>
+              </div>
+              <button type="button" class="secondary" data-go-view="alerts">All alerts</button>
+            </div>
+            <div id="overviewAlertTeaser" class="overview-teaser-list"></div>
+          </article>
+        </div>
+
+        <div class="overview-journeys">
+          <button type="button" class="journey-card" data-go-view="mentions">
+            <span class="journey-kicker">Listen</span>
+            <strong>Scan every mention</strong>
+            <p>Filter by time, channel, and sentiment — then open the original story.</p>
+          </button>
+          <button type="button" class="journey-card" data-go-view="insights">
+            <span class="journey-kicker">Benchmark</span>
+            <strong>Size up competitors</strong>
+            <p>Side-by-side volume and negativity across your monitors.</p>
+          </button>
+          <button type="button" class="journey-card" data-go-view="reports">
+            <span class="journey-kicker">Share</span>
+            <strong>Export a listening report</strong>
+            <p>Presentation-ready rollup for stakeholders in one click.</p>
+          </button>
+          <button type="button" class="journey-card" data-go-view="monitors">
+            <span class="journey-kicker">Expand</span>
+            <strong>Add what you track</strong>
+            <p>Brand keywords, rivals, products — more monitors, clearer market voice.</p>
+          </button>
+        </div>
+
+        <div class="plain-section">
+          <div class="section-head">
+            <div>
+              <div class="eyebrow">Coverage</div>
+              <h2>Discovery sources</h2>
+            </div>
+            <button type="button" class="secondary" data-go-view="source-health">Source health</button>
+          </div>
+          <div id="overviewSourceList" class="source-grid"></div>
+        </div>
       </section>
 
       <section id="mentionsPanel" class="view-panel hidden">

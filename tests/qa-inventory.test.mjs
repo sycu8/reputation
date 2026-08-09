@@ -373,6 +373,13 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /id="mentionFrom"/);
   assert.match(html, /id="mentionTo"/);
   assert.match(html, /Hear what the market is saying about you/);
+  assert.match(html, /data-go-view="mentions"/);
+  assert.match(html, /data-go-view="insights"/);
+  assert.match(html, /overview-journeys/);
+  assert.match(html, /overviewAlertTeaser/);
+  assert.match(js, /goToView/);
+  assert.match(js, /renderOverviewAlertTeaser/);
+  assert.match(css, /\.journey-card/);
   assert.match(html, /Print \/ export report/);
   assert.match(js, /mentionTagsHtml/);
   assert.match(js, /sentiment-negative/);
