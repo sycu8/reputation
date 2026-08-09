@@ -1,23 +1,22 @@
 # BUILD STATUS — Reputation Orangecloud
 
-Last updated: 2026-08-09 (Cursor Cloud Agent)
+Last updated: 2026-08-09 (Cursor Cloud Agent, follow-up)
 
 ## Verified facts only
 
 ### Repository state
 - GitHub repo `sycu8/reputation` default branch `main` contains only placeholder file `hi` (commit `278c29b`).
-- No application source tree is present: missing `apps/`, `workers/`, `packages/`, `docs/`, `tests/`, `package.json`, `wrangler.jsonc`, etc.
-- Agent uploaded documents available: `CURSOR_START_HERE.md`, `CURSOR_MASTER_PROMPT.md` only.
-- Expected handoff listing from operator (not present in workspace or remote):
-  - `.cursor` `.github` `apps` `config-examples` `docs` `packages` `prompts` `scripts` `tests` `types` `workers`
-  - `.env.example` `.gitignore` `AGENTS.md` `BUILD_STATUS.md` `CODEX_MASTER_PROMPT.md` `CURSOR_MASTER_PROMPT.md` `CURSOR_START_HERE.md` `HANDOFF_MANIFEST.md` `package.json` `PACKAGE_CONTENTS.txt` `README.md` `tsconfig.json`
+- Cloud agent workspace (`/workspace`) and branch `cursor/handoff-blocker-status-8cdc` contain only prompts + this status file — no application source tree.
+- Missing: `apps/`, `workers/`, `packages/`, `docs/*` architecture specs, `tests/`, root `package.json`, `wrangler.jsonc`, `AGENTS.md`, etc.
+- Operator IDE context indicates the full package exists locally at:
+  - `d:\OneDrive\SYCULE\Reputation\` (includes at least `CURSOR_MASTER_PROMPT.md`)
+- That OneDrive path is **not** mounted or synced into this cloud agent VM.
 
 ### Discovery pass status
 - **Blocked before code changes** per `CURSOR_START_HERE.md` / `CURSOR_MASTER_PROMPT.md`.
-- Cannot read required handoff docs (`AGENTS.md`, `docs/BUILD_HANDOFF_INDEX.md`, architecture specs, wrangler configs).
-- Cannot run validation (`npm install` / `typecheck` / `lint` / `test` / `validate`) — no `package.json`.
-- No prior cloud-agent runs with code changes found for this repository.
-- Cloudflare Bindings MCP and Notion MCP require authentication (not yet usable).
+- Cannot read: `AGENTS.md`, `docs/BUILD_HANDOFF_INDEX.md`, referenced architecture docs, wrangler configs, tests.
+- Cannot run: `npm install` / `typecheck` / `lint` / `test` / `validate` (no `package.json`).
+- Cloudflare Bindings MCP and Notion MCP still require authentication.
 
 ### Production target (from prompts; not yet verified in Cloudflare)
 - Account name: Cloudspace
@@ -28,23 +27,32 @@ Last updated: 2026-08-09 (Cursor Cloud Agent)
 
 ## Current blocker (external)
 
-**The implementation handoff package is missing from both the GitHub repository and the agent workspace.**
+**Handoff package is on the operator machine but not in GitHub / cloud agent workspace.**
 
-The master prompts require continuing an existing architecture from `BUILD_STATUS.md` and the docs index — not a greenfield rewrite. Without that package, deployment and feature work cannot start.
+Master prompts forbid greenfield rewrite; work must continue from the existing handoff architecture.
 
-## Unblock steps (operator)
+## Unblock steps (operator) — pick one
 
-1. Push or upload the full handoff package into `sycu8/reputation` (or attach the archive/folder to a follow-up agent message), including at minimum:
-   - `AGENTS.md`, `HANDOFF_MANIFEST.md`, `docs/BUILD_HANDOFF_INDEX.md` and referenced architecture docs
-   - `package.json`, Worker/app source, `wrangler.jsonc` files, tests
-2. Authenticate Cloudflare Bindings MCP for Cloudspace provisioning/deploy when ready.
-3. Re-run the agent with: follow `CURSOR_START_HERE.md` + `CURSOR_MASTER_PROMPT.md`.
+From `d:\OneDrive\SYCULE\Reputation\` on your machine:
+
+```powershell
+cd "d:\OneDrive\SYCULE\Reputation"
+git remote add origin https://github.com/sycu8/reputation.git   # if needed
+git checkout -b cursor/import-handoff-package-8cdc
+git add -A
+git commit -m "Import Reputation Orangecloud handoff package"
+git push -u origin cursor/import-handoff-package-8cdc
+```
+
+Or: attach/upload a zip of that folder in a follow-up cloud-agent message.
+
+Then: authenticate Cloudflare Bindings MCP if deployment is required, and re-run the agent against the populated tree.
 
 ## Implementation progress
 
 | Phase | Status |
 | --- | --- |
-| Discovery / current-state report | Blocked — package missing |
+| Discovery / current-state report | Blocked — package not in agent workspace |
 | Scheduler / due-monitor index | Not started |
 | Discovery providers (RSS/sitemap/news/federated) | Not started |
 | Semantic dedupe / Vectorize / clustering | Not started |
@@ -58,4 +66,4 @@ The master prompts require continuing an existing architecture from `BUILD_STATU
 
 ## Next action for continuing engineer
 
-Ingest the missing handoff package, then complete the mandatory analyze-only pass (read docs, run validation, write plan) before any implementation slice.
+Once `d:\OneDrive\SYCULE\Reputation\` contents are in the repo/workspace: complete analyze-only pass, run validation, then implement remaining phases in order.
