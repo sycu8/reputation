@@ -20,7 +20,7 @@ The repository uses zero runtime dependencies. `typescript` and `wrangler` are d
 
 Interactive reference (auth, RBAC, plans, every `/v1` route):
 
-- Dashboard nav **API docs**, or open `/docs/`
+- Dashboard nav **API docs**, or open `/docs/index.html`
 - Written guide: [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md)
 
 ## Cloudflare resources

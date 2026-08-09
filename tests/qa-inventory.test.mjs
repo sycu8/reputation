@@ -220,7 +220,7 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /id="adminPanel"/);
   assert.match(html, /id="adminNavBtn"/);
   assert.match(html, /id="reportSentimentBars"/);
-  assert.match(html, /href="\/docs\/"/);
+  assert.match(html, /href="\/docs\/index\.html"/);
   assert.match(js, /FEEDBACK_ACTIONS/);
   assert.match(js, /canManageMonitors/);
   assert.match(js, /billing\/checkout/);
