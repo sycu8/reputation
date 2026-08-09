@@ -14,6 +14,8 @@ on:
         description: Skip DNS/Workers route updates
         type: boolean
         default: false
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -48,6 +50,7 @@ jobs:
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo "::error::Repository secret CLOUDFLARE_API_TOKEN is missing or empty."
             echo "Add it under Settings → Secrets and variables → Actions, then re-run this workflow."
+            echo "Expected secret name: CLOUDFLARE_API_TOKEN"
             exit 1
           fi
           echo "CLOUDFLARE_API_TOKEN is set (${#CLOUDFLARE_API_TOKEN} chars)"
