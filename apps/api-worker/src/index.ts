@@ -595,9 +595,16 @@ async function addMentionFeedback(request: Request, auth: AuthContext, env: Env,
   return json(data);
 }
 
-async function listAlerts(auth: AuthContext, env: Env, workspaceId: string, monitorId: string): Promise<Response> {
+async function listAlerts(request: Request, auth: AuthContext, env: Env, workspaceId: string, monitorId: string): Promise<Response> {
   await requireWorkspaceCapability(env, auth, workspaceId, "monitor.read");
-  const data = await doJson(monitorStub(env, workspaceId, monitorId), "/internal/alerts");
+  const input = new URL(request.url);
+  const params = new URLSearchParams();
+  for (const key of ["limit", "from", "to", "minSeverity", "severity", "state"]) {
+    const value = input.searchParams.get(key);
+    if (value) params.set(key, value);
+  }
+  const suffix = params.size ? `?${params.toString()}` : "";
+  const data = await doJson(monitorStub(env, workspaceId, monitorId), `/internal/alerts${suffix}`);
   return json(data);
 }
 
@@ -766,7 +773,7 @@ async function route(request: Request, env: Env, context: RouteContext): Promise
   if (match && request.method === "POST") return addMentionFeedback(request, auth, env, match[1] ?? "", match[2] ?? "", match[3] ?? "");
 
   match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)\/alerts$/);
-  if (match && request.method === "GET") return listAlerts(auth, env, match[1] ?? "", match[2] ?? "");
+  if (match && request.method === "GET") return listAlerts(request, auth, env, match[1] ?? "", match[2] ?? "");
 
   match = pathMatch(pathname, /^\/v1\/workspaces\/([^/]+)\/monitors\/([^/]+)\/alerts\/([^/]+)$/);
   if (match && request.method === "PATCH") return patchAlert(request, auth, env, match[1] ?? "", match[2] ?? "", match[3] ?? "");

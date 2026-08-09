@@ -81,7 +81,7 @@ const titles = {
   overview: ["Overview", "Hear what the market is saying about you — across monitors and channels."],
   mentions: ["Mentions", "Filter by time, channel, and sentiment. Inspect every story clearly."],
   insights: ["Insights", "Brand sentiment, audience mix, and competitor listening side-by-side."],
-  alerts: ["Alerts", "Acknowledge or resolve negative mention alerts."],
+  alerts: ["Alerts", "Open the source story for every alert. Filter by date and severity score."],
   monitors: ["Monitors", "Manage brand and competitor keyword / Boolean monitors."],
   reports: ["Reports", "Presentation-ready listening rollups for stakeholders."],
   settings: ["Settings", "API endpoint and billing checkout."],
@@ -779,21 +779,44 @@ function renderAlerts() {
   const list = $("#alertList");
   list.innerHTML = "";
   if (!state.alerts.length) {
-    list.innerHTML = '<div class="empty">No alerts for this monitor.</div>';
+    list.innerHTML = '<div class="empty">No alerts for these filters.</div>';
     return;
   }
   for (const alert of state.alerts) {
+    const mention = alert.mention || null;
     const row = document.createElement("div");
-    row.className = "list-item";
+    row.className = "list-item alert-item";
+    const score = mention?.severity_score;
+    const scoreLabel = Number.isFinite(Number(score)) ? `Score ${Math.round(Number(score))}` : "Score —";
+    const timeLine = mention
+      ? formatMentionTimeLine({
+          published_at: mention.published_at,
+          discovered_at: mention.discovered_at || alert.created_at
+        })
+      : `Alert ${formatMentionTime(alert.created_at)}`;
+    const title = mention?.title || alert.reason || "Untitled alert";
+    const excerpt = mention?.excerpt || alert.reason || "";
+    const sourceUrl = mention?.canonical_url || "";
     row.innerHTML = `
-      <strong>${escapeHtml(alert.type || "alert")} · ${escapeHtml(alert.severity)}</strong>
-      <small>${escapeHtml(alert.state)} · ${escapeHtml(alert.reason || "No reason")}</small>
+      <div class="tag-row">
+        ${mention?.source ? `<span class="tag tag-channel">${escapeHtml(contentTypeLabel(mention.source))}</span>` : ""}
+        ${mention?.sentiment ? sentimentTagHtml(mention.sentiment) : ""}
+        <span class="tag tag-severity severity-${escapeHtml(String(alert.severity || "unknown").toLowerCase())}">${escapeHtml(alert.severity || "severity")}</span>
+        <span class="tag tag-severity">${escapeHtml(scoreLabel)}</span>
+        <span class="tag tag-state">${escapeHtml(alert.state || "pending")}</span>
+      </div>
+      <strong>${escapeHtml(title)}</strong>
+      <small class="mention-time">${escapeHtml(timeLine)}</small>
+      <p class="alert-excerpt">${escapeHtml(excerpt)}</p>
       <div class="actions">
+        ${sourceUrl
+          ? `<a class="secondary alert-source-link" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">Open source</a>`
+          : `<span class="hint">No source URL</span>`}
         <button type="button" class="secondary" data-action="acknowledged">Ack</button>
         <button type="button" class="primary" data-action="resolved">Resolve</button>
       </div>
     `;
-    row.querySelectorAll("button").forEach((button) => {
+    row.querySelectorAll("button[data-action]").forEach((button) => {
       button.addEventListener("click", async () => {
         const monitorId = $("#alertMonitorSelect").value;
         try {
@@ -820,7 +843,19 @@ async function loadAlerts() {
     renderAlerts();
     return;
   }
-  const data = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}/alerts`);
+  const params = new URLSearchParams();
+  params.set("limit", "100");
+  const from = $("#alertFrom")?.value;
+  const to = $("#alertTo")?.value;
+  const minSeverity = $("#alertMinSeverity")?.value;
+  const severity = $("#alertSeverity")?.value;
+  const stateFilter = $("#alertState")?.value;
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  if (minSeverity) params.set("minSeverity", minSeverity);
+  if (severity) params.set("severity", severity);
+  if (stateFilter) params.set("state", stateFilter);
+  const data = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}/alerts?${params}`);
   state.alerts = data.alerts || [];
   renderAlerts();
 }
@@ -1061,6 +1096,7 @@ $("#billingForm")?.addEventListener("submit", async (event) => {
 
 $("#mentionFilterBtn").addEventListener("click", () => loadMentions().catch((error) => notify(error.message)));
 $("#mentionMonitorSelect").addEventListener("change", () => loadMentions().catch((error) => notify(error.message)));
+$("#alertFilterBtn")?.addEventListener("click", () => loadAlerts().catch((error) => notify(error.message)));
 $("#alertRefreshBtn").addEventListener("click", () => loadAlerts().catch((error) => notify(error.message)));
 $("#alertMonitorSelect").addEventListener("change", () => loadAlerts().catch((error) => notify(error.message)));
 $("#reportRefreshBtn")?.addEventListener("click", () => loadReports().catch((error) => notify(error.message)));
