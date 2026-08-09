@@ -1,5 +1,11 @@
 import { evaluateBooleanAst, type BooleanAst } from "../../../packages/boolean-query/src/index.ts";
 import { createJob, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
+import {
+  assignStoryCluster,
+  contentFingerprint,
+  embeddingReady,
+  type VectorizeDedupeAdapter
+} from "../../../packages/dedupe/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog } from "../../../packages/observability/src/index.ts";
 
@@ -27,6 +33,9 @@ export interface AiCandidatePayload {
   monitorName: string;
   relevanceScore: number;
   relevanceReason: string;
+  simHash: string;
+  storyClusterId: string;
+  contentHash?: string | undefined;
 }
 
 interface Env {
@@ -35,6 +44,8 @@ interface Env {
   AI_NORMAL: Queue<JobEnvelope<AiCandidatePayload>>;
   AI_PRIORITY: Queue<JobEnvelope<AiCandidatePayload>>;
   ANALYTICS?: AnalyticsEngineDataset;
+  /** Optional Vectorize binding; when absent, semantic upsert/query is skipped. */
+  VECTORIZE?: VectorizeDedupeAdapter;
 }
 
 function monitorStub(env: Env, tenantId: string, monitorId: string): DurableObjectStub {
@@ -76,6 +87,19 @@ async function processMessage(message: Message<JobEnvelope<ProcessPayload>>, env
   const title = typeof raw.title === "string" ? raw.title : job.payload.discoveryTitle ?? "";
   const text = typeof raw.extractedText === "string" ? raw.extractedText : typeof raw.rawBody === "string" ? raw.rawBody : "";
   const combined = `${title}\n${text}`;
+  const fingerprint = contentFingerprint(combined);
+
+  const nearDupesResponse = await stub.fetch(
+    `https://do.internal/internal/mentions/near-dupes?simhash=${encodeURIComponent(fingerprint.simHash)}&threshold=3&limit=20`
+  );
+  if (nearDupesResponse.ok) {
+    const near = await nearDupesResponse.json() as { matches?: Array<{ id: string; hamming: number }> };
+    if (Array.isArray(near.matches) && near.matches.length > 0) {
+      env.ANALYTICS?.writeDataPoint({ indexes: [job.monitorId], blobs: ["near_dupe_skip", job.payload.source], doubles: [near.matches[0]?.hamming ?? 0] });
+      return;
+    }
+  }
+
   const matchingQueries: string[] = [];
   for (const query of queryData.queries) {
     if (!query.enabled) continue;
@@ -90,6 +114,42 @@ async function processMessage(message: Message<JobEnvelope<ProcessPayload>>, env
     env.ANALYTICS?.writeDataPoint({ indexes: [job.monitorId], blobs: ["relevance_rejected", job.payload.source], doubles: [0] });
     return;
   }
+
+  let existingForCluster: Array<{ clusterId: string; simHash: string; title: string }> = [];
+  const recentMentionsResponse = await stub.fetch("https://do.internal/internal/mentions?limit=50");
+  if (recentMentionsResponse.ok) {
+    const recent = await recentMentionsResponse.json() as {
+      mentions?: Array<{ content_id?: string; simhash?: string | null; story_cluster_id?: string | null; title?: string | null }>;
+    };
+    existingForCluster = (recent.mentions ?? [])
+      .filter((item) => typeof item.simhash === "string" && item.simhash)
+      .map((item) => ({
+        clusterId: (typeof item.story_cluster_id === "string" && item.story_cluster_id)
+          ? item.story_cluster_id
+          : (typeof item.content_id === "string" ? item.content_id : job.payload.contentId),
+        simHash: item.simhash as string,
+        title: typeof item.title === "string" ? item.title : ""
+      }));
+  }
+  const storyClusterId = assignStoryCluster({
+    contentId: job.payload.contentId,
+    simHash: fingerprint.simHash,
+    title,
+    existing: existingForCluster
+  });
+
+  if (env.VECTORIZE) {
+    try {
+      await env.VECTORIZE.upsert(job.payload.contentId, embeddingReady(combined), {
+        monitorId: job.monitorId,
+        simHash: fingerprint.simHash,
+        storyClusterId
+      });
+    } catch {
+      // Optional binding — failures must not block the pipeline.
+    }
+  }
+
   let relevanceScore = 85;
   if (combined.toLocaleLowerCase().includes(monitorData.monitor.name.toLocaleLowerCase())) relevanceScore += 10;
   if (matchingQueries.length > 1) relevanceScore += 5;
@@ -105,7 +165,10 @@ async function processMessage(message: Message<JobEnvelope<ProcessPayload>>, env
     publishedAt: job.payload.publishedAt,
     monitorName: monitorData.monitor.name,
     relevanceScore,
-    relevanceReason: `Matched ${matchingQueries.length} Boolean quer${matchingQueries.length === 1 ? "y" : "ies"}`
+    relevanceReason: `Matched ${matchingQueries.length} Boolean quer${matchingQueries.length === 1 ? "y" : "ies"}`,
+    simHash: fingerprint.simHash,
+    storyClusterId,
+    contentHash: fingerprint.contentHash
   }, {
     traceId: job.traceId,
     tenantId: job.tenantId,

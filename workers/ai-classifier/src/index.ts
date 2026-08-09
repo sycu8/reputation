@@ -15,6 +15,9 @@ interface AiCandidatePayload {
   monitorName: string;
   relevanceScore: number;
   relevanceReason: string;
+  simHash?: string | undefined;
+  storyClusterId?: string | undefined;
+  contentHash?: string | undefined;
 }
 
 interface AlertPayload {
@@ -168,7 +171,9 @@ async function processMessage(message: Message<JobEnvelope<AiCandidatePayload>>,
       severityReason: `Severity ${severityScore}/100 from target-aware sentiment and ${classification.riskCategories.length} risk categories`,
       riskCategories: classification.riskCategories,
       aiModel: model,
-      aiVersion: "v1"
+      aiVersion: "v1",
+      simHash: job.payload.simHash,
+      storyClusterId: job.payload.storyClusterId
     })
   });
   if (!write.ok) throw new Error("mention_write_failed");

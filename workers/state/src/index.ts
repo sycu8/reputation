@@ -1,4 +1,5 @@
 import { advanceNextScanAt, claimLeaseUntil, isClaimable } from "../../../packages/crawler-core/src/index.ts";
+import { hammingDistance64, simHashFromHex } from "../../../packages/dedupe/src/index.ts";
 import type { GlobalRole, MonitorRecord, MonitorStatus, MonitorType, QueryRecord, WorkspaceRole } from "../../../packages/types/src/index.ts";
 
 interface Env {}
@@ -302,6 +303,7 @@ export class TenantDirectoryDO extends SqliteObject {
       if (request.method === "PATCH" && url.pathname.startsWith("/internal/monitors/")) return await this.updateMonitorEntry(request, url.pathname.split("/").pop() ?? "");
       if (request.method === "DELETE" && url.pathname.startsWith("/internal/monitors/")) return await this.deleteMonitorEntry(request, url.pathname.split("/").pop() ?? "");
       if (request.method === "GET" && url.pathname === "/internal/audit") return this.listAudit();
+      if (request.method === "PATCH" && url.pathname === "/internal/workspace/plan") return await this.patchPlan(request);
       return json({ error: "not_found" }, 404);
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
@@ -425,6 +427,20 @@ export class TenantDirectoryDO extends SqliteObject {
     ));
     return json({ events });
   }
+
+  private async patchPlan(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const plan = asString(body.plan, "plan");
+    const actorUserId = asString(body.actorUserId, "actor_user_id");
+    const allowed = new Set(["starter", "pro", "business"]);
+    if (!allowed.has(plan)) return json({ error: "invalid_plan" }, 400);
+    const workspace = rows(this.sql.exec<{ id: string; plan: string }>(`SELECT id,plan FROM tenants LIMIT 1`))[0];
+    if (!workspace) return json({ error: "workspace_not_initialized" }, 404);
+    const previous = workspace.plan;
+    this.sql.exec(`UPDATE tenants SET plan=?, updated_at=? WHERE id=?`, plan, nowIso(), workspace.id);
+    this.audit(actorUserId, "workspace.plan_update", "workspace", workspace.id, { previous, plan });
+    return json({ ok: true, plan, previous });
+  }
 }
 
 export class MonitorDO extends SqliteObject {
@@ -454,10 +470,13 @@ export class MonitorDO extends SqliteObject {
       topic TEXT, language TEXT, engagement_score REAL, raw_r2_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active',
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )`);
+    ensureColumn(this.sql, "mentions", "simhash", "TEXT");
+    ensureColumn(this.sql, "mentions", "story_cluster_id", "TEXT");
     this.sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_mentions_content_id ON mentions(content_id)`);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_mentions_discovered ON mentions(discovered_at DESC)`);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_mentions_sentiment ON mentions(sentiment, discovered_at DESC)`);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_mentions_severity ON mentions(severity_score DESC, discovered_at DESC)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_mentions_story_cluster ON mentions(story_cluster_id, discovered_at DESC)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS mention_analysis (
       mention_id TEXT PRIMARY KEY, relevance_reason TEXT, sentiment_reason TEXT, severity_reason TEXT,
       risk_categories_json TEXT, ai_model TEXT, ai_version TEXT, analyzed_at TEXT NOT NULL
@@ -470,7 +489,20 @@ export class MonitorDO extends SqliteObject {
       id TEXT PRIMARY KEY, mention_id TEXT, type TEXT NOT NULL, severity TEXT NOT NULL, state TEXT NOT NULL,
       dedupe_key TEXT NOT NULL UNIQUE, reason TEXT, created_at TEXT NOT NULL, sent_at TEXT, acknowledged_at TEXT, resolved_at TEXT
     )`);
-    this.sql.exec(`INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('version', '3')`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS alert_deliveries (
+      id TEXT PRIMARY KEY,
+      alert_id TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      status TEXT NOT NULL,
+      provider_ref TEXT,
+      attempt INTEGER NOT NULL DEFAULT 1,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(alert_id, channel)
+    )`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_alert_deliveries_alert ON alert_deliveries(alert_id, updated_at DESC)`);
+    this.sql.exec(`INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('version', '4')`);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -489,12 +521,22 @@ export class MonitorDO extends SqliteObject {
       }
       if (request.method === "GET" && url.pathname === "/internal/mentions") return this.listMentions(url);
       if (request.method === "POST" && url.pathname === "/internal/mentions/upsert") return await this.upsertMention(request);
+      if (request.method === "GET" && url.pathname === "/internal/mentions/near-dupes") return this.nearDupes(url);
       if (request.method === "GET" && url.pathname.startsWith("/internal/mentions/exists/")) return this.mentionExists(url.pathname.split("/").pop() ?? "");
       if (request.method === "GET" && url.pathname.startsWith("/internal/mentions/")) return this.getMention(url.pathname.split("/").pop() ?? "");
       if (request.method === "POST" && url.pathname === "/internal/feedback") return await this.addFeedback(request);
       if (request.method === "POST" && url.pathname === "/internal/alerts/upsert") return await this.upsertAlert(request);
+      if (request.method === "POST" && url.pathname === "/internal/alerts/deliveries/upsert") return await this.upsertAlertDelivery(request);
       if (request.method === "GET" && url.pathname === "/internal/alerts") return this.listAlerts();
-      if (request.method === "PATCH" && url.pathname.startsWith("/internal/alerts/")) return await this.patchAlert(request, url.pathname.split("/").pop() ?? "");
+      {
+        const deliveryMatch = url.pathname.match(/^\/internal\/alerts\/([^/]+)\/deliveries$/);
+        if (deliveryMatch && request.method === "GET") return this.listAlertDeliveries(deliveryMatch[1] ?? "");
+      }
+      {
+        const alertMatch = url.pathname.match(/^\/internal\/alerts\/([^/]+)$/);
+        if (alertMatch && request.method === "GET") return this.getAlert(alertMatch[1] ?? "");
+        if (alertMatch && request.method === "PATCH") return await this.patchAlert(request, alertMatch[1] ?? "");
+      }
       if (request.method === "POST" && url.pathname === "/internal/schedule/claim-advance") return await this.claimAdvance(request);
       return json({ error: "not_found" }, 404);
     } catch (error) {
@@ -646,6 +688,40 @@ export class MonitorDO extends SqliteObject {
     return json({ exists: Boolean(exists), mentionId: exists?.id ?? null });
   }
 
+  private nearDupes(url: URL): Response {
+    const simhashParam = url.searchParams.get("simhash") ?? "";
+    if (!simhashParam.trim()) return json({ error: "invalid_simhash" }, 400);
+    const threshold = Math.min(32, Math.max(0, Number(url.searchParams.get("threshold") ?? "3")));
+    const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") ?? "20")));
+    const probe = simHashFromHex(simhashParam);
+    const recent = rows(this.sql.exec<{
+      id: string; content_id: string; title: string | null; simhash: string | null; story_cluster_id: string | null; discovered_at: string;
+    }>(
+      `SELECT id, content_id, title, simhash, story_cluster_id, discovered_at FROM mentions
+       WHERE simhash IS NOT NULL AND simhash != ''
+       ORDER BY discovered_at DESC LIMIT 200`
+    ));
+    const matches: Array<{
+      id: string; contentId: string; title: string | null; simhash: string; storyClusterId: string | null; hamming: number; discoveredAt: string;
+    }> = [];
+    for (const item of recent) {
+      if (!item.simhash) continue;
+      const distance = hammingDistance64(probe, simHashFromHex(item.simhash));
+      if (distance > threshold) continue;
+      matches.push({
+        id: item.id,
+        contentId: item.content_id,
+        title: item.title,
+        simhash: item.simhash,
+        storyClusterId: item.story_cluster_id,
+        hamming: distance,
+        discoveredAt: item.discovered_at
+      });
+    }
+    matches.sort((a, b) => a.hamming - b.hamming || b.discoveredAt.localeCompare(a.discoveredAt));
+    return json({ matches: matches.slice(0, limit), scanned: recent.length, threshold });
+  }
+
   private listMentions(url: URL): Response {
     const limit = Math.min(100, Math.max(1, Number(url.searchParams.get("limit") ?? "50")));
     const sentiment = url.searchParams.get("sentiment");
@@ -677,9 +753,17 @@ export class MonitorDO extends SqliteObject {
     if (existing) return json({ mentionId: existing.id, created: false });
     const mentionId = typeof body.id === "string" && body.id ? body.id : crypto.randomUUID();
     const ts = nowIso();
+    const simhash = typeof body.simHash === "string" && body.simHash.trim()
+      ? body.simHash.trim()
+      : typeof body.simhash === "string" && body.simhash.trim()
+        ? body.simhash.trim()
+        : null;
+    const storyClusterId = typeof body.storyClusterId === "string" && body.storyClusterId.trim()
+      ? body.storyClusterId.trim()
+      : null;
     this.sql.exec(
-      `INSERT INTO mentions(id,content_id,canonical_url,source,title,excerpt,published_at,discovered_at,relevance_score,sentiment,sentiment_confidence,severity_score,topic,language,engagement_score,raw_r2_key,status,created_at,updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO mentions(id,content_id,canonical_url,source,title,excerpt,published_at,discovered_at,relevance_score,sentiment,sentiment_confidence,severity_score,topic,language,engagement_score,raw_r2_key,status,created_at,updated_at,simhash,story_cluster_id)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       mentionId,
       contentId,
       typeof body.canonicalUrl === "string" ? body.canonicalUrl : null,
@@ -698,7 +782,9 @@ export class MonitorDO extends SqliteObject {
       asString(body.rawR2Key, "raw_r2_key"),
       "active",
       ts,
-      ts
+      ts,
+      simhash,
+      storyClusterId
     );
     this.sql.exec(
       `INSERT OR REPLACE INTO mention_analysis(mention_id,relevance_reason,sentiment_reason,severity_reason,risk_categories_json,ai_model,ai_version,analyzed_at)
@@ -757,6 +843,58 @@ export class MonitorDO extends SqliteObject {
     return json({ alerts });
   }
 
+  private getAlert(alertId: string): Response {
+    if (!alertId) return json({ error: "invalid_alert_id" }, 400);
+    const alert = rows(this.sql.exec<Record<string, unknown>>(`SELECT * FROM alerts WHERE id=? LIMIT 1`, alertId))[0];
+    if (!alert) return json({ error: "alert_not_found" }, 404);
+    const deliveries = rows(this.sql.exec<Record<string, unknown>>(
+      `SELECT * FROM alert_deliveries WHERE alert_id=? ORDER BY updated_at DESC`, alertId
+    ));
+    return json({ alert, deliveries });
+  }
+
+  private listAlertDeliveries(alertId: string): Response {
+    if (!alertId) return json({ error: "invalid_alert_id" }, 400);
+    const deliveries = rows(this.sql.exec<Record<string, unknown>>(
+      `SELECT * FROM alert_deliveries WHERE alert_id=? ORDER BY updated_at DESC`, alertId
+    ));
+    return json({ deliveries });
+  }
+
+  private async upsertAlertDelivery(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const alertId = asString(body.alertId, "alert_id");
+    const channel = asString(body.channel, "channel");
+    const status = asString(body.status, "status");
+    const allowed = new Set(["pending", "sent", "failed", "skipped"]);
+    if (!allowed.has(status)) return json({ error: "invalid_delivery_status" }, 400);
+    const attempt = typeof body.attempt === "number" && Number.isFinite(body.attempt)
+      ? Math.max(1, Math.floor(body.attempt))
+      : undefined;
+    const providerRef = typeof body.providerRef === "string" ? body.providerRef : null;
+    const errorText = typeof body.error === "string" ? body.error : null;
+    const ts = nowIso();
+    const existing = rows(this.sql.exec<{ id: string; attempt: number }>(
+      `SELECT id,attempt FROM alert_deliveries WHERE alert_id=? AND channel=? LIMIT 1`, alertId, channel
+    ))[0];
+    if (existing) {
+      const nextAttempt = attempt ?? existing.attempt + (status === "pending" ? 0 : 1);
+      this.sql.exec(
+        `UPDATE alert_deliveries SET status=?, provider_ref=?, attempt=?, error=?, updated_at=? WHERE id=?`,
+        status, providerRef, nextAttempt, errorText, ts, existing.id
+      );
+      return json({ id: existing.id, alertId, channel, status, attempt: nextAttempt, updated: true });
+    }
+    const id = crypto.randomUUID();
+    const firstAttempt = attempt ?? 1;
+    this.sql.exec(
+      `INSERT INTO alert_deliveries(id,alert_id,channel,status,provider_ref,attempt,error,created_at,updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?)`,
+      id, alertId, channel, status, providerRef, firstAttempt, errorText, ts, ts
+    );
+    return json({ id, alertId, channel, status, attempt: firstAttempt, updated: false }, 201);
+  }
+
   private async patchAlert(request: Request, alertId: string): Promise<Response> {
     const body = await readJson(request);
     const state = typeof body.state === "string" ? body.state : null;
@@ -782,8 +920,64 @@ export class TenantBudgetDO extends SqliteObject {
     )`);
   }
 
-  fetch(): Response {
-    return json({ ok: true, phase: "budget_primitive_only" });
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    try {
+      if (request.method === "POST" && url.pathname === "/internal/usage/increment") return await this.incrementUsage(request);
+      if (request.method === "GET" && url.pathname === "/internal/usage") return this.getUsage(url);
+      return json({ ok: true, phase: "budget_usage" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "internal_error";
+      return json({ error: message }, message.startsWith("invalid_") ? 400 : 500);
+    }
+  }
+
+  private currentMonth(value?: string | null): string {
+    if (value && /^\d{4}-\d{2}$/.test(value)) return value;
+    return nowIso().slice(0, 7);
+  }
+
+  private async incrementUsage(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const month = this.currentMonth(typeof body.month === "string" ? body.month : null);
+    const crawlRequests = typeof body.crawlRequests === "number" ? Math.max(0, Math.floor(body.crawlRequests)) : 0;
+    const browserUnits = typeof body.browserUnits === "number" ? Math.max(0, body.browserUnits) : 0;
+    const aiUnits = typeof body.aiUnits === "number" ? Math.max(0, body.aiUnits) : 0;
+    const mentionsProcessed = typeof body.mentionsProcessed === "number" ? Math.max(0, Math.floor(body.mentionsProcessed)) : 0;
+    const notificationsSent = typeof body.notificationsSent === "number" ? Math.max(0, Math.floor(body.notificationsSent)) : 0;
+    const storageBytesEstimate = typeof body.storageBytesEstimate === "number" ? Math.max(0, Math.floor(body.storageBytesEstimate)) : 0;
+    const ts = nowIso();
+    this.sql.exec(
+      `INSERT INTO monthly_usage(month,crawl_requests,browser_units,ai_units,mentions_processed,notifications_sent,storage_bytes_estimate,updated_at)
+       VALUES(?,?,?,?,?,?,?,?)
+       ON CONFLICT(month) DO UPDATE SET
+         crawl_requests=crawl_requests+excluded.crawl_requests,
+         browser_units=browser_units+excluded.browser_units,
+         ai_units=ai_units+excluded.ai_units,
+         mentions_processed=mentions_processed+excluded.mentions_processed,
+         notifications_sent=notifications_sent+excluded.notifications_sent,
+         storage_bytes_estimate=storage_bytes_estimate+excluded.storage_bytes_estimate,
+         updated_at=excluded.updated_at`,
+      month, crawlRequests, browserUnits, aiUnits, mentionsProcessed, notificationsSent, storageBytesEstimate, ts
+    );
+    return this.getUsage(new URL(`https://do.internal/internal/usage?month=${encodeURIComponent(month)}`));
+  }
+
+  private getUsage(url: URL): Response {
+    const month = this.currentMonth(url.searchParams.get("month"));
+    const usage = rows(this.sql.exec<Record<string, unknown>>(
+      `SELECT * FROM monthly_usage WHERE month=? LIMIT 1`, month
+    ))[0] ?? {
+      month,
+      crawl_requests: 0,
+      browser_units: 0,
+      ai_units: 0,
+      mentions_processed: 0,
+      notifications_sent: 0,
+      storage_bytes_estimate: 0,
+      updated_at: null
+    };
+    return json({ usage });
   }
 }
 
