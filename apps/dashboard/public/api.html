@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PulseWatch API Reference</title>
+  <meta name="description" content="HTTP API reference for PulseWatch — authentication, workspaces, monitors, Boolean queries, mentions, alerts, billing, and admin." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/api.css" />
+</head>
+<body>
+  <div class="page-bg" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <a class="brand-link" href="/">
+      <span class="brand">PulseWatch</span>
+      <span class="brand-sub">API</span>
+    </a>
+    <nav class="header-nav" aria-label="Documentation">
+      <a href="#authentication">Auth</a>
+      <a href="#endpoints">Endpoints</a>
+      <a href="#errors">Errors</a>
+      <a href="#rbac">RBAC</a>
+      <a class="header-cta" href="/">Open app</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <p class="eyebrow">HTTP reference · v1</p>
+    <h1>PulseWatch</h1>
+    <p class="lede">Session-authenticated multi-tenant API for monitors, Boolean queries, mentions, alerts, and billing — built for Cloudflare Workers.</p>
+    <div class="hero-actions">
+      <button type="button" class="primary" id="copyBaseBtn" data-copy="https://reputation.orangecloud.vn/api">Copy production base URL</button>
+      <a class="secondary" href="#quickstart">Quick start</a>
+    </div>
+    <p class="hero-meta"><code id="baseUrlDisplay">https://reputation.orangecloud.vn/api</code> · cookie sessions · JSON</p>
+  </section>
+
+  <div class="docs-shell">
+    <aside class="toc" aria-label="On this page">
+      <div class="toc-label">On this page</div>
+      <a href="#quickstart">Quick start</a>
+      <a href="#base-urls">Base URLs</a>
+      <a href="#authentication">Authentication</a>
+      <a href="#conventions">Conventions</a>
+      <a href="#errors">Errors</a>
+      <a href="#rbac">Roles &amp; capabilities</a>
+      <a href="#plans">Plans &amp; limits</a>
+      <a href="#health">Health &amp; sources</a>
+      <a href="#auth-endpoints">Auth</a>
+      <a href="#workspaces">Workspaces</a>
+      <a href="#monitors">Monitors</a>
+      <a href="#queries">Queries</a>
+      <a href="#mentions">Mentions</a>
+      <a href="#alerts">Alerts</a>
+      <a href="#billing">Billing</a>
+      <a href="#admin">Admin</a>
+      <a href="#boolean">Boolean query language</a>
+      <a href="#changelog">Versioning</a>
+    </aside>
+
+    <article class="docs">
+      <section id="quickstart">
+        <h2>Quick start</h2>
+        <p>Create an account, receive a session cookie, then call workspace-scoped resources. Credentials are never returned in JSON — only via <code>Set-Cookie</code>.</p>
+        <pre class="code-block" data-lang="bash"><code>curl -sS -c cookies.txt -X POST "$API/v1/auth/signup" \
+  -H 'content-type: application/json' \
+  -d '{
+    "email": "ops@acme.example",
+    "password": "choose-a-long-passphrase",
+    "workspaceName": "Acme Listening"
+  }'
+
+curl -sS -b cookies.txt "$API/v1/workspaces"
+curl -sS -b cookies.txt "$API/v1/me"</code></pre>
+        <p>Production dashboard calls the same origin path prefix <code>/api</code>. Local QA defaults to <code>http://&lt;host&gt;:8787</code>.</p>
+      </section>
+
+      <section id="base-urls">
+        <h2>Base URLs</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Environment</th><th>Base URL</th><th>Notes</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Production (custom host)</td>
+                <td><code>https://reputation.orangecloud.vn/api</code></td>
+                <td>Workers route <code>/api/*</code> → API Worker</td>
+              </tr>
+              <tr>
+                <td>Production (workers.dev)</td>
+                <td><code>https://reputa-api-production.sycu-lee.workers.dev</code></td>
+                <td>No <code>/api</code> prefix; paths start at <code>/health</code>, <code>/v1/…</code></td>
+              </tr>
+              <tr>
+                <td>Local QA</td>
+                <td><code>http://127.0.0.1:8787</code></td>
+                <td><code>npm run qa:local</code>; cookies are non-Secure</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p>All examples below use <code>$API</code> as the chosen base. Paths are absolute from that base (e.g. <code>$API/v1/me</code>).</p>
+      </section>
+
+      <section id="authentication">
+        <h2>Authentication</h2>
+        <p>PulseWatch uses <strong>HTTP-only session cookies</strong>. There is no public bearer-token minting in v1.</p>
+        <ul>
+          <li>Cookie name: <code>reputa_session</code> (overridable via <code>SESSION_COOKIE_NAME</code>)</li>
+          <li>Value shape: <code>&lt;userShard&gt;.&lt;sessionId&gt;.&lt;sessionSecret&gt;</code></li>
+          <li>Flags: <code>HttpOnly</code>, <code>SameSite=Lax</code>, <code>Path=/</code>; <code>Secure</code> only on <code>production</code> / <code>staging</code></li>
+          <li>Clients must send <code>credentials: "include"</code> (browser) or <code>-b / -c</code> cookie jars (curl)</li>
+        </ul>
+        <h3>CORS</h3>
+        <p>Credentialed CORS is allowed only for origins listed in <code>ALLOWED_ORIGINS</code> (comma-separated). Preflight: <code>OPTIONS</code> with <code>Access-Control-Allow-Credentials: true</code>. Disallowed origins do not receive ACAO.</p>
+        <pre class="code-block" data-lang="javascript"><code>await fetch(`${apiBase}/v1/me`, {
+  credentials: "include",
+  headers: { "content-type": "application/json" }
+});</code></pre>
+      </section>
+
+      <section id="conventions">
+        <h2>Conventions</h2>
+        <ul>
+          <li><strong>Content type:</strong> request bodies are JSON (<code>content-type: application/json</code>)</li>
+          <li><strong>Response type:</strong> JSON objects; list resources use plural keys (<code>monitors</code>, <code>mentions</code>, <code>alerts</code>)</li>
+          <li><strong>IDs:</strong> UUIDs for workspaces, monitors, sessions</li>
+          <li><strong>Request tracing:</strong> every response includes <code>x-request-id</code></li>
+          <li><strong>Timestamps:</strong> ISO-8601 UTC strings where present</li>
+          <li><strong>Idempotency:</strong> billing webhook events are stored by <code>eventId</code> and may return <code>duplicate: true</code></li>
+        </ul>
+      </section>
+
+      <section id="errors">
+        <h2>Errors</h2>
+        <p>Failures return a JSON body with an <code>error</code> string (machine-oriented) and HTTP status. Do not parse human prose from status text alone.</p>
+        <pre class="code-block" data-lang="json"><code>{
+  "error": "forbidden",
+  "requestId": "a284b62a4df8acf6"
+}</code></pre>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Status</th><th>Common <code>error</code></th><th>Meaning</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>400</td><td><code>invalid_boolean_query</code>, <code>invalid_plan</code>, <code>invalid_monitor_type</code>, field names</td><td>Malformed body or Boolean syntax</td></tr>
+              <tr><td>401</td><td><code>unauthorized</code>, <code>invalid_session</code>, <code>invalid_credentials</code></td><td>Missing/expired session or bad password</td></tr>
+              <tr><td>402</td><td><code>monitor_plan_limit_reached</code></td><td>Plan entitlement exceeded</td></tr>
+              <tr><td>403</td><td><code>forbidden</code></td><td>RBAC denial or cross-tenant access</td></tr>
+              <tr><td>404</td><td><code>not_found</code></td><td>Unknown route or missing resource</td></tr>
+              <tr><td>409</td><td>signup conflicts</td><td>Identity/shard collision</td></tr>
+              <tr><td>503</td><td><code>billing_webhook_not_configured</code></td><td>Missing webhook secret</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="rbac">
+        <h2>Roles &amp; capabilities</h2>
+        <p>Workspace membership roles gate every tenant route. <code>super_admin</code> (email allowlist via <code>SUPER_ADMIN_EMAILS</code>) bypasses workspace capability checks.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Capability</th>
+                <th>owner</th>
+                <th>admin</th>
+                <th>analyst</th>
+                <th>viewer</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td><code>workspace.read</code></td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+              <tr><td><code>workspace.update</code> / billing checkout</td><td>✓</td><td>✓</td><td>—</td><td>—</td></tr>
+              <tr><td><code>membership.manage</code></td><td>✓</td><td>✓</td><td>—</td><td>—</td></tr>
+              <tr><td><code>monitor.read</code> / mentions / alerts list</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr>
+              <tr><td><code>monitor.create</code> / <code>update</code> / <code>delete</code></td><td>✓</td><td>✓</td><td>create+update</td><td>—</td></tr>
+              <tr><td><code>query.*</code></td><td>full</td><td>full</td><td>read+create+update</td><td>read</td></tr>
+              <tr><td>Mention feedback / alert patch</td><td>✓</td><td>✓</td><td>✓</td><td>—</td></tr>
+              <tr><td><code>/v1/admin/*</code></td><td colspan="4"><code>super_admin</code> only</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="plans">
+        <h2>Plans &amp; limits</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Plan</th><th>Price</th><th>Active monitors</th><th>Default scan floor</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>starter</code></td><td>$29</td><td>3</td><td>≥ 300s (5 min) for customers</td></tr>
+              <tr><td><code>pro</code></td><td>$49</td><td>10</td><td>≥ 300s</td></tr>
+              <tr><td><code>business</code></td><td>$99</td><td>30</td><td>≥ 300s</td></tr>
+              <tr><td><code>super_admin</code></td><td>—</td><td>unlimited</td><td>≥ 60s allowed</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Creating a monitor beyond the plan limit returns <strong>402</strong> <code>monitor_plan_limit_reached</code>. New workspaces start on <code>starter</code> until billing webhooks update the plan.</p>
+      </section>
+
+      <section id="endpoints">
+        <h2>Endpoints</h2>
+        <p>Grouped by surface. Path parameters are shown as <code>{workspaceId}</code>, <code>{monitorId}</code>, etc.</p>
+      </section>
+
+      <!-- HEALTH -->
+      <section id="health" class="endpoint-group">
+        <h3>Health &amp; sources</h3>
+
+        <article class="endpoint" id="get-health">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/health</code>
+            <span class="badge public">public</span>
+          </div>
+          <p>Liveness probe for the API Worker.</p>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "service": "api",
+  "status": "ok",
+  "environment": "production",
+  "requestId": "…"
+}</code></pre>
+        </article>
+
+        <article class="endpoint" id="get-source-health">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/source-health</code>
+            <span class="badge public">public</span>
+          </div>
+          <p>Availability matrix for discovery adapters. Contract-required social sources stay honest when credentials are absent — never fabricated as fully available.</p>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "sources": [
+    {
+      "source": "brave_web",
+      "availability": "licensed-provider",
+      "capabilities": { "keywordSearch": true, "booleanSearch": true }
+    },
+    {
+      "source": "reddit",
+      "availability": "contract-required",
+      "capabilities": { "keywordSearch": false, "booleanSearch": false }
+    }
+  ]
+}</code></pre>
+        </article>
+
+        <article class="endpoint" id="post-queries-validate">
+          <div class="endpoint-head">
+            <span class="method post">POST</span>
+            <code class="path">/v1/queries/validate</code>
+            <span class="badge public">public</span>
+          </div>
+          <p>Parse and normalize a Boolean query without persisting it. Supports Unicode / Vietnamese phrases.</p>
+          <h4>Body</h4>
+          <pre class="code-block" data-lang="json"><code>{ "rawQuery": "\"Acme\" AND NOT \"Acme School\"" }</code></pre>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "valid": true,
+  "normalizedQuery": "…",
+  "ast": { "type": "AND", "…" : "…" }
+}</code></pre>
+          <p>Invalid syntax → <strong>400</strong> with parser message.</p>
+        </article>
+      </section>
+
+      <!-- AUTH -->
+      <section id="auth-endpoints" class="endpoint-group">
+        <h3>Auth</h3>
+
+        <article class="endpoint" id="post-signup">
+          <div class="endpoint-head">
+            <span class="method post">POST</span>
+            <code class="path">/v1/auth/signup</code>
+            <span class="badge public">public</span>
+          </div>
+          <p>Create user + starter workspace + session cookie.</p>
+          <h4>Body</h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "email": "owner@acme.example",
+  "password": "at-least-10-chars",
+  "workspaceName": "Acme Listening"
+}</code></pre>
+          <h4>Response <span class="status">201</span> + <code>Set-Cookie</code></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "user": { "id": "…", "email": "owner@acme.example", "globalRole": "user" },
+  "workspace": { "id": "…", "name": "Acme Listening", "role": "owner" }
+}</code></pre>
+        </article>
+
+        <article class="endpoint" id="post-login">
+          <div class="endpoint-head">
+            <span class="method post">POST</span>
+            <code class="path">/v1/auth/login</code>
+            <span class="badge public">public</span>
+          </div>
+          <h4>Body</h4>
+          <pre class="code-block" data-lang="json"><code>{ "email": "owner@acme.example", "password": "…" }</code></pre>
+          <h4>Response <span class="status">200</span> + <code>Set-Cookie</code></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "user": { "id": "…", "email": "owner@acme.example", "globalRole": "user" }
+}</code></pre>
+          <p>Bad password → <strong>401</strong> <code>invalid_credentials</code>.</p>
+        </article>
+
+        <article class="endpoint" id="post-logout">
+          <div class="endpoint-head">
+            <span class="method post">POST</span>
+            <code class="path">/v1/auth/logout</code>
+            <span class="badge auth">session</span>
+          </div>
+          <p>Revokes the current session server-side and clears the cookie.</p>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{ "ok": true }</code></pre>
+        </article>
+
+        <article class="endpoint" id="get-me">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/me</code>
+            <span class="badge auth">session</span>
+          </div>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "user": {
+    "id": "…",
+    "email": "owner@acme.example",
+    "globalRole": "user"
+  }
+}</code></pre>
+        </article>
+      </section>
+
+      <!-- WORKSPACES -->
+      <section id="workspaces" class="endpoint-group">
+        <h3>Workspaces</h3>
+
+        <article class="endpoint" id="get-workspaces">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/workspaces</code>
+            <span class="badge auth">session</span>
+          </div>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "memberships": [
+    { "workspaceId": "…", "workspaceName": "Acme Listening", "role": "owner" }
+  ]
+}</code></pre>
+        </article>
+
+        <article class="endpoint" id="post-workspaces">
+          <div class="endpoint-head">
+            <span class="method post">POST</span>
+            <code class="path">/v1/workspaces</code>
+            <span class="badge auth">session</span>
+          </div>
+          <h4>Body</h4>
+          <pre class="code-block" data-lang="json"><code>{ "name": "Second brand" }</code></pre>
+          <h4>Response <span class="status">201</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "workspace": { "id": "…", "name": "Second brand", "role": "owner" }
+}</code></pre>
+        </article>
+
+        <article class="endpoint" id="get-workspace">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/workspaces/{workspaceId}</code>
+            <span class="badge cap">workspace.read</span>
+          </div>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "workspace": {
+    "id": "…",
+    "name": "Acme Listening",
+    "plan": "starter",
+    "status": "active"
+  }
+}</code></pre>
+        </article>
+      </section>
+
+      <!-- MONITORS -->
+      <section id="monitors" class="endpoint-group">
+        <h3>Monitors</h3>
+
+        <article class="endpoint" id="get-monitors">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors</code>
+            <span class="badge cap">monitor.read</span>
+          </div>
+          <p>Directory listing. Prefer <code>monitor_id</code> or <code>id</code> when calling nested routes.</p>
+        </article>
+
+        <article class="endpoint" id="post-monitors">
+          <div class="endpoint-head">
+            <span class="method post">POST</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors</code>
+            <span class="badge cap">monitor.create</span>
+          </div>
+          <h4>Body</h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "name": "Acme Company",
+  "type": "company",
+  "scanIntervalSec": 900,
+  "alertThreshold": 60,
+  "defaultLanguage": "vi",
+  "priority": "normal"
+}</code></pre>
+          <p><code>type</code> ∈ <code>person</code> | <code>company</code> | <code>brand</code> | <code>product</code>. Over plan limit → <strong>402</strong>.</p>
+          <h4>Response <span class="status">201</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "monitor": {
+    "id": "…",
+    "tenantId": "…",
+    "name": "Acme Company",
+    "type": "company",
+    "status": "active",
+    "scanIntervalSec": 900
+  }
+}</code></pre>
+        </article>
+
+        <article class="endpoint" id="get-monitor">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}</code>
+            <span class="badge cap">monitor.read</span>
+          </div>
+        </article>
+
+        <article class="endpoint" id="patch-monitor">
+          <div class="endpoint-head">
+            <span class="method patch">PATCH</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}</code>
+            <span class="badge cap">monitor.update</span>
+          </div>
+          <p>Partial update. Pausing/archiving removes the monitor from scheduler shards; reactivating upserts it again.</p>
+        </article>
+
+        <article class="endpoint" id="delete-monitor">
+          <div class="endpoint-head">
+            <span class="method delete">DELETE</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}</code>
+            <span class="badge cap">monitor.delete</span>
+          </div>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{ "ok": true }</code></pre>
+        </article>
+      </section>
+
+      <!-- QUERIES -->
+      <section id="queries" class="endpoint-group">
+        <h3>Queries</h3>
+        <p>Boolean queries are stored per monitor. Syntax is validated before write; AST + normalized form are persisted for deterministic re-evaluation after fetch.</p>
+
+        <article class="endpoint" id="get-queries">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}/queries</code>
+            <span class="badge cap">query.read</span>
+          </div>
+        </article>
+
+        <article class="endpoint" id="post-queries">
+          <div class="endpoint-head">
+            <span class="method post">POST</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}/queries</code>
+            <span class="badge cap">query.create</span>
+          </div>
+          <h4>Body</h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "rawQuery": "\"Acme\" AND (scandal OR kiện) AND NOT \"Acme School\"",
+  "enabled": true
+}</code></pre>
+          <h4>Response <span class="status">201</span></h4>
+        </article>
+
+        <article class="endpoint" id="patch-query">
+          <div class="endpoint-head">
+            <span class="method patch">PATCH</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}/queries/{queryId}</code>
+            <span class="badge cap">query.update</span>
+          </div>
+        </article>
+
+        <article class="endpoint" id="delete-query">
+          <div class="endpoint-head">
+            <span class="method delete">DELETE</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}/queries/{queryId}</code>
+            <span class="badge cap">query.delete</span>
+          </div>
+        </article>
+      </section>
+
+      <!-- MENTIONS -->
+      <section id="mentions" class="endpoint-group">
+        <h3>Mentions</h3>
+
+        <article class="endpoint" id="get-mentions">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}/mentions</code>
+            <span class="badge cap">monitor.read</span>
+          </div>
+          <h4>Query parameters</h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Param</th><th>Type</th><th>Description</th></tr></thead>
+              <tbody>
+                <tr><td><code>limit</code></td><td>number</td><td>Max rows (server-capped)</td></tr>
+                <tr><td><code>sentiment</code></td><td>string</td><td><code>negative</code> | <code>neutral</code> | <code>positive</code></td></tr>
+                <tr><td><code>minSeverity</code></td><td>number</td><td>Minimum severity score (0–100)</td></tr>
+                <tr><td><code>source</code></td><td>string</td><td>Source key filter (e.g. <code>news</code>, <code>reddit</code>)</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "mentions": [
+    {
+      "id": "…",
+      "source": "news",
+      "title": "…",
+      "excerpt": "…",
+      "canonical_url": "https://…",
+      "sentiment": "negative",
+      "severity_score": 72,
+      "relevance_score": 0.91
+    }
+  ]
+}</code></pre>
+        </article>
+
+        <article class="endpoint" id="get-mention">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}/mentions/{mentionId}</code>
+            <span class="badge cap">monitor.read</span>
+          </div>
+        </article>
+
+        <article class="endpoint" id="post-feedback">
+          <div class="endpoint-head">
+            <span class="method post">POST</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}/mentions/{mentionId}/feedback</code>
+            <span class="badge cap">monitor.update</span>
+          </div>
+          <p>Auditable label for future rule/threshold evaluation — not an uncontrolled online-train loop.</p>
+          <h4>Body</h4>
+          <pre class="code-block" data-lang="json"><code>{ "action": "relevant" }</code></pre>
+          <p><code>action</code> ∈ <code>relevant</code> | <code>not_relevant</code> | <code>wrong_sentiment</code> | <code>resolved</code> | <code>flagged</code>.</p>
+        </article>
+      </section>
+
+      <!-- ALERTS -->
+      <section id="alerts" class="endpoint-group">
+        <h3>Alerts</h3>
+
+        <article class="endpoint" id="get-alerts">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}/alerts</code>
+            <span class="badge cap">monitor.read</span>
+          </div>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "alerts": [
+    {
+      "id": "…",
+      "type": "severity",
+      "severity": "high",
+      "state": "pending",
+      "reason": "…"
+    }
+  ]
+}</code></pre>
+        </article>
+
+        <article class="endpoint" id="patch-alert">
+          <div class="endpoint-head">
+            <span class="method patch">PATCH</span>
+            <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}/alerts/{alertId}</code>
+            <span class="badge cap">monitor.update</span>
+          </div>
+          <h4>Body</h4>
+          <pre class="code-block" data-lang="json"><code>{ "state": "acknowledged" }</code></pre>
+          <p>Typical states: <code>pending</code> → <code>acknowledged</code> → <code>resolved</code>. Delivery receipts are stored per channel; already-sent channels are skipped on retry.</p>
+        </article>
+      </section>
+
+      <!-- BILLING -->
+      <section id="billing" class="endpoint-group">
+        <h3>Billing</h3>
+
+        <article class="endpoint" id="post-checkout">
+          <div class="endpoint-head">
+            <span class="method post">POST</span>
+            <code class="path">/v1/workspaces/{workspaceId}/billing/checkout</code>
+            <span class="badge cap">owner/admin</span>
+          </div>
+          <h4>Body</h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "plan": "pro",
+  "successUrl": "https://reputation.orangecloud.vn/?billing=success",
+  "cancelUrl": "https://reputation.orangecloud.vn/?billing=cancel"
+}</code></pre>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "provider": "stub",
+  "checkout": {
+    "checkoutUrl": "https://billing.stub.local/checkout?…",
+    "providerRef": "…"
+  }
+}</code></pre>
+          <p>Viewers receive <strong>403</strong>.</p>
+        </article>
+
+        <article class="endpoint" id="post-billing-webhook">
+          <div class="endpoint-head">
+            <span class="method post">POST</span>
+            <code class="path">/v1/billing/webhook</code>
+            <span class="badge public">signed</span>
+          </div>
+          <p>Provider webhook. Verified with <code>BILLING_WEBHOOK_SECRET</code>. Updates tenant plan and writes an idempotent event key in <code>CONFIG_KV</code>.</p>
+          <h4>Response <span class="status">200</span></h4>
+          <pre class="code-block" data-lang="json"><code>{
+  "ok": true,
+  "duplicate": false,
+  "eventId": "…",
+  "plan": "pro"
+}</code></pre>
+        </article>
+      </section>
+
+      <!-- ADMIN -->
+      <section id="admin" class="endpoint-group">
+        <h3>Admin</h3>
+        <p>Requires <code>globalRole: "super_admin"</code>. Never expose a public signup path into this role.</p>
+
+        <article class="endpoint" id="get-admin-tenants">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/admin/tenants</code>
+            <span class="badge admin">super_admin</span>
+          </div>
+          <p>Lists tenant registry entries from <code>CONFIG_KV</code> keys written on workspace create.</p>
+        </article>
+
+        <article class="endpoint" id="get-admin-source-health">
+          <div class="endpoint-head">
+            <span class="method get">GET</span>
+            <code class="path">/v1/admin/source-health</code>
+            <span class="badge admin">super_admin</span>
+          </div>
+          <p>Platform source-health snapshot (same shape as public source-health; gated for ops consoles).</p>
+        </article>
+      </section>
+
+      <section id="boolean">
+        <h2>Boolean query language</h2>
+        <ul>
+          <li>Operators: <code>AND</code>, <code>OR</code>, <code>NOT</code> (precedence <code>NOT</code> &gt; <code>AND</code> &gt; <code>OR</code>)</li>
+          <li>Implicit AND between adjacent terms</li>
+          <li>Quoted phrases for exact match, including Vietnamese Unicode</li>
+          <li>Parentheses for grouping</li>
+          <li>Validate with <a href="#post-queries-validate"><code>POST /v1/queries/validate</code></a> before create</li>
+        </ul>
+        <pre class="code-block" data-lang="text"><code>"Công ty Acme" AND (kiện OR scandal) AND NOT "Acme School"</code></pre>
+        <p>After crawl/fetch, queries are re-evaluated against extracted text — discovery candidates alone are not trusted for final match.</p>
+      </section>
+
+      <section id="changelog">
+        <h2>Versioning</h2>
+        <p>All product routes live under <code>/v1</code>. Breaking changes ship as a new major prefix. Additive fields may appear in existing responses without a version bump. Prefer tolerant clients.</p>
+        <p class="doc-foot">Generated for the PulseWatch Cloudflare Workers control plane. Internal Durable Object paths (<code>/internal/*</code>) are not part of the public contract.</p>
+      </section>
+    </article>
+  </div>
+
+  <footer class="site-footer">
+    <div>
+      <span class="brand">PulseWatch</span>
+      <span>API reference</span>
+    </div>
+    <a href="/">Return to app</a>
+  </footer>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script type="module" src="/api.js"></script>
+</body>
+</html>
