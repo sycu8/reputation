@@ -10,7 +10,8 @@
       { "name": "MONITOR_DO", "class_name": "MonitorDO" },
       { "name": "TENANT_BUDGET", "class_name": "TenantBudgetDO" },
       { "name": "DOMAIN_DO", "class_name": "DomainCoordinatorDO" },
-      { "name": "BROWSER_POOL_DO", "class_name": "BrowserPoolDO" }
+      { "name": "BROWSER_POOL_DO", "class_name": "BrowserPoolDO" },
+      { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO" }
     ]
   },
   "migrations": [
@@ -24,6 +25,10 @@
         "DomainCoordinatorDO",
         "BrowserPoolDO"
       ]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["SchedulerShardDO"]
     }
   ],
   "env": {

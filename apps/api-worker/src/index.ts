@@ -1,6 +1,7 @@
 import { hasCapability, isSuperAdminEmail, type Capability } from "../../../packages/auth/src/index.ts";
 import { normalizeBooleanQuery, parseBooleanQuery } from "../../../packages/boolean-query/src/index.ts";
 import { monitorLimitFor } from "../../../packages/auth/src/entitlements.ts";
+import { schedulerShardIndex } from "../../../packages/crawler-core/src/index.ts";
 import type { AuthContext, GlobalRole, MonitorType, WorkspaceRole } from "../../../packages/types/src/index.ts";
 import { structuredLog } from "../../../packages/observability/src/index.ts";
 
@@ -8,6 +9,7 @@ interface Env {
   USER_DIRECTORY: DurableObjectNamespace;
   TENANT_DIRECTORY: DurableObjectNamespace;
   MONITOR_DO: DurableObjectNamespace;
+  SCHEDULER_SHARD: DurableObjectNamespace;
   CONFIG_KV: KVNamespace;
   RAW_CONTENT: R2Bucket;
   ANALYTICS?: AnalyticsEngineDataset;
@@ -91,6 +93,42 @@ function tenantStub(env: Env, tenantId: string): DurableObjectStub {
 
 function monitorStub(env: Env, tenantId: string, monitorId: string): DurableObjectStub {
   return env.MONITOR_DO.get(env.MONITOR_DO.idFromName(`${tenantId}:${monitorId}`));
+}
+
+async function schedulerShard(env: Env, tenantId: string): Promise<DurableObjectStub> {
+  const index = await schedulerShardIndex(tenantId);
+  return env.SCHEDULER_SHARD.get(env.SCHEDULER_SHARD.idFromName(`scheduler-shard:${index}`));
+}
+
+async function upsertSchedulerMonitor(
+  env: Env,
+  input: {
+    tenantId: string;
+    monitorId: string;
+    priority?: string;
+    status: string;
+    nextScanAt?: string;
+    scanIntervalSec?: number;
+  }
+): Promise<void> {
+  await doJson(await schedulerShard(env, input.tenantId), "/internal/upsert", {
+    method: "POST",
+    body: JSON.stringify({
+      tenantId: input.tenantId,
+      monitorId: input.monitorId,
+      priority: input.priority ?? "normal",
+      status: input.status,
+      nextScanAt: input.nextScanAt,
+      scanIntervalSec: input.scanIntervalSec
+    })
+  });
+}
+
+async function removeSchedulerMonitor(env: Env, tenantId: string, monitorId: string): Promise<void> {
+  await doJson(await schedulerShard(env, tenantId), "/internal/remove", {
+    method: "POST",
+    body: JSON.stringify({ tenantId, monitorId })
+  });
 }
 
 async function doJson<T>(stub: DurableObjectStub, path: string, init?: RequestInit): Promise<T> {
@@ -262,15 +300,25 @@ async function createMonitor(request: Request, auth: AuthContext, env: Env, work
   const scanIntervalSec = auth.globalRole === "super_admin" ? Math.max(60, Math.floor(requestedInterval)) : Math.max(300, Math.floor(requestedInterval));
   const alertThreshold = typeof body.alertThreshold === "number" ? body.alertThreshold : 60;
   const defaultLanguage = typeof body.defaultLanguage === "string" ? body.defaultLanguage : "vi";
+  const priority = typeof body.priority === "string" && body.priority.trim() ? body.priority.trim() : "normal";
+  const nextScanAt = new Date().toISOString();
 
   await doJson(tenantStub(env, workspaceId), "/internal/monitors", {
     method: "POST",
-    body: JSON.stringify({ actorUserId: auth.userId, monitorId, name, type, status: "active" })
+    body: JSON.stringify({ actorUserId: auth.userId, monitorId, name, type, status: "active", priority, nextScanAt })
   });
   try {
     const data = await doJson(monitorStub(env, workspaceId, monitorId), "/internal/init", {
       method: "POST",
-      body: JSON.stringify({ id: monitorId, tenantId: workspaceId, name, type, scanIntervalSec, alertThreshold, defaultLanguage })
+      body: JSON.stringify({ id: monitorId, tenantId: workspaceId, name, type, scanIntervalSec, alertThreshold, defaultLanguage, nextScanAt })
+    });
+    await upsertSchedulerMonitor(env, {
+      tenantId: workspaceId,
+      monitorId,
+      priority,
+      status: "active",
+      nextScanAt,
+      scanIntervalSec
     });
     return json(data, 201);
   } catch (error) {
@@ -278,6 +326,11 @@ async function createMonitor(request: Request, auth: AuthContext, env: Env, work
       method: "DELETE",
       body: JSON.stringify({ actorUserId: auth.userId })
     });
+    try {
+      await removeSchedulerMonitor(env, workspaceId, monitorId);
+    } catch {
+      // best-effort cleanup if init failed before/after shard upsert
+    }
     throw error;
   }
 }
@@ -291,14 +344,47 @@ async function getMonitor(auth: AuthContext, env: Env, workspaceId: string, moni
 async function updateMonitor(request: Request, auth: AuthContext, env: Env, workspaceId: string, monitorId: string): Promise<Response> {
   await requireWorkspaceCapability(env, auth, workspaceId, "monitor.update");
   const body = await readJson(request);
-  const updated = await doJson<{ monitor: { name: string; type: string; status: string } }>(monitorStub(env, workspaceId, monitorId), "/internal/monitor", {
+  const updated = await doJson<{
+    monitor: {
+      name: string;
+      type: string;
+      status: string;
+      scanIntervalSec: number;
+      nextScanAt: string | null;
+    };
+  }>(monitorStub(env, workspaceId, monitorId), "/internal/monitor", {
     method: "PATCH",
     body: JSON.stringify(body)
   });
+  const priority = typeof body.priority === "string" && body.priority.trim() ? body.priority.trim() : undefined;
   await doJson(tenantStub(env, workspaceId), `/internal/monitors/${monitorId}`, {
     method: "PATCH",
-    body: JSON.stringify({ actorUserId: auth.userId, name: updated.monitor.name, type: updated.monitor.type, status: updated.monitor.status })
+    body: JSON.stringify({
+      actorUserId: auth.userId,
+      name: updated.monitor.name,
+      type: updated.monitor.type,
+      status: updated.monitor.status,
+      ...(priority ? { priority } : {}),
+      nextScanAt: updated.monitor.nextScanAt
+    })
   });
+  if (updated.monitor.status === "paused" || updated.monitor.status === "archived") {
+    await removeSchedulerMonitor(env, workspaceId, monitorId);
+  } else {
+    const directory = await doJson<{ monitors: Array<{ monitor_id?: string; priority?: string }> }>(
+      tenantStub(env, workspaceId),
+      "/internal/monitors"
+    );
+    const entry = directory.monitors.find((item) => item.monitor_id === monitorId);
+    await upsertSchedulerMonitor(env, {
+      tenantId: workspaceId,
+      monitorId,
+      priority: priority ?? entry?.priority ?? "normal",
+      status: "active",
+      nextScanAt: updated.monitor.nextScanAt ?? new Date().toISOString(),
+      scanIntervalSec: updated.monitor.scanIntervalSec
+    });
+  }
   return json(updated);
 }
 
@@ -309,6 +395,7 @@ async function deleteMonitor(auth: AuthContext, env: Env, workspaceId: string, m
     method: "DELETE",
     body: JSON.stringify({ actorUserId: auth.userId })
   });
+  await removeSchedulerMonitor(env, workspaceId, monitorId);
   return json({ ok: true });
 }
 

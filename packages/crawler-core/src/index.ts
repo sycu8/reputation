@@ -72,3 +72,45 @@ export function boundedRetryDelayMs(attempt: number, baseMs = 500, capMs = 30_00
   const jitter = Math.floor(exponential * 0.2 * Math.random());
   return exponential + jitter;
 }
+
+export const DEFAULT_SCHEDULER_SHARD_COUNT = 64;
+
+/** Stable shard index for a tenant: SHA-256(tenantId) as big-endian uint32 mod shardCount. */
+export async function schedulerShardIndex(tenantId: string, shardCount = DEFAULT_SCHEDULER_SHARD_COUNT): Promise<number> {
+  if (!Number.isInteger(shardCount) || shardCount <= 0) throw new Error("invalid_shard_count");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(tenantId));
+  const bytes = new Uint8Array(digest);
+  const value = ((bytes[0]! << 24) | (bytes[1]! << 16) | (bytes[2]! << 8) | bytes[3]!) >>> 0;
+  return value % shardCount;
+}
+
+export interface ClaimableMonitorRow {
+  status: string;
+  nextScanAt: string;
+  claimedUntil: string | null;
+}
+
+/** True when status=active, next_scan_at <= now, and lease is absent or expired (claimed_until < now). */
+export function isClaimable(row: ClaimableMonitorRow, nowIso: string): boolean {
+  const nowMs = Date.parse(nowIso);
+  if (!Number.isFinite(nowMs)) return false;
+  if (row.status !== "active") return false;
+  const nextMs = Date.parse(row.nextScanAt);
+  if (!Number.isFinite(nextMs) || nextMs > nowMs) return false;
+  if (row.claimedUntil == null) return true;
+  const claimedMs = Date.parse(row.claimedUntil);
+  if (!Number.isFinite(claimedMs)) return true;
+  return claimedMs < nowMs;
+}
+
+/** Advance schedule from max(nextScanAt, now) by scanIntervalSec. */
+export function advanceNextScanAt(nextScanAt: string, scanIntervalSec: number, nowIso: string): string {
+  const intervalMs = Math.max(1, Math.floor(scanIntervalSec)) * 1000;
+  const base = Math.max(Date.parse(nextScanAt) || 0, Date.parse(nowIso) || Date.now());
+  return new Date(base + intervalMs).toISOString();
+}
+
+export function claimLeaseUntil(nowIso: string, leaseSec: number): string {
+  const leaseMs = Math.max(1, Math.floor(leaseSec)) * 1000;
+  return new Date((Date.parse(nowIso) || Date.now()) + leaseMs).toISOString();
+}

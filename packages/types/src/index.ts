@@ -27,6 +27,8 @@ export interface MonitorRecord {
   defaultLanguage: string | null;
   scanIntervalSec: number;
   alertThreshold: number;
+  nextScanAt: string | null;
+  lastScanAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

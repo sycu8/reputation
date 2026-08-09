@@ -6,10 +6,49 @@
   "vars": { "ENVIRONMENT": "development" },
   "triggers": { "crons": ["* * * * *"] },
   "kv_namespaces": [{ "binding": "CONFIG_KV", "id": "00000000000000000000000000000001" }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-dev" }
+    ]
+  },
   "queues": {
     "producers": [
       { "binding": "DISCOVERY_NORMAL", "queue": "reputa-discovery-normal-dev" },
       { "binding": "DISCOVERY_PRIORITY", "queue": "reputa-discovery-priority-dev" }
     ]
+  },
+  "env": {
+    "staging": {
+      "name": "reputa-scheduler-staging",
+      "vars": { "ENVIRONMENT": "staging" },
+      "durable_objects": {
+        "bindings": [
+          { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-staging" }
+        ]
+      },
+      "kv_namespaces": [{ "binding": "CONFIG_KV", "id": "00000000000000000000000000000011" }],
+      "queues": {
+        "producers": [
+          { "binding": "DISCOVERY_NORMAL", "queue": "reputa-discovery-normal-staging" },
+          { "binding": "DISCOVERY_PRIORITY", "queue": "reputa-discovery-priority-staging" }
+        ]
+      }
+    },
+    "production": {
+      "name": "reputa-scheduler-production",
+      "vars": { "ENVIRONMENT": "production" },
+      "durable_objects": {
+        "bindings": [
+          { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-production" }
+        ]
+      },
+      "kv_namespaces": [{ "binding": "CONFIG_KV", "id": "00000000000000000000000000000021" }],
+      "queues": {
+        "producers": [
+          { "binding": "DISCOVERY_NORMAL", "queue": "reputa-discovery-normal-production" },
+          { "binding": "DISCOVERY_PRIORITY", "queue": "reputa-discovery-priority-production" }
+        ]
+      }
+    }
   }
 }

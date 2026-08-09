@@ -12,7 +12,8 @@
     "bindings": [
       { "name": "USER_DIRECTORY", "class_name": "UserDirectoryDO", "script_name": "reputa-state-dev" },
       { "name": "TENANT_DIRECTORY", "class_name": "TenantDirectoryDO", "script_name": "reputa-state-dev" },
-      { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-dev" }
+      { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-dev" },
+      { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-dev" }
     ]
   },
   "kv_namespaces": [
@@ -32,7 +33,8 @@
         "bindings": [
           { "name": "USER_DIRECTORY", "class_name": "UserDirectoryDO", "script_name": "reputa-state-staging" },
           { "name": "TENANT_DIRECTORY", "class_name": "TenantDirectoryDO", "script_name": "reputa-state-staging" },
-          { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-staging" }
+          { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-staging" },
+          { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-staging" }
         ]
       },
       "kv_namespaces": [{ "binding": "CONFIG_KV", "id": "00000000000000000000000000000011" }],
@@ -46,7 +48,8 @@
         "bindings": [
           { "name": "USER_DIRECTORY", "class_name": "UserDirectoryDO", "script_name": "reputa-state-production" },
           { "name": "TENANT_DIRECTORY", "class_name": "TenantDirectoryDO", "script_name": "reputa-state-production" },
-          { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-production" }
+          { "name": "MONITOR_DO", "class_name": "MonitorDO", "script_name": "reputa-state-production" },
+          { "name": "SCHEDULER_SHARD", "class_name": "SchedulerShardDO", "script_name": "reputa-state-production" }
         ]
       },
       "kv_namespaces": [{ "binding": "CONFIG_KV", "id": "00000000000000000000000000000021" }],

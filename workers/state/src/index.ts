@@ -1,6 +1,18 @@
+import { advanceNextScanAt, claimLeaseUntil, isClaimable } from "../../../packages/crawler-core/src/index.ts";
 import type { GlobalRole, MonitorRecord, MonitorStatus, MonitorType, QueryRecord, WorkspaceRole } from "../../../packages/types/src/index.ts";
 
 interface Env {}
+
+function hasColumn(sql: SqlStorage, table: string, column: string): boolean {
+  const cols = rows(sql.exec<{ name: string }>(`PRAGMA table_info(${table})`));
+  return cols.some((item) => item.name === column);
+}
+
+function ensureColumn(sql: SqlStorage, table: string, column: string, definition: string): void {
+  if (!hasColumn(sql, table, column)) {
+    sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
 
 type Json = Record<string, unknown>;
 
@@ -357,27 +369,38 @@ export class TenantDirectoryDO extends SqliteObject {
     const name = asString(body.name, "monitor_name");
     const type = asString(body.type, "monitor_type");
     const status = body.status === "paused" ? "paused" : "active";
+    const priority = typeof body.priority === "string" && body.priority.trim() ? body.priority.trim() : "normal";
+    const nextScanAt = typeof body.nextScanAt === "string" && body.nextScanAt.trim() ? body.nextScanAt.trim() : null;
     const ts = nowIso();
     this.sql.exec(
       `INSERT INTO monitor_directory(monitor_id,name,type,status,priority,next_scan_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
-      monitorId, name, type, status, "normal", null, ts, ts
+      monitorId, name, type, status, priority, nextScanAt, ts, ts
     );
-    this.audit(actorUserId, "monitor.create", "monitor", monitorId, { name, type });
+    this.audit(actorUserId, "monitor.create", "monitor", monitorId, { name, type, nextScanAt });
     return json({ ok: true }, 201);
   }
 
   private async updateMonitorEntry(request: Request, monitorId: string): Promise<Response> {
     const body = await readJson(request);
     const actorUserId = asString(body.actorUserId, "actor_user_id");
-    const current = rows(this.sql.exec<{ name: string; type: string; status: string }>(
-      `SELECT name,type,status FROM monitor_directory WHERE monitor_id = ? LIMIT 1`, monitorId
+    const current = rows(this.sql.exec<{ name: string; type: string; status: string; priority: string; next_scan_at: string | null }>(
+      `SELECT name,type,status,priority,next_scan_at FROM monitor_directory WHERE monitor_id = ? LIMIT 1`, monitorId
     ))[0];
     if (!current) return json({ error: "monitor_not_found" }, 404);
     const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : current.name;
     const type = typeof body.type === "string" && body.type.trim() ? body.type.trim() : current.type;
     const status = body.status === "paused" || body.status === "archived" || body.status === "active" ? body.status : current.status;
-    this.sql.exec(`UPDATE monitor_directory SET name=?,type=?,status=?,updated_at=? WHERE monitor_id=?`, name, type, status, nowIso(), monitorId);
-    this.audit(actorUserId, "monitor.update", "monitor", monitorId, { name, type, status });
+    const priority = typeof body.priority === "string" && body.priority.trim() ? body.priority.trim() : current.priority;
+    const nextScanAt = typeof body.nextScanAt === "string" && body.nextScanAt.trim()
+      ? body.nextScanAt.trim()
+      : body.nextScanAt === null
+        ? null
+        : current.next_scan_at;
+    this.sql.exec(
+      `UPDATE monitor_directory SET name=?,type=?,status=?,priority=?,next_scan_at=?,updated_at=? WHERE monitor_id=?`,
+      name, type, status, priority, nextScanAt, nowIso(), monitorId
+    );
+    this.audit(actorUserId, "monitor.update", "monitor", monitorId, { name, type, status, priority, nextScanAt });
     return json({ ok: true });
   }
 
@@ -415,8 +438,11 @@ export class MonitorDO extends SqliteObject {
     this.sql.exec(`CREATE TABLE IF NOT EXISTS monitor (
       id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, status TEXT NOT NULL,
       default_language TEXT, scan_interval_sec INTEGER NOT NULL, alert_threshold INTEGER NOT NULL DEFAULT 60,
+      next_scan_at TEXT, last_scan_at TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     )`);
+    ensureColumn(this.sql, "monitor", "next_scan_at", "TEXT");
+    ensureColumn(this.sql, "monitor", "last_scan_at", "TEXT");
     this.sql.exec(`CREATE TABLE IF NOT EXISTS queries (
       id TEXT PRIMARY KEY, raw_query TEXT NOT NULL, normalized_query TEXT NOT NULL, ast_json TEXT NOT NULL,
       enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
@@ -444,7 +470,7 @@ export class MonitorDO extends SqliteObject {
       id TEXT PRIMARY KEY, mention_id TEXT, type TEXT NOT NULL, severity TEXT NOT NULL, state TEXT NOT NULL,
       dedupe_key TEXT NOT NULL UNIQUE, reason TEXT, created_at TEXT NOT NULL, sent_at TEXT, acknowledged_at TEXT, resolved_at TEXT
     )`);
-    this.sql.exec(`INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('version', '2')`);
+    this.sql.exec(`INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('version', '3')`);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -469,6 +495,7 @@ export class MonitorDO extends SqliteObject {
       if (request.method === "POST" && url.pathname === "/internal/alerts/upsert") return await this.upsertAlert(request);
       if (request.method === "GET" && url.pathname === "/internal/alerts") return this.listAlerts();
       if (request.method === "PATCH" && url.pathname.startsWith("/internal/alerts/")) return await this.patchAlert(request, url.pathname.split("/").pop() ?? "");
+      if (request.method === "POST" && url.pathname === "/internal/schedule/claim-advance") return await this.claimAdvance(request);
       return json({ error: "not_found" }, 404);
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
@@ -486,10 +513,11 @@ export class MonitorDO extends SqliteObject {
     const scanIntervalSec = typeof body.scanIntervalSec === "number" ? Math.max(300, Math.floor(body.scanIntervalSec)) : 900;
     const alertThreshold = typeof body.alertThreshold === "number" ? Math.min(100, Math.max(0, Math.floor(body.alertThreshold))) : 60;
     const ts = nowIso();
+    const nextScanAt = typeof body.nextScanAt === "string" && body.nextScanAt.trim() ? body.nextScanAt.trim() : ts;
     this.sql.exec(
-      `INSERT OR IGNORE INTO monitor(id,tenant_id,name,type,status,default_language,scan_interval_sec,alert_threshold,created_at,updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?)`,
-      id, tenantId, name, type, "active", defaultLanguage, scanIntervalSec, alertThreshold, ts, ts
+      `INSERT OR IGNORE INTO monitor(id,tenant_id,name,type,status,default_language,scan_interval_sec,alert_threshold,next_scan_at,last_scan_at,created_at,updated_at)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+      id, tenantId, name, type, "active", defaultLanguage, scanIntervalSec, alertThreshold, nextScanAt, null, ts, ts
     );
     return this.getMonitor();
   }
@@ -497,7 +525,8 @@ export class MonitorDO extends SqliteObject {
   private getMonitor(): Response {
     const item = rows(this.sql.exec<{
       id: string; tenant_id: string; name: string; type: MonitorType; status: MonitorStatus;
-      default_language: string | null; scan_interval_sec: number; alert_threshold: number; created_at: string; updated_at: string;
+      default_language: string | null; scan_interval_sec: number; alert_threshold: number;
+      next_scan_at: string | null; last_scan_at: string | null; created_at: string; updated_at: string;
     }>(`SELECT * FROM monitor LIMIT 1`))[0];
     if (!item) return json({ error: "monitor_not_found" }, 404);
     const monitor: MonitorRecord = {
@@ -509,6 +538,8 @@ export class MonitorDO extends SqliteObject {
       defaultLanguage: item.default_language,
       scanIntervalSec: item.scan_interval_sec,
       alertThreshold: item.alert_threshold,
+      nextScanAt: item.next_scan_at ?? null,
+      lastScanAt: item.last_scan_at ?? null,
       createdAt: item.created_at,
       updatedAt: item.updated_at
     };
@@ -527,9 +558,29 @@ export class MonitorDO extends SqliteObject {
     const defaultLanguage = typeof body.defaultLanguage === "string" ? body.defaultLanguage : current.defaultLanguage;
     const scanIntervalSec = typeof body.scanIntervalSec === "number" ? Math.max(300, Math.floor(body.scanIntervalSec)) : current.scanIntervalSec;
     const alertThreshold = typeof body.alertThreshold === "number" ? Math.min(100, Math.max(0, Math.floor(body.alertThreshold))) : current.alertThreshold;
+    const nextScanAt = typeof body.nextScanAt === "string" && body.nextScanAt.trim()
+      ? body.nextScanAt.trim()
+      : body.nextScanAt === null
+        ? null
+        : current.nextScanAt;
     this.sql.exec(
-      `UPDATE monitor SET name=?,type=?,status=?,default_language=?,scan_interval_sec=?,alert_threshold=?,updated_at=? WHERE id=?`,
-      name, type, status, defaultLanguage, scanIntervalSec, alertThreshold, nowIso(), current.id
+      `UPDATE monitor SET name=?,type=?,status=?,default_language=?,scan_interval_sec=?,alert_threshold=?,next_scan_at=?,updated_at=? WHERE id=?`,
+      name, type, status, defaultLanguage, scanIntervalSec, alertThreshold, nextScanAt, nowIso(), current.id
+    );
+    return this.getMonitor();
+  }
+
+  private async claimAdvance(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const now = typeof body.now === "string" && body.now.trim() ? body.now.trim() : nowIso();
+    const currentResponse = this.getMonitor();
+    if (!currentResponse.ok) return currentResponse;
+    const parsed = (await currentResponse.json()) as { monitor: MonitorRecord };
+    const current = parsed.monitor;
+    const nextScanAt = advanceNextScanAt(current.nextScanAt ?? now, current.scanIntervalSec, now);
+    this.sql.exec(
+      `UPDATE monitor SET last_scan_at=?, next_scan_at=?, updated_at=? WHERE id=?`,
+      now, nextScanAt, nowIso(), current.id
     );
     return this.getMonitor();
   }
@@ -831,6 +882,155 @@ export class BrowserPoolDO extends SqliteObject {
       return json({ state: rows(this.sql.exec<Record<string, unknown>>(`SELECT * FROM pool_state WHERE key='global' LIMIT 1`))[0] });
     }
     return json({ error: "not_found" }, 404);
+  }
+}
+
+
+export class SchedulerShardDO extends SqliteObject {
+  constructor(state: DurableObjectState, env: Env) {
+    super(state, env);
+    this.ensureSchema();
+  }
+
+  private ensureSchema(): void {
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS due_monitors (
+      tenant_id TEXT NOT NULL,
+      monitor_id TEXT NOT NULL,
+      priority TEXT NOT NULL DEFAULT 'normal',
+      status TEXT NOT NULL DEFAULT 'active',
+      next_scan_at TEXT NOT NULL,
+      scan_interval_sec INTEGER NOT NULL DEFAULT 900,
+      claimed_until TEXT,
+      last_claimed_at TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (tenant_id, monitor_id)
+    )`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_due_monitors_next ON due_monitors(status, next_scan_at)`);
+    this.sql.exec(`INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('version', '1')`);
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    try {
+      if (request.method === "POST" && url.pathname === "/internal/upsert") return await this.upsert(request);
+      if (request.method === "POST" && url.pathname === "/internal/remove") return await this.remove(request);
+      if (request.method === "POST" && url.pathname === "/internal/claim") return await this.claim(request);
+      if (request.method === "GET" && url.pathname === "/internal/stats") return this.stats();
+      return json({ error: "not_found" }, 404);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "internal_error";
+      return json({ error: message }, message.startsWith("invalid_") ? 400 : 500);
+    }
+  }
+
+  private async upsert(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const tenantId = asString(body.tenantId, "tenant_id");
+    const monitorId = asString(body.monitorId, "monitor_id");
+    const priority = typeof body.priority === "string" && body.priority.trim() ? body.priority.trim() : "normal";
+    const status = typeof body.status === "string" && body.status.trim() ? body.status.trim() : "active";
+    const scanIntervalSec = typeof body.scanIntervalSec === "number"
+      ? Math.max(60, Math.floor(body.scanIntervalSec))
+      : 900;
+    const ts = nowIso();
+    const nextScanAt = typeof body.nextScanAt === "string" && body.nextScanAt.trim() ? body.nextScanAt.trim() : ts;
+    this.sql.exec(
+      `INSERT INTO due_monitors(tenant_id,monitor_id,priority,status,next_scan_at,scan_interval_sec,claimed_until,last_claimed_at,updated_at)
+       VALUES(?,?,?,?,?,?,NULL,NULL,?)
+       ON CONFLICT(tenant_id, monitor_id) DO UPDATE SET
+         priority=excluded.priority,
+         status=excluded.status,
+         next_scan_at=excluded.next_scan_at,
+         scan_interval_sec=excluded.scan_interval_sec,
+         updated_at=excluded.updated_at`,
+      tenantId, monitorId, priority, status, nextScanAt, scanIntervalSec, ts
+    );
+    return json({ ok: true });
+  }
+
+  private async remove(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const tenantId = asString(body.tenantId, "tenant_id");
+    const monitorId = asString(body.monitorId, "monitor_id");
+    this.sql.exec(`DELETE FROM due_monitors WHERE tenant_id=? AND monitor_id=?`, tenantId, monitorId);
+    return json({ ok: true });
+  }
+
+  private async claim(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const limit = typeof body.limit === "number" ? Math.max(1, Math.min(200, Math.floor(body.limit))) : 50;
+    const leaseSec = typeof body.leaseSec === "number" ? Math.max(15, Math.min(3600, Math.floor(body.leaseSec))) : 120;
+    const now = typeof body.now === "string" && body.now.trim() ? body.now.trim() : nowIso();
+    return this.state.storage.transaction(async () => {
+      const candidates = rows(this.sql.exec<{
+        tenant_id: string;
+        monitor_id: string;
+        priority: string;
+        status: string;
+        next_scan_at: string;
+        scan_interval_sec: number;
+        claimed_until: string | null;
+      }>(
+        `SELECT tenant_id,monitor_id,priority,status,next_scan_at,scan_interval_sec,claimed_until
+         FROM due_monitors
+         WHERE status = 'active' AND next_scan_at <= ?
+         ORDER BY next_scan_at ASC
+         LIMIT ?`,
+        now, limit * 4
+      ));
+      const claimed: Array<{
+        tenantId: string;
+        monitorId: string;
+        priority: string;
+        nextScanAt: string;
+        scanIntervalSec: number;
+        claimedUntil: string;
+      }> = [];
+      const claimedUntil = claimLeaseUntil(now, leaseSec);
+      for (const row of candidates) {
+        if (claimed.length >= limit) break;
+        if (!isClaimable({
+          status: row.status,
+          nextScanAt: row.next_scan_at,
+          claimedUntil: row.claimed_until
+        }, now)) continue;
+        const nextScanAt = advanceNextScanAt(row.next_scan_at, row.scan_interval_sec, now);
+        this.sql.exec(
+          `UPDATE due_monitors SET claimed_until=?, last_claimed_at=?, next_scan_at=?, updated_at=?
+           WHERE tenant_id=? AND monitor_id=?`,
+          claimedUntil, now, nextScanAt, nowIso(), row.tenant_id, row.monitor_id
+        );
+        claimed.push({
+          tenantId: row.tenant_id,
+          monitorId: row.monitor_id,
+          priority: row.priority,
+          nextScanAt,
+          scanIntervalSec: row.scan_interval_sec,
+          claimedUntil
+        });
+      }
+      return json({ claimed, now, leaseSec });
+    });
+  }
+
+  private stats(): Response {
+    const now = nowIso();
+    const totals = rows(this.sql.exec<{ total: number; active: number; due: number; claimed: number }>(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) AS active,
+         SUM(CASE WHEN status='active' AND next_scan_at <= ? AND (claimed_until IS NULL OR claimed_until < ?) THEN 1 ELSE 0 END) AS due,
+         SUM(CASE WHEN claimed_until IS NOT NULL AND claimed_until >= ? THEN 1 ELSE 0 END) AS claimed
+       FROM due_monitors`,
+      now, now, now
+    ))[0];
+    return json({
+      total: totals?.total ?? 0,
+      active: totals?.active ?? 0,
+      due: totals?.due ?? 0,
+      claimed: totals?.claimed ?? 0
+    });
   }
 }
 

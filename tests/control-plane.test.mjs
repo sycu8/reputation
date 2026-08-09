@@ -5,7 +5,8 @@ import api from "../apps/api-worker/src/index.ts";
 import {
   UserDirectoryDO,
   TenantDirectoryDO,
-  MonitorDO
+  MonitorDO,
+  SchedulerShardDO
 } from "../workers/state/src/index.ts";
 import { hasCapability, isSuperAdminEmail } from "../packages/auth/src/index.ts";
 import { monitorLimitFor } from "../packages/auth/src/entitlements.ts";
@@ -82,6 +83,7 @@ function makeEnv() {
     USER_DIRECTORY: new FakeNamespace(UserDirectoryDO),
     TENANT_DIRECTORY: new FakeNamespace(TenantDirectoryDO),
     MONITOR_DO: new FakeNamespace(MonitorDO),
+    SCHEDULER_SHARD: new FakeNamespace(SchedulerShardDO),
     CONFIG_KV: new FakeKV(),
     RAW_CONTENT: new FakeR2(),
     ENVIRONMENT: "development",
