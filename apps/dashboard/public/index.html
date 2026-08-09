@@ -41,7 +41,7 @@
     <div class="nav-actions" data-auth-nav>
       <a class="text-link" data-auth-guest href="/app/">Sign in</a>
       <a class="btn btn-primary" data-auth-guest href="/app/#signup">Open app</a>
-      <span class="nav-account hidden" data-auth-user hidden></span>
+      <a class="nav-account profile-chip hidden" data-auth-user data-auth-email href="/app/" hidden aria-label="Profile">Account</a>
       <a class="text-link hidden" data-auth-user href="/app/" hidden>Dashboard</a>
       <a class="btn btn-primary hidden" data-auth-user href="/app/" hidden>Open workspace</a>
     </div>
@@ -57,6 +57,7 @@
     <a href="/docs/index.html">Resources</a>
     <a data-auth-guest href="/app/">Sign in</a>
     <a class="btn btn-primary" data-auth-guest href="/app/#signup">Open app</a>
+    <a class="profile-chip hidden" data-auth-user data-auth-email href="/app/" hidden>Account</a>
     <a class="hidden" data-auth-user href="/app/" hidden>Dashboard</a>
     <a class="btn btn-primary hidden" data-auth-user href="/app/" hidden>Open workspace</a>
   </div>
@@ -73,10 +74,13 @@
           Know what's being said. Before it spreads.
         </p>
         <div class="hero-cta reveal">
-          <a class="btn btn-primary btn-lg" href="/app/#signup">Open PulseWatch</a>
-          <a class="btn btn-ghost btn-lg" href="#product">See how it works</a>
+          <a class="btn btn-primary btn-lg" data-auth-guest href="/app/#signup">Open PulseWatch</a>
+          <a class="btn btn-primary btn-lg hidden" data-auth-user href="/app/" hidden>Open workspace</a>
+          <a class="btn btn-ghost btn-lg" data-auth-guest href="#product">See how it works</a>
+          <a class="btn btn-ghost btn-lg hidden" data-auth-user href="/app/" hidden>View profile</a>
         </div>
-        <p class="hero-note reveal">This page is a product showcase. Create a free account in the app to start monitoring, then upgrade plans from Settings.</p>
+        <p class="hero-note reveal" data-auth-guest>This page is a product showcase. Create a free account in the app to start monitoring, then upgrade plans from Settings.</p>
+        <p class="hero-note hidden" data-auth-user hidden>You're signed in. Jump back into your workspace to check mentions, alerts, and monitors.</p>
       </div>
       <div class="hero-visual reveal" aria-hidden="true">
         <div class="dash-frame">
@@ -222,8 +226,10 @@
     <section class="section cta-band">
       <div class="reveal">
         <h2>Know what's being said. Before it spreads.</h2>
-        <p>Open the app on Free, then upgrade from Settings when you need Starter, Pro, or Business capacity.</p>
-        <a class="btn btn-primary btn-lg" href="/app/#signup">Go to app</a>
+        <p data-auth-guest>Open the app on Free, then upgrade from Settings when you need Starter, Pro, or Business capacity.</p>
+        <p class="hidden" data-auth-user hidden>Welcome back. Continue monitoring mentions and alerts in your workspace.</p>
+        <a class="btn btn-primary btn-lg" data-auth-guest href="/app/#signup">Go to app</a>
+        <a class="btn btn-primary btn-lg hidden" data-auth-user href="/app/" hidden>Open workspace</a>
       </div>
     </section>
   </main>

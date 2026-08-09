@@ -474,6 +474,7 @@ async function refreshWorkspaceDetails() {
 }
 
 const SESSION_TOKEN_KEY = "pulsewatch-session";
+const SESSION_EMAIL_KEY = "pulsewatch-session-email";
 
 function getSessionToken() {
   try {
@@ -497,13 +498,39 @@ function setSessionToken(token) {
   }
 }
 
+function setSessionEmail(email) {
+  try {
+    if (email) {
+      sessionStorage.setItem(SESSION_EMAIL_KEY, email);
+      localStorage.setItem(SESSION_EMAIL_KEY, email);
+    } else {
+      sessionStorage.removeItem(SESSION_EMAIL_KEY);
+      localStorage.removeItem(SESSION_EMAIL_KEY);
+    }
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
 function rememberSession(data) {
   const token = data?.session?.token;
   if (typeof token === "string" && token.split(".").length >= 3) {
     setSessionToken(token);
+    if (data?.user?.email) setSessionEmail(data.user.email);
     return data;
   }
   throw new Error("missing_session_token");
+}
+
+/** Flip chrome off the auth form immediately — do not wait on workspace fetches. */
+function applySignedInChrome(email = "") {
+  const label = email || state.user?.email || "Signed in";
+  if (label && label !== "Signed in") setSessionEmail(label);
+  document.body.classList.remove("is-signed-out");
+  document.body.classList.add("is-entering-app");
+  $("#logoutBtn")?.classList.remove("hidden");
+  $("#sessionState").textContent = label;
+  updateRoleChrome();
 }
 
 async function api(path, options = {}) {
@@ -1276,7 +1303,9 @@ function renderSignedOut() {
   state.workspace = null;
   state.workspaces = [];
   setSessionToken(null);
+  setSessionEmail(null);
   document.body.classList.add("is-signed-out");
+  document.body.classList.remove("is-entering-app");
   updateRoleChrome();
   $("#logoutBtn").classList.add("hidden");
   $("#workspaceSwitchWrap").classList.add("hidden");
@@ -1286,9 +1315,7 @@ function renderSignedOut() {
 }
 
 async function renderSignedIn(preferredView = "overview") {
-  document.body.classList.remove("is-signed-out");
-  $("#logoutBtn")?.classList.remove("hidden");
-  $("#sessionState").textContent = state.user?.email || "Signed in";
+  applySignedInChrome(state.user?.email || "");
   $("#workspaceName").textContent = state.workspace?.workspaceName || "Workspace";
   $("#workspaceRole").textContent = state.workspace?.role || "—";
   updateRoleChrome();
@@ -1297,6 +1324,7 @@ async function renderSignedIn(preferredView = "overview") {
   const view = preferredView || "overview";
   setView(view);
   try {
+    await refreshMonitors();
     await refreshWorkspaceDetails();
     $("#workspaceName").textContent = state.workspace?.workspaceName || "Workspace";
     $("#workspaceRole").textContent = state.workspace?.role || "—";
@@ -1312,6 +1340,8 @@ async function renderSignedIn(preferredView = "overview") {
     if (view === "admin") await loadAdmin();
   } catch (error) {
     notify(error.message || "workspace_load_failed");
+  } finally {
+    document.body.classList.remove("is-entering-app");
   }
 }
 
@@ -1322,6 +1352,10 @@ function clearAuthHash() {
 
 async function enterAppAfterAuth(message) {
   clearAuthHash();
+  if (state.user) {
+    applySignedInChrome(state.user.email || "");
+    setView("overview");
+  }
   await goToView("overview");
   notify(message);
 }
@@ -1350,15 +1384,19 @@ function renderWorkspaceSwitcher() {
 
 async function bootstrap(options = {}) {
   const clearOnFailure = options.clearOnFailure !== false;
+  const preferredView = options.view || "overview";
   try {
     const me = await api("/v1/me");
     state.user = me.user;
+    if (me.user?.email) setSessionEmail(me.user.email);
+    // Enter the app shell before slower workspace/monitor fetches.
+    applySignedInChrome(me.user?.email || "");
+    setView(preferredView);
     const data = await api("/v1/workspaces");
     state.workspaces = data.memberships || [];
     state.workspace = pickDefaultWorkspace(state.workspaces);
     renderWorkspaceSwitcher();
-    await refreshMonitors();
-    await renderSignedIn(options.view || "overview");
+    await renderSignedIn(preferredView);
   } catch (error) {
     if (clearOnFailure) renderSignedOut();
     throw error;
@@ -1369,16 +1407,25 @@ $("#signupForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const submit = event.currentTarget.querySelector('button[type="submit"]');
-  if (submit) submit.disabled = true;
+  if (submit) {
+    submit.disabled = true;
+    submit.classList.add("is-busy");
+  }
   try {
-    rememberSession(await api("/v1/auth/signup", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
+    const session = rememberSession(await api("/v1/auth/signup", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
+    state.user = session?.user || { email: String(form.get("email") || "") };
+    applySignedInChrome(state.user?.email || form.get("email") || "");
+    setView("overview");
     await bootstrap({ clearOnFailure: false, view: "overview" });
     await enterAppAfterAuth("Account created");
   } catch (error) {
     if (!state.user) renderSignedOut();
     notify(error.message || "signup_failed");
   } finally {
-    if (submit) submit.disabled = false;
+    if (submit) {
+      submit.disabled = false;
+      submit.classList.remove("is-busy");
+    }
   }
 });
 
@@ -1386,17 +1433,26 @@ $("#loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const submit = event.currentTarget.querySelector('button[type="submit"]');
-  if (submit) submit.disabled = true;
+  if (submit) {
+    submit.disabled = true;
+    submit.classList.add("is-busy");
+  }
   try {
     const session = rememberSession(await api("/v1/auth/login", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
-    if (session?.user) state.user = session.user;
+    state.user = session?.user || { email: String(form.get("email") || "") };
+    // Redirect chrome immediately — do not wait for bootstrap/workspace loads.
+    applySignedInChrome(state.user?.email || form.get("email") || "");
+    setView("overview");
     await bootstrap({ clearOnFailure: false, view: "overview" });
     await enterAppAfterAuth("Signed in");
   } catch (error) {
     if (!state.user) renderSignedOut();
     notify(error.message || "login_failed");
   } finally {
-    if (submit) submit.disabled = false;
+    if (submit) {
+      submit.disabled = false;
+      submit.classList.remove("is-busy");
+    }
   }
 });
 
