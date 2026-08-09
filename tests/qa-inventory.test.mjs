@@ -151,6 +151,20 @@ test("A12 alert ack/resolve workflow", async () => {
   const resolve = await apiCall(api, world.env, "PATCH", `/v1/workspaces/${ws}/monitors/${monitorId}/alerts/${pending.id}`, { state: "resolved" }, cookie);
   assert.equal(resolve.status, 200);
 
+  const openOnly = await apiCall(
+    api,
+    world.env,
+    "GET",
+    `/v1/workspaces/${ws}/monitors/${monitorId}/alerts?state=open&limit=100`,
+    undefined,
+    cookie
+  );
+  assert.equal(openOnly.status, 200);
+  const openAlerts = (await openOnly.json()).alerts;
+  assert.ok(Array.isArray(openAlerts));
+  assert.ok(openAlerts.every((item) => item.state !== "resolved"));
+  assert.ok(!openAlerts.some((item) => item.id === pending.id));
+
   const filtered = await apiCall(
     api,
     world.env,
@@ -388,12 +402,16 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /id="reportSentimentBars"/);
   assert.match(html, /id="alertFrom"/);
   assert.match(html, /id="alertMinSeverity"/);
+  assert.match(html, /id="alertState"/);
+  assert.match(html, /value="open"/);
+  assert.match(html, /Not resolved/);
   assert.match(html, /How to use Alerts/);
   assert.match(html, /newest publication time/i);
   assert.match(js, /alert\.mention/);
   assert.match(js, /Open source/);
   assert.match(js, /sortAlertsByPublication/);
   assert.match(js, /alertPublicationMs/);
+  assert.match(js, /Not resolved stories only by default/);
   assert.match(js, /params\.set\("minSeverity"/);
   assert.match(html, /id="mentionFrom"/);
   assert.match(html, /id="mentionTo"/);

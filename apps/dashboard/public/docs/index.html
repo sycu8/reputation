@@ -604,6 +604,17 @@ curl -sS -b cookies.txt "$API/v1/me"</code></pre>
             <code class="path">/v1/workspaces/{workspaceId}/monitors/{monitorId}/alerts</code>
             <span class="badge cap">monitor.read</span>
           </div>
+          <h4>Query</h4>
+          <table class="params">
+            <thead><tr><th>Name</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>state</code></td><td>string</td><td><code>open</code> (not resolved), or <code>pending</code> | <code>sent</code> | <code>acknowledged</code> | <code>resolved</code> | <code>failed</code></td></tr>
+              <tr><td><code>severity</code></td><td>string</td><td><code>critical</code> | <code>high</code> | <code>medium</code> | <code>low</code></td></tr>
+              <tr><td><code>minSeverity</code></td><td>number</td><td>Minimum mention severity score</td></tr>
+              <tr><td><code>from</code> / <code>to</code></td><td>date</td><td>Alert created_at window (<code>YYYY-MM-DD</code>)</td></tr>
+              <tr><td><code>limit</code></td><td>number</td><td>Max rows (server-capped)</td></tr>
+            </tbody>
+          </table>
           <h4>Response <span class="status">200</span></h4>
           <pre class="code-block" data-lang="json"><code>{
   "alerts": [
