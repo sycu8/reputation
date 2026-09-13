@@ -518,6 +518,8 @@ async function refreshWorkspaceDetails() {
 
 const SESSION_TOKEN_KEY = "pulsewatch-session";
 const SESSION_EMAIL_KEY = "pulsewatch-session-email";
+const LAST_VIEW_KEY = "pulsewatch-last-view";
+const PROFILE_FIELDS = ["website", "facebook", "x", "linkedin", "youtube", "tiktok", "instagram", "reddit", "notes"];
 
 function getSessionToken() {
   try {
@@ -663,11 +665,38 @@ function panelFor(view) {
   return $(map[view]);
 }
 
-function setView(view) {
-  if (view === "admin" && !isSuperAdmin()) {
-    view = "overview";
+function normalizeView(view) {
+  if (!view || !titles[view]) return "overview";
+  if (view === "admin" && !isSuperAdmin()) return "overview";
+  return view;
+}
+
+function readPersistedView() {
+  const fromHash = String(location.hash || "").replace(/^#/, "");
+  if (fromHash && fromHash !== "signup" && titles[fromHash]) return normalizeView(fromHash);
+  try {
+    const stored = sessionStorage.getItem(LAST_VIEW_KEY);
+    if (stored && titles[stored]) return normalizeView(stored);
+  } catch {
+    /* ignore */
   }
+  return "overview";
+}
+
+function persistView(view) {
+  const next = normalizeView(view);
+  try { sessionStorage.setItem(LAST_VIEW_KEY, next); } catch { /* ignore */ }
+  if (!state.user) return;
+  const hash = `#${next}`;
+  if (location.hash !== hash) {
+    history.replaceState(null, "", `${location.pathname}${location.search}${hash}`);
+  }
+}
+
+function setView(view) {
+  view = normalizeView(view);
   state.view = view;
+  persistView(view);
   document.querySelectorAll(".nav").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
   const [title, subtitle] = titles[view] || titles.overview;
   $("#pageTitle").textContent = title;
@@ -751,13 +780,63 @@ async function refreshMonitors() {
   fillMonitorSelects();
 }
 
+function monitorIdOf(monitor) {
+  return monitor?.monitor_id || monitor?.id || "";
+}
+
+function findDuplicateMonitor(name, exceptId = "") {
+  const key = String(name || "").trim().toLowerCase();
+  if (!key) return null;
+  return state.monitors.find((item) => {
+    const id = monitorIdOf(item);
+    if (exceptId && id === exceptId) return false;
+    return String(item.name || "").trim().toLowerCase() === key;
+  }) || null;
+}
+
+function profileFromForm(form) {
+  const profile = {};
+  for (const key of PROFILE_FIELDS) profile[key] = form[key] || "";
+  return profile;
+}
+
+function openMonitorDialog(mode = "create", monitor = null) {
+  const form = $("#monitorForm");
+  if (!form) return;
+  form.reset();
+  form.dataset.mode = mode;
+  form.elements.monitorId.value = monitor ? monitorIdOf(monitor) : "";
+  const queryInput = form.elements.query;
+  const queryLabel = queryInput?.closest("label");
+  if (mode === "edit" && monitor) {
+    $("#monitorDialogEyebrow").textContent = "Edit monitor";
+    $("#monitorDialogTitle").textContent = "Update monitor";
+    $("#monitorSubmitBtn").textContent = "Save changes";
+    form.elements.name.value = monitor.name || "";
+    form.elements.type.value = monitor.type || "company";
+    if (queryLabel) queryLabel.classList.add("hidden");
+    if (queryInput) queryInput.required = false;
+    const profile = monitor.profile || {};
+    for (const key of PROFILE_FIELDS) {
+      if (form.elements[key]) form.elements[key].value = profile[key] || "";
+    }
+  } else {
+    $("#monitorDialogEyebrow").textContent = "New monitor";
+    $("#monitorDialogTitle").textContent = "Create monitor";
+    $("#monitorSubmitBtn").textContent = "Create";
+    if (queryLabel) queryLabel.classList.remove("hidden");
+    if (queryInput) queryInput.required = true;
+  }
+  dialog.showModal();
+}
+
 async function deleteMonitorById(monitorId) {
   if (!state.workspace || !monitorId) return;
   if (!canManageMonitors()) {
     notify("forbidden");
     return;
   }
-  const label = state.monitors.find((item) => (item.monitor_id || item.id) === monitorId)?.name || monitorId;
+  const label = state.monitors.find((item) => monitorIdOf(item) === monitorId)?.name || monitorId;
   if (!window.confirm(`Delete monitor “${label}”? This cannot be undone.`)) return;
   await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}`, { method: "DELETE" });
   await refreshMonitors();
@@ -1106,16 +1185,33 @@ function monitorProfileLinks(profile) {
 function renderMonitors() {
   const list = $("#monitorList");
   list.innerHTML = "";
+  const query = String($("#monitorSearch")?.value || "").trim().toLowerCase();
+  const visible = state.monitors.filter((monitor) => {
+    if (!query) return true;
+    const haystack = [
+      monitor.name,
+      monitor.type,
+      monitor.status,
+      monitor.priority,
+      monitor.profile?.notes,
+      ...monitorProfileLinks(monitor.profile).map((item) => `${item.label} ${item.url}`)
+    ].join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
   if (!state.monitors.length) {
     list.innerHTML = canManageMonitors()
       ? '<div class="empty">No monitors yet. Create one with keywords plus optional website / social pages.</div>'
       : '<div class="empty">No monitors in this workspace yet.</div>';
     return;
   }
-  for (const monitor of state.monitors) {
+  if (!visible.length) {
+    list.innerHTML = '<div class="empty">No monitors match this search.</div>';
+    return;
+  }
+  for (const monitor of visible) {
     const row = document.createElement("div");
     row.className = "monitor-row";
-    const monitorId = monitor.monitor_id || monitor.id || "";
+    const monitorId = monitorIdOf(monitor);
     const links = monitorProfileLinks(monitor.profile);
     const linkHtml = links.length
       ? `<div class="monitor-profile-links">${links.map((item) =>
@@ -1128,6 +1224,7 @@ function renderMonitors() {
     const actions = canManageMonitors()
       ? `<div class="monitor-row-actions">
           <span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>
+          <button type="button" class="secondary" data-edit-monitor="${escapeHtml(monitorId)}">Edit</button>
           <button type="button" class="ghost danger-btn" data-delete-monitor="${escapeHtml(monitorId)}">Delete</button>
         </div>`
       : `<span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>`;
@@ -1449,8 +1546,8 @@ async function renderSignedIn(preferredView = "overview") {
 }
 
 function clearAuthHash() {
-  if (!location.hash) return;
-  history.replaceState(null, "", `${location.pathname}${location.search}`);
+  if (location.hash !== "#signup") return;
+  history.replaceState(null, "", `${location.pathname}${location.search}#overview`);
 }
 
 async function enterAppAfterAuth(message) {
@@ -1487,7 +1584,7 @@ function renderWorkspaceSwitcher() {
 
 async function bootstrap(options = {}) {
   const clearOnFailure = options.clearOnFailure !== false;
-  const preferredView = options.view || "overview";
+  const preferredView = options.view || readPersistedView() || "overview";
   try {
     const me = await api("/v1/me");
     state.user = me.user;
@@ -1569,9 +1666,10 @@ $("#newMonitorBtn").addEventListener("click", () => {
     notify("forbidden");
     return;
   }
-  dialog.showModal();
+  openMonitorDialog("create");
 });
 $("#cancelMonitor").addEventListener("click", () => dialog.close());
+$("#monitorSearch")?.addEventListener("input", () => renderMonitors());
 
 $("#monitorForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1587,8 +1685,18 @@ $("#monitorForm").addEventListener("submit", async (event) => {
   const submit = formEl.querySelector('button[type="submit"]');
   if (submit?.disabled) return;
   const form = Object.fromEntries(new FormData(formEl));
-  if (!String(form.name || "").trim() || !String(form.query || "").trim() || !String(form.type || "").trim()) {
+  const mode = formEl.dataset.mode || "create";
+  const editingId = String(form.monitorId || "").trim();
+  if (!String(form.name || "").trim() || !String(form.type || "").trim()) {
+    notify("Name and type are required");
+    return;
+  }
+  if (mode !== "edit" && !String(form.query || "").trim()) {
     notify("Name, type, and query are required");
+    return;
+  }
+  const duplicate = findDuplicateMonitor(form.name, editingId);
+  if (duplicate && !window.confirm(`A monitor named “${form.name}” already exists. Continue anyway?`)) {
     return;
   }
   if (submit) {
@@ -1596,17 +1704,19 @@ $("#monitorForm").addEventListener("submit", async (event) => {
     submit.classList.add("is-busy");
   }
   try {
-    const profile = {
-      website: form.website || "",
-      facebook: form.facebook || "",
-      x: form.x || "",
-      linkedin: form.linkedin || "",
-      youtube: form.youtube || "",
-      tiktok: form.tiktok || "",
-      instagram: form.instagram || "",
-      reddit: form.reddit || "",
-      notes: form.notes || ""
-    };
+    const profile = profileFromForm(form);
+    if (mode === "edit" && editingId) {
+      await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${editingId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: form.name, type: form.type, profile })
+      });
+      dialog.close();
+      formEl.reset();
+      await refreshMonitors();
+      renderMonitors();
+      notify("Monitor updated");
+      return;
+    }
     const created = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors`, {
       method: "POST",
       body: JSON.stringify({ name: form.name, type: form.type, profile })
@@ -1623,7 +1733,7 @@ $("#monitorForm").addEventListener("submit", async (event) => {
     renderMonitors();
     notify("Monitor created");
   } catch (error) {
-    notify(error.message || "monitor_create_failed");
+    notify(error.message || (mode === "edit" ? "monitor_update_failed" : "monitor_create_failed"));
   } finally {
     if (submit) {
       submit.disabled = false;
@@ -1633,6 +1743,14 @@ $("#monitorForm").addEventListener("submit", async (event) => {
 });
 
 $("#monitorList")?.addEventListener("click", async (event) => {
+  const edit = event.target.closest("[data-edit-monitor]");
+  if (edit) {
+    event.preventDefault();
+    const monitor = state.monitors.find((item) => monitorIdOf(item) === edit.getAttribute("data-edit-monitor"));
+    if (!monitor) return;
+    openMonitorDialog("edit", monitor);
+    return;
+  }
   const button = event.target.closest("[data-delete-monitor]");
   if (!button) return;
   event.preventDefault();
@@ -1742,19 +1860,26 @@ initTheme();
 
 // If a session token already exists, leave the auth form immediately on refresh.
 const bootToken = getSessionToken();
+const bootView = readPersistedView();
 if (bootToken) {
   const cachedEmail = getSessionEmail();
   state.user = { email: cachedEmail || "Signed in" };
   document.body.classList.add("is-booting");
   applySignedInChrome(cachedEmail);
-  setView(state.view || "overview");
+  setView(bootView);
 }
 
-bootstrap().catch(() => {
+window.addEventListener("hashchange", () => {
+  const next = String(location.hash || "").replace(/^#/, "");
+  if (next === "signup" || !state.user || !titles[next] || next === state.view) return;
+  goToView(next);
+});
+
+bootstrap({ view: bootToken ? bootView : "overview" }).catch(() => {
   /* signed-out on first paint is normal when no valid session */
 }).finally(() => {
   document.body.classList.remove("is-booting");
-  if (location.hash === "#signup") {
+  if (!bootToken && location.hash === "#signup") {
     $("#signupForm")?.scrollIntoView({ behavior: "smooth", block: "center" });
     $("#signupForm")?.querySelector('input[name="email"]')?.focus();
   }

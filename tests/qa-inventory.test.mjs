@@ -468,7 +468,13 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(js, /isChallengedCustomApiBase/);
   assert.match(js, /isSafeApiMethod/);
   assert.match(js, /data-delete-monitor/);
+  assert.match(js, /data-edit-monitor/);
   assert.match(js, /deleteMonitorById/);
+  assert.match(js, /openMonitorDialog/);
+  assert.match(js, /findDuplicateMonitor/);
+  assert.match(js, /readPersistedView/);
+  assert.match(js, /pulsewatch-last-view/);
+  assert.match(html, /id="monitorSearch"/);
   assert.match(js, /is-booting/);
   assert.match(js, /Restoring session|getSessionEmail/);
   assert.match(css, /is-booting/);
