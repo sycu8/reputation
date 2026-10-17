@@ -7,6 +7,10 @@
   <meta name="description" content="PulseWatch by OrangeCloud monitors online mentions across the public web and supported social platforms, analyzes sentiment, and alerts you to important negative conversations." />
   <meta name="keywords" content="social listening tool, online reputation monitoring, brand monitoring tool, reputation monitoring software, negative mention monitoring" />
   <link rel="canonical" href="https://reputation.orangecloud.vn/" />
+  <link rel="api-catalog" href="/.well-known/api-catalog" type="application/linkset+json" />
+  <link rel="service-desc" href="/openapi.json" type="application/openapi+json" />
+  <link rel="service-doc" href="/docs/" />
+  <link rel="describedby" href="/.well-known/ai-catalog.json" type="application/json" />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="https://reputation.orangecloud.vn/" />
   <meta property="og:title" content="Know What's Being Said Before It Spreads | PulseWatch" />
@@ -77,6 +81,14 @@
           <a class="btn btn-ghost btn-lg" href="#product">See how it works</a>
         </div>
         <p class="hero-note reveal">This page is a product showcase. Create a free account in the app to start monitoring, then upgrade plans from Settings.</p>
+        <form id="queryCheckForm" class="query-check reveal" toolname="validate_listening_query" tooldescription="Check whether a PulseWatch Boolean listening query is valid." action="/#query-check" method="get">
+          <label for="rawQuery">Try a listening query</label>
+          <div class="query-row">
+            <input id="rawQuery" name="rawQuery" type="text" toolparamdescription="Boolean query using AND, OR, NOT, and quotes for phrases." placeholder='("OrangeCloud" OR PulseWatch) AND NOT hiring' autocomplete="off" />
+            <button class="btn btn-ghost" type="submit">Check query</button>
+          </div>
+          <p id="queryCheckResult" class="query-result" role="status"></p>
+        </form>
       </div>
       <div class="hero-visual reveal" aria-hidden="true">
         <div class="dash-frame">
@@ -239,6 +251,7 @@
     <p>© <span id="year"></span> OrangeCloud · <a href="https://reputation.orangecloud.vn/">reputation.orangecloud.vn</a> · <a href="/docs/index.html">API docs</a> · <a href="/app/">App</a></p>
   </footer>
 
+  <script src="/webmcp.js"></script>
   <script type="module" src="/landing.js"></script>
 </body>
 </html>

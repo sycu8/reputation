@@ -41,8 +41,50 @@ function json(data: unknown, status = 200, headers: HeadersInit = {}): Response 
   });
 }
 
-function errorResponse(error: string, status: number, requestId: string): Response {
-  return json({ error, requestId }, status);
+function errorResponse(error: string, status: number, requestId: string, headers: HeadersInit = {}): Response {
+  return json({ error, requestId }, status, headers);
+}
+
+const CANONICAL_ORIGIN = "https://reputation.orangecloud.vn";
+
+function protectedResourceMetadataUrl(request: Request): string {
+  const url = new URL(request.url);
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+    return `${url.origin}/.well-known/oauth-protected-resource`;
+  }
+  return `${CANONICAL_ORIGIN}/.well-known/oauth-protected-resource`;
+}
+
+function expiresInSeconds(expiresAt: string): number {
+  const ms = Date.parse(expiresAt);
+  if (!Number.isFinite(ms)) return 0;
+  return Math.max(0, Math.floor((ms - Date.now()) / 1000));
+}
+
+interface LoginCredentials {
+  email: string;
+  password: string;
+  oauthPasswordGrant: boolean;
+}
+
+async function readLoginCredentials(request: Request): Promise<LoginCredentials> {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (contentType.includes("application/x-www-form-urlencoded")) {
+    const params = new URLSearchParams(await request.text());
+    const grant = params.get("grant_type");
+    if (grant && grant !== "password") throw new HttpError(400, "unsupported_grant_type");
+    const email = (params.get("username") || params.get("email") || "").trim().toLowerCase();
+    const password = params.get("password") ?? "";
+    if (!email) throw new HttpError(400, "invalid_email");
+    if (!password.trim()) throw new HttpError(400, "invalid_password");
+    return { email, password, oauthPasswordGrant: true };
+  }
+  const body = await readJson(request);
+  return {
+    email: asString(body.email, "email").toLowerCase(),
+    password: asString(body.password, "password"),
+    oauthPasswordGrant: false
+  };
 }
 
 async function readJson(request: Request): Promise<JsonObject> {
@@ -289,7 +331,10 @@ async function signup(request: Request, env: Env): Promise<Response> {
     {
       user: { id: account.userId, email: account.email, globalRole: account.globalRole },
       workspace: { id: workspaceId, name: workspaceName, role: "owner" },
-      session: { token: cookieValue, expiresAt: account.expiresAt }
+      session: { token: cookieValue, expiresAt: account.expiresAt },
+      access_token: cookieValue,
+      token_type: "Bearer",
+      expires_in: expiresInSeconds(account.expiresAt)
     },
     201,
     { "set-cookie": sessionCookie(cookieName, cookieValue, account.expiresAt, useSecureCookies(env)) }
@@ -297,25 +342,33 @@ async function signup(request: Request, env: Env): Promise<Response> {
 }
 
 async function login(request: Request, env: Env): Promise<Response> {
-  const body = await readJson(request);
-  const email = asString(body.email, "email").toLowerCase();
-  const password = asString(body.password, "password");
-  const shard = await shardForEmail(email);
-  const account = await doJson<{ userId: string; email: string; globalRole: GlobalRole; sessionId: string; sessionSecret: string; expiresAt: string }>(
-    userStub(env, shard),
-    "/internal/login",
-    { method: "POST", body: JSON.stringify({ email, password }) }
-  );
-  const globalRole = await syncSuperAdminRole(env, shard, account.email, account.globalRole);
-  const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
-  return json(
-    {
-      user: { id: account.userId, email: account.email, globalRole },
-      session: { token: cookieValue, expiresAt: account.expiresAt }
-    },
-    200,
-    { "set-cookie": sessionCookie(env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT, cookieValue, account.expiresAt, useSecureCookies(env)) }
-  );
+  const credentials = await readLoginCredentials(request);
+  try {
+    const shard = await shardForEmail(credentials.email);
+    const account = await doJson<{ userId: string; email: string; globalRole: GlobalRole; sessionId: string; sessionSecret: string; expiresAt: string }>(
+      userStub(env, shard),
+      "/internal/login",
+      { method: "POST", body: JSON.stringify({ email: credentials.email, password: credentials.password }) }
+    );
+    const globalRole = await syncSuperAdminRole(env, shard, account.email, account.globalRole);
+    const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
+    return json(
+      {
+        user: { id: account.userId, email: account.email, globalRole },
+        session: { token: cookieValue, expiresAt: account.expiresAt },
+        access_token: cookieValue,
+        token_type: "Bearer",
+        expires_in: expiresInSeconds(account.expiresAt)
+      },
+      200,
+      { "set-cookie": sessionCookie(env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT, cookieValue, account.expiresAt, useSecureCookies(env)) }
+    );
+  } catch (error) {
+    if (credentials.oauthPasswordGrant && error instanceof HttpError && error.status === 401) {
+      throw new HttpError(400, "invalid_grant");
+    }
+    throw error;
+  }
 }
 
 async function logout(request: Request, env: Env): Promise<Response> {
@@ -803,7 +856,11 @@ export default {
         status: httpError.status,
         errorType: error instanceof Error ? error.name : "unknown"
       });
-      return withCors(errorResponse(httpError.message, httpError.status, requestId), request, env);
+      const headers: Record<string, string> = {};
+      if (httpError.status === 401) {
+        headers["WWW-Authenticate"] = `Bearer realm="PulseWatch", resource_metadata="${protectedResourceMetadataUrl(request)}"`;
+      }
+      return withCors(errorResponse(httpError.message, httpError.status, requestId, headers), request, env);
     }
   }
 };

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
+  "skills": [
+    {
+      "name": "pulsewatch-api",
+      "type": "skill-md",
+      "description": "Call the PulseWatch by OrangeCloud HTTP API for health, account registration, and workspace listening data.",
+      "url": "https://reputation.orangecloud.vn/.well-known/agent-skills/pulsewatch-api/SKILL.md",
+      "digest": "sha256:18afb21c2be9899f616fb10a72b9134b107bbc8ce731af995c29d6bd43089ffb"
+    },
+    {
+      "name": "pulsewatch-boolean-query",
+      "type": "skill-md",
+      "description": "Write PulseWatch Boolean listening queries with AND, OR, NOT, parentheses, and quoted phrases.",
+      "url": "https://reputation.orangecloud.vn/.well-known/agent-skills/pulsewatch-boolean-query/SKILL.md",
+      "digest": "sha256:415e2099cb87144662c57cfaf7c1a8c9ede1759c3feff3fa696c2145acd624cf"
+    }
+  ]
+}

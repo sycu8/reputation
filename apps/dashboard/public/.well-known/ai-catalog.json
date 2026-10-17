@@ -1,0 +1,53 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "PulseWatch by OrangeCloud",
+    "identifier": "https://reputation.orangecloud.vn"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:reputation.orangecloud.vn:server:pulsewatch",
+      "displayName": "PulseWatch MCP server",
+      "type": "application/json",
+      "url": "https://reputation.orangecloud.vn/.well-known/mcp/server-card.json",
+      "representativeQueries": [
+        "what is PulseWatch",
+        "validate a brand listening query",
+        "how do I check PulseWatch API health"
+      ]
+    },
+    {
+      "identifier": "urn:air:reputation.orangecloud.vn:api:http",
+      "displayName": "PulseWatch HTTP API",
+      "type": "application/json",
+      "url": "https://reputation.orangecloud.vn/openapi.json",
+      "representativeQueries": [
+        "show the PulseWatch OpenAPI description",
+        "how do agents authenticate to the PulseWatch API",
+        "list PulseWatch monitor endpoints"
+      ]
+    },
+    {
+      "identifier": "urn:air:reputation.orangecloud.vn:docs:http",
+      "displayName": "PulseWatch API reference",
+      "type": "text/html",
+      "url": "https://reputation.orangecloud.vn/docs/",
+      "representativeQueries": [
+        "PulseWatch API authentication docs",
+        "Boolean query language reference",
+        "where is the mentions endpoint documented"
+      ]
+    },
+    {
+      "identifier": "urn:air:reputation.orangecloud.vn:skills:index",
+      "displayName": "PulseWatch agent skills",
+      "type": "application/json",
+      "url": "https://reputation.orangecloud.vn/.well-known/agent-skills/index.json",
+      "representativeQueries": [
+        "which agent skills does PulseWatch publish",
+        "how do I write a PulseWatch Boolean query",
+        "skill for calling the PulseWatch API"
+      ]
+    }
+  ]
+}

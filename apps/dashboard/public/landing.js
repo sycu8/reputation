@@ -110,3 +110,31 @@ async function refreshLandingAuth() {
 }
 
 refreshLandingAuth();
+
+const queryForm = document.querySelector("#queryCheckForm");
+queryForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const result = document.querySelector("#queryCheckResult");
+  const rawQuery = String(new FormData(queryForm).get("rawQuery") || "").trim();
+  if (!result) return;
+  if (!rawQuery) {
+    result.textContent = "Enter a Boolean query to check.";
+    return;
+  }
+  result.textContent = "Checking…";
+  try {
+    const response = await fetch(`${resolveApiBase()}/v1/queries/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({ rawQuery })
+    });
+    const data = await response.json();
+    if (data.valid) {
+      result.textContent = `Valid. Normalized: ${data.normalizedQuery}`;
+      return;
+    }
+    result.textContent = data.error ? `Not valid: ${data.error}` : "Not valid.";
+  } catch {
+    result.textContent = "Could not reach the query checker.";
+  }
+});

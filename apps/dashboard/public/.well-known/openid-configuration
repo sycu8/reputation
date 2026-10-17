@@ -1,0 +1,36 @@
+{
+  "issuer": "https://reputation.orangecloud.vn",
+  "authorization_endpoint": "https://reputation.orangecloud.vn/app/",
+  "token_endpoint": "https://reputation.orangecloud.vn/api/v1/auth/login",
+  "jwks_uri": "https://reputation.orangecloud.vn/.well-known/jwks.json",
+  "registration_endpoint": "https://reputation.orangecloud.vn/api/v1/auth/signup",
+  "revocation_endpoint": "https://reputation.orangecloud.vn/api/v1/auth/logout",
+  "response_types_supported": ["token"],
+  "grant_types_supported": ["password"],
+  "token_endpoint_auth_methods_supported": ["none"],
+  "scopes_supported": [
+    "workspace.read",
+    "workspace.update",
+    "membership.manage",
+    "monitor.read",
+    "monitor.create",
+    "monitor.update",
+    "monitor.delete",
+    "query.read",
+    "query.create",
+    "query.update",
+    "query.delete"
+  ],
+  "agent_auth": {
+    "skill": "https://reputation.orangecloud.vn/auth.md",
+    "register_uri": "https://reputation.orangecloud.vn/api/v1/auth/signup",
+    "identity_types_supported": ["verified_email"],
+    "identity_assertion": {
+      "assertion_types_supported": ["verified_email"]
+    },
+    "verified_email": {
+      "credential_types_supported": ["session_bearer", "http_cookie"],
+      "claim_uri": "https://reputation.orangecloud.vn/app/"
+    }
+  }
+}
