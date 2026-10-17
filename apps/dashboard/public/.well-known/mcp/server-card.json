@@ -1,0 +1,32 @@
+{
+  "serverInfo": {
+    "name": "PulseWatch",
+    "version": "0.1.0"
+  },
+  "transport": {
+    "type": "streamable-http",
+    "endpoint": "https://reputation.orangecloud.vn/mcp"
+  },
+  "endpoint": "https://reputation.orangecloud.vn/mcp",
+  "capabilities": {
+    "tools": {
+      "listChanged": false
+    },
+    "resources": {
+      "listChanged": false
+    },
+    "prompts": {
+      "listChanged": false
+    }
+  },
+  "tools": [
+    {
+      "name": "pulsewatch_product_summary",
+      "description": "Summarize PulseWatch by OrangeCloud and where to read public docs."
+    },
+    {
+      "name": "pulsewatch_validate_query",
+      "description": "Validate a Boolean listening query without saving it."
+    }
+  ]
+}

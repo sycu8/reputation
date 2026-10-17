@@ -1,0 +1,298 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PulseWatch API",
+    "version": "0.1.0",
+    "summary": "Session-authenticated multi-tenant API for PulseWatch by OrangeCloud.",
+    "description": "Monitors, Boolean queries, mentions, and alerts. Session tokens are opaque. See https://reputation.orangecloud.vn/docs/ and https://reputation.orangecloud.vn/auth.md.",
+    "contact": {
+      "name": "PulseWatch by OrangeCloud",
+      "url": "https://reputation.orangecloud.vn/"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://reputation.orangecloud.vn/api",
+      "description": "Production custom host"
+    }
+  ],
+  "tags": [
+    { "name": "health" },
+    { "name": "auth" },
+    { "name": "workspaces" },
+    { "name": "queries" }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["health"],
+        "operationId": "getHealth",
+        "summary": "API health",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["service", "status"],
+                  "properties": {
+                    "service": { "type": "string", "const": "api" },
+                    "status": { "type": "string", "const": "ok" },
+                    "environment": { "type": "string" },
+                    "requestId": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/source-health": {
+      "get": {
+        "tags": ["health"],
+        "operationId": "getSourceHealth",
+        "summary": "Runtime source availability",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Availability for each source adapter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": { "type": "string" },
+                          "availability": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/signup": {
+      "post": {
+        "tags": ["auth"],
+        "operationId": "signup",
+        "summary": "Create an account and workspace",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password", "workspaceName"],
+                "properties": {
+                  "email": { "type": "string", "format": "email" },
+                  "password": { "type": "string", "minLength": 10 },
+                  "workspaceName": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Account created. session.token and access_token are the same opaque session secret.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SessionResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "tags": ["auth"],
+        "operationId": "login",
+        "summary": "Sign in with email and password",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["email", "password"],
+                "properties": {
+                  "email": { "type": "string", "format": "email" },
+                  "password": { "type": "string" }
+                }
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": ["grant_type", "username", "password"],
+                "properties": {
+                  "grant_type": { "type": "string", "const": "password" },
+                  "username": { "type": "string", "description": "Account email" },
+                  "password": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Session issued",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SessionResponse" }
+              }
+            }
+          },
+          "401": { "description": "JSON login failed" }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "tags": ["auth"],
+        "operationId": "logout",
+        "summary": "Revoke the current session",
+        "responses": {
+          "200": { "description": "Session revoked" }
+        }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "tags": ["auth"],
+        "operationId": "getMe",
+        "summary": "Current user",
+        "responses": {
+          "200": { "description": "Signed-in user" },
+          "401": { "description": "Authentication required" }
+        }
+      }
+    },
+    "/v1/workspaces": {
+      "get": {
+        "tags": ["workspaces"],
+        "operationId": "listWorkspaces",
+        "summary": "List workspace memberships",
+        "responses": { "200": { "description": "Memberships" } }
+      },
+      "post": {
+        "tags": ["workspaces"],
+        "operationId": "createWorkspace",
+        "summary": "Create a workspace",
+        "responses": { "201": { "description": "Workspace created" } }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/monitors": {
+      "parameters": [
+        { "$ref": "#/components/parameters/workspaceId" }
+      ],
+      "get": {
+        "tags": ["workspaces"],
+        "operationId": "listMonitors",
+        "summary": "List monitors",
+        "responses": { "200": { "description": "Monitors" } }
+      },
+      "post": {
+        "tags": ["workspaces"],
+        "operationId": "createMonitor",
+        "summary": "Create a monitor",
+        "responses": { "201": { "description": "Monitor created" } }
+      }
+    },
+    "/v1/workspaces/{workspaceId}/monitors/{monitorId}/mentions": {
+      "parameters": [
+        { "$ref": "#/components/parameters/workspaceId" },
+        { "$ref": "#/components/parameters/monitorId" }
+      ],
+      "get": {
+        "tags": ["workspaces"],
+        "operationId": "listMentions",
+        "summary": "List mentions for a monitor",
+        "responses": { "200": { "description": "Mentions" } }
+      }
+    },
+    "/v1/queries/validate": {
+      "post": {
+        "tags": ["queries"],
+        "operationId": "validateQuery",
+        "summary": "Parse a Boolean listening query",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["rawQuery"],
+                "properties": {
+                  "rawQuery": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Query parsed" },
+          "400": { "description": "Query rejected" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Opaque session token from signup or login (session.token or access_token). Cookie reputa_session carries the same value."
+      }
+    },
+    "parameters": {
+      "workspaceId": {
+        "name": "workspaceId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" }
+      },
+      "monitorId": {
+        "name": "monitorId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" }
+      }
+    },
+    "schemas": {
+      "SessionResponse": {
+        "type": "object",
+        "properties": {
+          "access_token": { "type": "string" },
+          "token_type": { "type": "string", "const": "Bearer" },
+          "expires_in": { "type": "integer" },
+          "session": {
+            "type": "object",
+            "properties": {
+              "token": { "type": "string" },
+              "expiresAt": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    { "sessionBearer": [] }
+  ]
+}

@@ -1,6 +1,6 @@
 # BUILD_STATUS
 
-Last updated: 2026-08-09 (Cursor Cloud Agent — self-supplement collection)
+Last updated: 2026-10-17 (Cursor Cloud Agent — agent discovery documents)
 
 ## Summary
 
@@ -70,6 +70,18 @@ Auto-bootstrapped after each production deploy (`npm run bootstrap:collection`):
 Always-on free discovery: HN RSS + Algolia, Bing/Yahoo/Google News RSS, Reddit search RSS, DEV.to/Medium tag feeds, plus expanded static RSS (BBC/Guardian/TechCrunch/Ars/Verge/Wired/CF Blog/security/VN…).
 
 Optional upgrade: set GitHub Actions secret `BRAVE_SEARCH_API_KEY` (Brave dashboard requires a card).
+
+## Agent discovery
+
+Verified locally with `wrangler dev` on `http://127.0.0.1:8788` (2026-10-17):
+
+- `/robots.txt` is `text/plain` and HTTP 200, with AI crawler groups, Content-Signal, and a sitemap reference.
+- `/sitemap.xml`, `/auth.md`, `/.well-known/api-catalog` (`application/linkset+json`), OAuth discovery JSON, the MCP server card, the skills index, and `/.well-known/ai-catalog.json` (`Access-Control-Allow-Origin: *`) all return HTTP 200.
+- Homepage `Link` response header includes `rel="api-catalog"`.
+- `POST /mcp` returns JSON-RPC `initialize`.
+- The homepage listening-query form validated `("OrangeCloud" OR PulseWatch) AND NOT hiring` against the local API, and three WebMCP tools registered on load.
+
+DNS-AID SVCB/HTTPS records are created by `scripts/deploy-cloudspace.mjs` when the deploy token can edit zone DNS. This environment had no `CLOUDFLARE_API_TOKEN`, so live DNS was not changed and DNSSEC was not enabled.
 
 ## Remaining gaps (honest)
 

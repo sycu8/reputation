@@ -1,0 +1,75 @@
+# PulseWatch by OrangeCloud — https://reputation.orangecloud.vn
+# Public marketing and docs are crawlable. The signed-in app and API are not.
+
+User-agent: *
+Content-Signal: ai-train=no, search=yes, ai-input=no
+Allow: /
+Disallow: /app/
+Disallow: /api/
+
+User-agent: OAI-SearchBot
+Content-Signal: ai-train=no, search=yes, ai-input=no
+Allow: /
+Disallow: /app/
+Disallow: /api/
+
+User-agent: Claude-SearchBot
+Content-Signal: ai-train=no, search=yes, ai-input=no
+Allow: /
+Disallow: /app/
+Disallow: /api/
+
+User-agent: PerplexityBot
+Content-Signal: ai-train=no, search=yes, ai-input=no
+Allow: /
+Disallow: /app/
+Disallow: /api/
+
+User-agent: GPTBot
+Content-Signal: ai-train=no, search=no, ai-input=no
+Disallow: /
+
+User-agent: ClaudeBot
+Content-Signal: ai-train=no, search=no, ai-input=no
+Disallow: /
+
+User-agent: Google-Extended
+Content-Signal: ai-train=no, search=no, ai-input=no
+Disallow: /
+
+User-agent: Applebot-Extended
+Content-Signal: ai-train=no, search=no, ai-input=no
+Disallow: /
+
+User-agent: CCBot
+Content-Signal: ai-train=no, search=no, ai-input=no
+Disallow: /
+
+User-agent: Bytespider
+Content-Signal: ai-train=no, search=no, ai-input=no
+Disallow: /
+
+User-agent: Amazonbot
+Content-Signal: ai-train=no, search=no, ai-input=no
+Disallow: /
+
+User-agent: ChatGPT-User
+Content-Signal: ai-train=no, search=yes, ai-input=no
+Allow: /
+Disallow: /app/
+Disallow: /api/
+
+User-agent: Claude-User
+Content-Signal: ai-train=no, search=yes, ai-input=no
+Allow: /
+Disallow: /app/
+Disallow: /api/
+
+User-agent: Perplexity-User
+Content-Signal: ai-train=no, search=yes, ai-input=no
+Allow: /
+Disallow: /app/
+Disallow: /api/
+
+Sitemap: https://reputation.orangecloud.vn/sitemap.xml
+Agentmap: https://reputation.orangecloud.vn/.well-known/ai-catalog.json

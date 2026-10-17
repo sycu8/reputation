@@ -1,0 +1,20 @@
+{
+  "resource": "https://reputation.orangecloud.vn/api",
+  "resource_name": "PulseWatch API",
+  "authorization_servers": ["https://reputation.orangecloud.vn"],
+  "scopes_supported": [
+    "workspace.read",
+    "workspace.update",
+    "membership.manage",
+    "monitor.read",
+    "monitor.create",
+    "monitor.update",
+    "monitor.delete",
+    "query.read",
+    "query.create",
+    "query.update",
+    "query.delete"
+  ],
+  "bearer_methods_supported": ["header"],
+  "resource_documentation": "https://reputation.orangecloud.vn/docs/"
+}

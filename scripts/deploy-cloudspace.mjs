@@ -106,6 +106,60 @@ async function ensureR2(name) {
   }
 }
 
+async function ensureAgentDiscoveryDns(zoneId) {
+  const target = HOSTNAME;
+  const svcValue = 'alpn="h2" port=443 mandatory="alpn,port" key65280="mcp/server-card.json"';
+  const records = [
+    {
+      type: "SVCB",
+      name: `_index._agents.${HOSTNAME}`,
+      ttl: 3600,
+      data: { priority: 1, target, value: svcValue },
+      comment: "DNS-AID organizational index"
+    },
+    {
+      type: "HTTPS",
+      name: `_index._agents.${HOSTNAME}`,
+      ttl: 3600,
+      data: { priority: 1, target, value: svcValue },
+      comment: "DNS-AID organizational index over HTTPS RR"
+    },
+    {
+      type: "TXT",
+      name: `_catalog._agents.${HOSTNAME}`,
+      ttl: 3600,
+      content: `url=https://${HOSTNAME}/.well-known/ai-catalog.json`,
+      comment: "ARD catalog pointer"
+    }
+  ];
+  for (const record of records) {
+    const list = await cf(`/zones/${zoneId}/dns_records?type=${record.type}&name=${encodeURIComponent(record.name)}&per_page=100`);
+    const existing = (list || []).find((item) => item.name === record.name || item.name === `${record.name}.`);
+    if (existing) {
+      await cf(`/zones/${zoneId}/dns_records/${existing.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(record)
+      });
+      console.log(`DNS-AID update: ${record.type} ${record.name}`);
+    } else {
+      await cf(`/zones/${zoneId}/dns_records`, {
+        method: "POST",
+        body: JSON.stringify(record)
+      });
+      console.log(`DNS-AID create: ${record.type} ${record.name}`);
+    }
+  }
+  try {
+    const dnssec = await cf(`/zones/${zoneId}/dnssec`);
+    console.log(`DNSSEC status: ${dnssec.status || "unknown"}`);
+    if (dnssec.status !== "active") {
+      console.warn("DNSSEC is not active. DNS-AID authenticity needs the zone signed and the registrar DS record published. This deploy does not enable DNSSEC automatically.");
+    }
+  } catch (error) {
+    console.warn(`DNSSEC status check skipped: ${error instanceof Error ? error.message : error}`);
+  }
+}
+
 async function ensureQueue(name) {
   const list = await cf(`/accounts/${ACCOUNT_ID}/queues`);
   const existing = (list || []).find((item) => item.queue_name === name || item.name === name);
@@ -313,6 +367,12 @@ async function main() {
       console.warn(`DNS step skipped (add Zone.DNS edit to the API token, or create proxied AAAA 100:: for ${HOSTNAME} manually): ${error instanceof Error ? error.message : error}`);
     }
 
+    try {
+      await ensureAgentDiscoveryDns(zone.id);
+    } catch (error) {
+      console.warn(`DNS-AID step skipped (SVCB/HTTPS/TXT edit permission required): ${error instanceof Error ? error.message : error}`);
+    }
+
     // Prefer Workers routes on the zone hostname
     try {
       const routes = [
@@ -427,7 +487,10 @@ async function main() {
   try {
     const dash = await fetch(`https://${dashboardHost}/`, { signal: AbortSignal.timeout(20000) });
     const app = await fetch(`https://${dashboardHost}/app/`, { signal: AbortSignal.timeout(20000) });
-    console.log(`Smoke dashboard / -> ${dash.status}; /app/ -> ${app.status}`);
+    const robots = await fetch(`https://${dashboardHost}/robots.txt`, { signal: AbortSignal.timeout(20000) });
+    console.log(`Smoke dashboard / -> ${dash.status}; /app/ -> ${app.status}; /robots.txt -> ${robots.status} ${robots.headers.get("content-type") || ""}`);
+    const link = dash.headers.get("link");
+    if (!link || !link.includes("api-catalog")) console.warn("Dashboard homepage is missing the api-catalog Link header");
   } catch (error) {
     console.warn(`Dashboard smoke failed: ${error instanceof Error ? error.message : error}`);
   }

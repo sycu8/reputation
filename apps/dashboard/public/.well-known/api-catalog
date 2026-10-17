@@ -1,0 +1,25 @@
+{
+  "linkset": [
+    {
+      "anchor": "https://reputation.orangecloud.vn/api",
+      "service-desc": [
+        {
+          "href": "https://reputation.orangecloud.vn/openapi.json",
+          "type": "application/openapi+json"
+        }
+      ],
+      "service-doc": [
+        {
+          "href": "https://reputation.orangecloud.vn/docs/",
+          "type": "text/html"
+        }
+      ],
+      "status": [
+        {
+          "href": "https://reputation.orangecloud.vn/api/health",
+          "type": "application/json"
+        }
+      ]
+    }
+  ]
+}
