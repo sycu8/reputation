@@ -10,14 +10,19 @@ import {
 } from "../workers/crawler-fetch/src/upstream.ts";
 import {
   browserFailureAction,
+  countsTowardUrlCap,
   crawlFailureLog,
   noteUrlFailure
 } from "../packages/crawler-core/src/crawl-failure.ts";
 import {
   busyRequeueDelaySeconds,
+  crawlAttemptKey,
+  crawlCacheHit,
+  crawlCacheSkipReason,
   discoveryDedupeKey,
   isHardPaywalledHost,
   parseHardPaywallHosts,
+  shouldApplyUrlRetryCap,
   URL_RETRY_CAP,
   urlRetryCapReached
 } from "../packages/crawler-core/src/index.ts";
@@ -68,26 +73,66 @@ test("domain_busy requeues for 30-60s instead of the 250ms hint", () => {
   assert.notEqual(crawlFailureLog("browser", "browser_http_500", { action: "retry", delaySeconds: 30 }).event, "crawl_domain_busy");
 });
 
-test("retries are capped per message and per URL", () => {
+test("transient errors keep retrying after the cap so the queue can dead-letter them", () => {
   assert.equal(urlRetryCapReached(URL_RETRY_CAP - 1), false);
   assert.equal(urlRetryCapReached(URL_RETRY_CAP), true);
-  const under = fetchFailureAction("domain_busy:250", { random: () => 0, attempts: 1, urlFailures: URL_RETRY_CAP - 1 });
-  assert.equal(under.action, "retry");
-  assert.equal(fetchFailureAction("domain_busy:250", { random: () => 0, urlFailures: URL_RETRY_CAP }).action, "ack");
-  assert.equal(fetchFailureAction("domain_busy:250", { random: () => 0, attempts: 3, urlFailures: 0 }).action, "retry");
-  assert.equal(fetchFailureAction("domain_busy:250", { random: () => 0, attempts: 4, urlFailures: 0 }).action, "ack");
-  assert.equal(browserFailureAction("domain_busy:250", { random: () => 0, attempts: 2, urlFailures: 0 }).action, "retry");
-  assert.equal(browserFailureAction("browser_pool_busy:250", { random: () => 0, attempts: 3, urlFailures: 0 }).action, "ack");
-  assert.equal(fetchFailureAction("upstream_http_503", { attempts: 4 }).action, "ack");
-  assert.equal(fetchFailureAction("upstream_http_503", { attempts: 3 }).action, "retry");
-  assert.equal(browserFailureAction("browser_http_503", { attempts: 2, random: () => 0 }).action, "retry");
-  assert.equal(browserFailureAction("browser_http_503", { attempts: 3, random: () => 0 }).action, "ack");
+  const cappedBusy = fetchFailureAction("domain_busy:250", { random: () => 0, attempts: 4, urlFailures: URL_RETRY_CAP });
+  assert.equal(cappedBusy.action, "retry");
+  assert.equal(cappedBusy.delaySeconds, 30);
+  const cappedFetch = fetchFailureAction("upstream_http_503", { attempts: 4, urlFailures: URL_RETRY_CAP });
+  assert.equal(cappedFetch.action, "retry");
+  assert.equal(cappedFetch.delaySeconds, undefined);
+  const cappedBackoff = fetchFailureAction("upstream_backoff_429:45000", { attempts: 4, urlFailures: URL_RETRY_CAP });
+  assert.equal(cappedBackoff.action, "retry");
+  assert.equal(cappedBackoff.delaySeconds, 45);
+  const cappedBrowser = browserFailureAction("browser_http_503", { attempts: 4, urlFailures: URL_RETRY_CAP, random: () => 0 });
+  assert.equal(cappedBrowser.action, "retry");
+  const cappedPool = browserFailureAction("browser_pool_busy:250", { attempts: 4, urlFailures: URL_RETRY_CAP, random: () => 0 });
+  assert.equal(cappedPool.action, "retry");
+  assert.equal(cappedPool.delaySeconds, 30);
   assert.equal(browserFailureAction("browser_extraction_too_small").action, "ack");
   for (const status of [401, 402, 404, 422]) {
     assert.equal(browserFailureAction(`browser_http_${status}`).action, "ack");
   }
   assert.equal(fetchFailureAction("hard_paywall_host").action, "ack");
   assert.equal(crawlFailureLog("browser", "browser_http_422", { action: "ack" }).level, "warn");
+});
+
+test("per-URL cap ignores congestion and is scoped per tenant", () => {
+  assert.equal(countsTowardUrlCap("domain_busy:250"), false);
+  assert.equal(countsTowardUrlCap("browser_pool_busy:1000"), false);
+  assert.equal(countsTowardUrlCap("upstream_http_503"), true);
+  assert.equal(countsTowardUrlCap("upstream_backoff_429:30000"), true);
+  assert.equal(countsTowardUrlCap("browser_http_503"), true);
+  assert.equal(countsTowardUrlCap("upstream_http_permanent:404"), false);
+  assert.equal(countsTowardUrlCap("browser_http_422"), false);
+  assert.equal(shouldApplyUrlRetryCap(1), true);
+  assert.equal(shouldApplyUrlRetryCap(undefined), true);
+  assert.equal(shouldApplyUrlRetryCap(2), false);
+  assert.equal(shouldApplyUrlRetryCap(4), false);
+  const left = crawlAttemptKey("tenant-a", "hash");
+  const right = crawlAttemptKey("tenant-b", "hash");
+  assert.equal(left, "crawl-attempts:tenant-a:hash");
+  assert.notEqual(left, right);
+  assert.equal(crawlAttemptKey(undefined, "hash"), "crawl-attempts:_:hash");
+});
+
+test("browser cache hits forward stored content and skips stay terminal", () => {
+  const hit = crawlCacheHit({
+    contentId: "c1",
+    rawR2Key: "content/h/b/browser.json",
+    fetchedAt: "2026-10-18T00:00:00.000Z",
+    canonicalUrl: "https://example.com/story"
+  });
+  assert.deepEqual(hit, {
+    contentId: "c1",
+    rawR2Key: "content/h/b/browser.json",
+    fetchedAt: "2026-10-18T00:00:00.000Z",
+    canonicalUrl: "https://example.com/story"
+  });
+  assert.equal(crawlCacheHit({ contentId: "c1", skip: "upstream_http_permanent:404" }), null);
+  assert.equal(crawlCacheSkipReason({ skip: "browser_http_404", contentId: "c1" }), "browser_http_404");
+  assert.equal(crawlCacheHit({ contentId: "c1" }), null);
 });
 
 test("hard-paywall hosts are configurable and tracking params share a dedupe key", () => {
@@ -113,9 +158,12 @@ test("url failure counter advances inside the retry window", async () => {
     async get(key) { return store.has(key) ? store.get(key) : null; },
     async put(key, value) { store.set(key, value); }
   };
-  assert.equal(await noteUrlFailure(cache, "abc"), 1);
-  assert.equal(await noteUrlFailure(cache, "abc"), 2);
-  assert.equal(store.size, 1);
+  assert.equal(await noteUrlFailure(cache, "tenant-a", "abc"), 1);
+  assert.equal(await noteUrlFailure(cache, "tenant-a", "abc"), 2);
+  assert.equal(await noteUrlFailure(cache, "tenant-b", "abc"), 1);
+  assert.equal(store.size, 2);
+  assert.equal(store.get("crawl-attempts:tenant-a:abc"), "2");
+  assert.equal(store.get("crawl-attempts:tenant-b:abc"), "1");
 });
 
 test("retry-after and recent 429s grow per-domain backoff", () => {

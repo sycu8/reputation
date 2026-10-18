@@ -1,26 +1,19 @@
 import {
   busyRequeueDelaySeconds,
   crawlAttemptKey,
-  messageRetryCapReached,
   nextUrlFailureCount,
-  URL_RETRY_CAP,
-  URL_RETRY_WINDOW_SECONDS,
-  urlRetryCapReached
+  URL_RETRY_WINDOW_SECONDS
 } from "./index.ts";
 
 export type UpstreamAction = "permanent" | "browser" | "backoff" | "retry";
 
-/** Static crawl: 3 retries after the first delivery (QUEUE_CONTRACTS). */
-export const STATIC_CRAWL_MAX_RETRIES = 3;
-/** Browser crawl: 2 retries after the first delivery. */
-export const BROWSER_CRAWL_MAX_RETRIES = 2;
 export const PERMANENT_SKIP_TTL_SECONDS = 24 * 60 * 60;
 export const EXTRACTION_SKIP_TTL_SECONDS = 6 * 60 * 60;
 
 export interface CrawlFailureContext {
-  /** Queue delivery count for this message. Starts at 1. */
+  /** Queue delivery count for this message. Starts at 1. Does not stop a transient retry. */
   attempts?: number;
-  /** Failures already recorded for this normalized URL, including this one when already incremented. */
+  /** Real failures for this tenant and URL. Does not stop a transient retry. */
   urlFailures?: number;
   random?: () => number;
 }
@@ -91,38 +84,34 @@ export function crawlSkipTtlSeconds(message: string): number | null {
   return null;
 }
 
-function congestionDecision(waitMs: number, input: CrawlFailureContext, maxRetries: number): CrawlFailureDecision {
-  const attempts = input.attempts ?? 1;
-  const urlFailures = input.urlFailures ?? 0;
-  // Ack at the queue retry budget so congestion is not dead-lettered, and stop a misconfigured max_retries from looping.
-  if (messageRetryCapReached(attempts, maxRetries) || attempts >= URL_RETRY_CAP || urlRetryCapReached(urlFailures)) return { action: "ack" };
+/** Domain and pool delays are our own congestion. They must not burn the per-URL failure cap. */
+export function countsTowardUrlCap(message: string): boolean {
+  if (isTerminalCrawlFailure(message)) return false;
+  if (message.startsWith("domain_busy:") || message.startsWith("browser_pool_busy:")) return false;
+  return true;
+}
+
+function congestionDecision(waitMs: number, input: CrawlFailureContext): CrawlFailureDecision {
   return { action: "retry", delaySeconds: busyRequeueDelaySeconds(waitMs, input.random ?? Math.random) };
 }
 
 export function fetchFailureAction(message: string, input: CrawlFailureContext = {}): CrawlFailureDecision {
   if (isTerminalCrawlFailure(message)) return { action: "ack" };
-  const attempts = input.attempts ?? 1;
-  const urlFailures = input.urlFailures ?? 0;
   const backoff = message.match(/^(?:upstream_backoff_429|domain_busy):(\d+(?:\.\d+)?)$/);
   if (backoff?.[1]) {
-    if (message.startsWith("domain_busy:")) return congestionDecision(Number(backoff[1]), input, STATIC_CRAWL_MAX_RETRIES);
-    if (messageRetryCapReached(attempts, STATIC_CRAWL_MAX_RETRIES) || urlRetryCapReached(urlFailures)) return { action: "ack" };
+    if (message.startsWith("domain_busy:")) return congestionDecision(Number(backoff[1]), input);
     const seconds = Math.max(1, Math.min(900, Math.ceil(Number(backoff[1]) / 1000)));
     return { action: "retry", delaySeconds: seconds };
   }
-  if (messageRetryCapReached(attempts, STATIC_CRAWL_MAX_RETRIES) || urlRetryCapReached(urlFailures)) return { action: "ack" };
   return { action: "retry" };
 }
 
 export function browserFailureAction(message: string, input: CrawlFailureContext = {}): CrawlFailureDecision {
   if (isTerminalCrawlFailure(message)) return { action: "ack" };
-  const attempts = input.attempts ?? 1;
-  const urlFailures = input.urlFailures ?? 0;
   const busy = message.match(/^(?:browser_pool_busy|domain_busy):(\d+(?:\.\d+)?)$/);
-  if (busy?.[1]) return congestionDecision(Number(busy[1]), input, BROWSER_CRAWL_MAX_RETRIES);
+  if (busy?.[1]) return congestionDecision(Number(busy[1]), input);
   const http = message.match(/^browser_http_(\d+)$/);
-  if (http?.[1] && Number(http[1]) === 429) return congestionDecision(30_000, input, BROWSER_CRAWL_MAX_RETRIES);
-  if (messageRetryCapReached(attempts, BROWSER_CRAWL_MAX_RETRIES) || urlRetryCapReached(urlFailures)) return { action: "ack" };
+  if (http?.[1] && Number(http[1]) === 429) return congestionDecision(30_000, input);
   return { action: "retry", delaySeconds: busyRequeueDelaySeconds(0, input.random ?? Math.random) };
 }
 
@@ -140,10 +129,11 @@ export function crawlFailureLog(worker: "fetch" | "browser", message: string, de
   return { level: "error", event: failed };
 }
 
-export async function noteUrlFailure(cache: CrawlAttemptCache, urlHash: string): Promise<number> {
-  const raw = await cache.get(crawlAttemptKey(urlHash));
+export async function noteUrlFailure(cache: CrawlAttemptCache, tenantId: string | undefined, urlHash: string): Promise<number> {
+  const key = crawlAttemptKey(tenantId, urlHash);
+  const raw = await cache.get(key);
   const current = Number(raw ?? "0");
   const next = nextUrlFailureCount(Number.isFinite(current) ? current : 0);
-  await cache.put(crawlAttemptKey(urlHash), String(next), { expirationTtl: URL_RETRY_WINDOW_SECONDS });
+  await cache.put(key, String(next), { expirationTtl: URL_RETRY_WINDOW_SECONDS });
   return next;
 }

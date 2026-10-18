@@ -85,13 +85,13 @@ DNS-AID SVCB/HTTPS records are created by `scripts/deploy-cloudspace.mjs` when t
 
 ## Production incident fixes (code, not deployed)
 
-Verified locally on 2026-10-18 with `npm run typecheck`, `npm run lint`, and `npm test` (97 passed, including retry-storm backoff, cap, and URL normalization). Not deployed. `wrangler deploy` was not run.
+Verified locally on 2026-10-18 with `npm run typecheck`, `npm run lint`, and `npm test` (99 passed, including retry-storm backoff, cap, URL normalization, and QA fixes for transient DLQ, per-tenant caps, and browser cache forwarding). Not deployed. `wrangler deploy` was not run.
 
 - Browser pool: `BrowserPoolDO` now uses expiring leases swept by a Durable Object alarm. The legacy counter that was stuck at 100 is no longer the cap. Default cap is 200 (Workers Paid Browser Run concurrent browsers, overridable with `BROWSER_POOL_MAX`). Reset procedure is in `docs/SRE_RUNBOOK.md`.
 - Alerts: `no_channels_configured` is alert state `needs_setup`, logged at warn, and acked. The dashboard shows "Needs notification setup".
 - Discovery: RSS/Atom title and snippet are capped, crawl messages are fitted under 120 KB, sends are batched, one candidate failure does not fail the job, and a discovery job stops after 90s instead of running to the 15-minute queue limit. Static RSS/sitemap catalogs are fetched once per job.
 - Static crawler: permanent 4xx responses are acked, 403/419 are sent to the browser crawler, and 429 records per-domain backoff on `DomainCoordinatorDO`.
-- Retry storm (code, not deployed): `domain_busy` / `browser_pool_busy` requeue with a jittered 30–60s `delaySeconds` (longer coordinator hints are kept, capped at 15 minutes). Each normalized URL stops after 8 recorded failures in 15 minutes. Permanent 4xx, including browser `browser_http_401/402/404/422`, and `browser_extraction_too_small` are acked. `syn-*`, `utm_*`, and `fbclid` are stripped before dedupe. `ft.com` and `nytimes.com` (override with `HARD_PAYWALL_HOSTS`) are skipped before fetch or Browser Run. `domain_busy` is logged at info as `crawl_domain_busy`.
+- Retry storm (code, not deployed): `domain_busy` / `browser_pool_busy` requeue with a jittered 30–60s `delaySeconds` (longer coordinator hints are kept, capped at 15 minutes). Transient failures keep retrying until the queue DLQ (`max_retries` 3). The per-tenant URL cap counts real fetch failures only, not congestion delays. Permanent 4xx, including browser `browser_http_401/402/404/422`, and `browser_extraction_too_small` are acked. A browser cache hit is forwarded to processing. `syn-*`, `utm_*`, and `fbclid` are stripped before dedupe. `ft.com` and `nytimes.com` (override with `HARD_PAYWALL_HOSTS`) are skipped before fetch or Browser Run. `domain_busy` is logged at info as `crawl_domain_busy`.
 
 ## Remaining gaps (honest)
 

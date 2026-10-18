@@ -100,14 +100,48 @@ export function busyRequeueDelaySeconds(waitMs: number, random: () => number = M
 }
 
 /**
- * Failures remembered per normalized URL. Further messages are acked until the window expires.
- * Eight congestion retries at 30–60s stay inside the alert window; they cannot loop for an hour.
+ * Real fetch failures remembered per tenant and normalized URL.
+ * Congestion delays are not counted. A fresh message is skipped once the cap is reached.
+ * An in-flight transient retry is not skipped here; the queue dead-letters it after max_retries.
  */
 export const URL_RETRY_CAP = 8;
 export const URL_RETRY_WINDOW_SECONDS = 15 * 60;
 
-export function crawlAttemptKey(urlHash: string): string {
-  return `crawl-attempts:${urlHash}`;
+export function crawlAttemptKey(tenantId: string | undefined, urlHash: string): string {
+  const tenant = tenantId?.trim() ? tenantId.trim() : "_";
+  return `crawl-attempts:${tenant}:${urlHash}`;
+}
+
+/** The per-URL cap applies to a new delivery. Redeliveries keep retrying until the queue DLQ. */
+export function shouldApplyUrlRetryCap(attempts: number | undefined): boolean {
+  return (attempts ?? 1) <= 1;
+}
+
+export interface CrawlCacheRecord {
+  skip?: string;
+  contentId?: string;
+  rawR2Key?: string;
+  fetchedAt?: string;
+  canonicalUrl?: string;
+}
+
+export function crawlCacheSkipReason(record: CrawlCacheRecord): string | null {
+  if (typeof record.skip === "string" && record.skip.length > 0) return record.skip;
+  return null;
+}
+
+/** Content already stored for this URL. Callers forward it to the current tenant's monitor. */
+export function crawlCacheHit(record: CrawlCacheRecord): { contentId: string; rawR2Key: string; fetchedAt: string; canonicalUrl: string } | null {
+  if (crawlCacheSkipReason(record)) return null;
+  if (record.contentId && record.rawR2Key && record.fetchedAt && record.canonicalUrl) {
+    return {
+      contentId: record.contentId,
+      rawR2Key: record.rawR2Key,
+      fetchedAt: record.fetchedAt,
+      canonicalUrl: record.canonicalUrl
+    };
+  }
+  return null;
 }
 
 export function urlRetryCapReached(recordedFailures: number, cap = URL_RETRY_CAP): boolean {
@@ -118,12 +152,6 @@ export function urlRetryCapReached(recordedFailures: number, cap = URL_RETRY_CAP
 export function nextUrlFailureCount(recordedFailures: number): number {
   if (!Number.isFinite(recordedFailures) || recordedFailures < 0) return 1;
   return Math.floor(recordedFailures) + 1;
-}
-
-/** True once this delivery is past the allowed retries. Queue `attempts` starts at 1. */
-export function messageRetryCapReached(attempts: number, maxRetries: number): boolean {
-  if (!Number.isFinite(attempts) || !Number.isFinite(maxRetries)) return false;
-  return attempts > maxRetries;
 }
 
 export function assertPublicHttpUrl(input: string): URL {

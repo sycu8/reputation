@@ -1,6 +1,7 @@
 export {
   browserFailureAction,
   classifyUpstreamStatus,
+  countsTowardUrlCap,
   crawlFailureLog,
   crawlSkipTtlSeconds,
   fetchFailureAction,

@@ -1,7 +1,7 @@
-import { assertPublicHttpUrl, BROWSER_RUN_ACCOUNT_CONCURRENCY, crawlAttemptKey, createJob, htmlToPlainText, isHardPaywalledHost, normalizeUrl, parseHardPaywallHosts, sha256Hex, unwrapBrowserRunPayload, urlRetryCapReached, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
+import { assertPublicHttpUrl, BROWSER_RUN_ACCOUNT_CONCURRENCY, crawlAttemptKey, crawlCacheHit, crawlCacheSkipReason, createJob, htmlToPlainText, isHardPaywalledHost, normalizeUrl, parseHardPaywallHosts, sha256Hex, shouldApplyUrlRetryCap, unwrapBrowserRunPayload, urlRetryCapReached, type CrawlCacheRecord, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
-import { browserFailureAction, crawlFailureLog, crawlSkipTtlSeconds, isTerminalCrawlFailure, noteUrlFailure } from "../../../packages/crawler-core/src/crawl-failure.ts";
+import { browserFailureAction, countsTowardUrlCap, crawlFailureLog, crawlSkipTtlSeconds, noteUrlFailure } from "../../../packages/crawler-core/src/crawl-failure.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -21,7 +21,7 @@ interface ProcessPayload {
   discoveryTitle?: string | undefined;
   discoverySnippet?: string | undefined;
   publishedAt?: string | undefined;
-  acquisition: "browser";
+  acquisition: "browser" | "cache";
 }
 
 interface Env {
@@ -79,18 +79,46 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
   const urlHash = await sha256Hex(canonicalUrl);
   const cached = await env.CRAWL_CACHE.get(`crawl:${urlHash}`);
   if (cached) {
-    const record = JSON.parse(cached) as { skip?: string; contentId?: string };
-    if ((typeof record.skip === "string" && record.skip.length > 0) || record.contentId) {
+    const record = JSON.parse(cached) as CrawlCacheRecord;
+    const skip = crawlCacheSkipReason(record);
+    if (skip) {
       structuredLog("info", "crawl_browser_skipped", {
         requestId: job.traceId,
         tenantId: job.tenantId,
         monitorId: job.monitorId
-      }, { jobId: job.jobId, url: job.payload.url, reason: record.skip ?? "cache_hit" });
+      }, { jobId: job.jobId, url: job.payload.url, reason: skip });
+      return;
+    }
+    const hit = crawlCacheHit(record);
+    if (hit) {
+      await env.PROCESS_CONTENT.send(createJob<ProcessPayload>({
+        source: job.payload.source,
+        canonicalUrl: hit.canonicalUrl,
+        contentId: hit.contentId,
+        rawR2Key: hit.rawR2Key,
+        fetchedAt: hit.fetchedAt,
+        discoveryTitle: job.payload.title,
+        discoverySnippet: job.payload.snippet,
+        publishedAt: job.payload.publishedAt,
+        acquisition: "cache"
+      }, {
+        traceId: job.traceId,
+        tenantId: job.tenantId,
+        monitorId: job.monitorId,
+        priority: job.priority
+      }));
+      structuredLog("info", "crawl_browser_cache_hit", {
+        requestId: job.traceId,
+        tenantId: job.tenantId,
+        monitorId: job.monitorId
+      }, { jobId: job.jobId, url: job.payload.url, contentId: hit.contentId });
       return;
     }
   }
-  const recordedFailures = Number(await env.CRAWL_CACHE.get(crawlAttemptKey(urlHash)) ?? "0");
-  if (urlRetryCapReached(Number.isFinite(recordedFailures) ? recordedFailures : 0)) throw new Error("url_retry_cap");
+  if (shouldApplyUrlRetryCap(message.attempts)) {
+    const recordedFailures = Number(await env.CRAWL_CACHE.get(crawlAttemptKey(job.tenantId, urlHash)) ?? "0");
+    if (urlRetryCapReached(Number.isFinite(recordedFailures) ? recordedFailures : 0)) throw new Error("url_retry_cap");
+  }
 
   const domainStub = env.DOMAIN_DO.get(env.DOMAIN_DO.idFromName(domain));
   const poolStub = env.BROWSER_POOL_DO.get(env.BROWSER_POOL_DO.idFromName("global"));
@@ -205,9 +233,9 @@ export default {
         const messageText = error instanceof Error ? error.message : "unknown";
         const urlHash = await urlHashForPayload(message.body.payload.url);
         let urlFailures = 0;
-        if (urlHash && !isTerminalCrawlFailure(messageText)) {
+        if (urlHash && countsTowardUrlCap(messageText)) {
           try {
-            urlFailures = await noteUrlFailure(env.CRAWL_CACHE, urlHash);
+            urlFailures = await noteUrlFailure(env.CRAWL_CACHE, message.body.tenantId, urlHash);
           } catch {
             urlFailures = 0;
           }
