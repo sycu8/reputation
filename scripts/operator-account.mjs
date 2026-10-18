@@ -13,11 +13,14 @@
  * recover-smoke reads GET /v1/admin/tenants and locks the first existing
  * address for each "Deploy Smoke" / "API Prefix Smoke" row. Signup bodies
  * were never logged. The email is deploy-smoke-<unix-ms>@example.com or
- * deploy-api-prefix-<unix-ms>@example.com. Optional window:
+ * deploy-api-prefix-<unix-ms>@example.com. Required window, both finite
+ * unix milliseconds with start <= end:
  *   SMOKE_RUN_START_MS, SMOKE_RUN_END_MS  (GitHub Actions run bounds)
- *   SMOKE_LOOKBACK_MS (default 15000), SMOKE_AHEAD_MS (default 2000)
- * The span is capped at 60s. Each miss creates an empty user Durable Object.
+ * The command exits before any request when either bound is missing or invalid.
+ * Optional: SMOKE_LOOKBACK_MS (default 15000), SMOKE_AHEAD_MS (default 2000).
+ * The probe span is capped at 60s. Each miss creates an empty user Durable Object.
  * The command does not lock the collector.
+ * Generate OPERATOR_ACCOUNT_SECRET with: openssl rand -base64 32
  *
  * The new password and the operator secret are read from the environment
  * only and are never printed.
@@ -37,6 +40,27 @@ const SMOKE_NAMES = {
 function finiteOr(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function boundError(name, detail) {
+  return new Error(`${detail} ${name}. recover-smoke refuses to run without a valid GitHub Actions window (unix milliseconds, start <= end).`);
+}
+
+/** Both bounds are required. Missing or non-finite values throw before any network call. */
+export function requireSmokeWindow(env) {
+  const start = parseWindowBound(env?.SMOKE_RUN_START_MS, "SMOKE_RUN_START_MS");
+  const end = parseWindowBound(env?.SMOKE_RUN_END_MS, "SMOKE_RUN_END_MS");
+  if (start > end) {
+    throw new Error("SMOKE_RUN_START_MS is after SMOKE_RUN_END_MS. recover-smoke refuses to run.");
+  }
+  return { start, end };
+}
+
+function parseWindowBound(value, name) {
+  if (value == null || String(value).trim() === "") throw boundError(name, "Missing");
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw boundError(name, "Invalid");
+  return number;
 }
 
 /** Candidates around registry createdAt. Newest first. Stops are applied by the caller. */
@@ -106,15 +130,15 @@ async function post(apiBase, secret, path, body) {
   return result.data;
 }
 
-async function recoverSmoke(apiBase, secret) {
+async function recoverSmoke(apiBase, secret, windowBounds) {
   const listed = await request(apiBase, secret, "GET", "/v1/admin/tenants");
   if (listed.status !== 200) {
     fail(`/v1/admin/tenants failed: HTTP ${listed.status} ${listed.data.error || "error"}`);
   }
   const tenants = Array.isArray(listed.data.tenants) ? listed.data.tenants : [];
   const plan = smokeRecoveryPlan(tenants, {
-    runStartMs: process.env.SMOKE_RUN_START_MS,
-    runEndMs: process.env.SMOKE_RUN_END_MS,
+    runStartMs: windowBounds.start,
+    runEndMs: windowBounds.end,
     behindMs: process.env.SMOKE_LOOKBACK_MS,
     aheadMs: process.env.SMOKE_AHEAD_MS
   });
@@ -153,7 +177,13 @@ async function main() {
     fail("Usage: node scripts/operator-account.mjs <reset-password|lock|recover-smoke>");
   }
   if (command === "recover-smoke") {
-    await recoverSmoke(apiBase, secret);
+    let windowBounds;
+    try {
+      windowBounds = requireSmokeWindow(process.env);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : "invalid_smoke_window");
+    }
+    await recoverSmoke(apiBase, secret, windowBounds);
     return;
   }
   if (command === "reset-password") {

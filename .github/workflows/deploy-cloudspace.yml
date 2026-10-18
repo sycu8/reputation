@@ -36,12 +36,17 @@ jobs:
       SUPER_ADMIN_EMAILS: ${{ secrets.SUPER_ADMIN_EMAILS }}
       COLLECTOR_EMAIL: ${{ secrets.COLLECTOR_EMAIL }}
       COLLECTOR_PASSWORD: ${{ secrets.COLLECTOR_PASSWORD }}
-      OPERATOR_ACCOUNT_SECRET: ${{ secrets.OPERATOR_ACCOUNT_SECRET }}
       DEPLOY_SMOKE_PASSWORD: ${{ secrets.DEPLOY_SMOKE_PASSWORD }}
       BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       BILLING_WEBHOOK_SECRET: ${{ secrets.BILLING_WEBHOOK_SECRET }}
     steps:
+      - name: Manual deploy only from main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::workflow_dispatch deploy is allowed only from refs/heads/main (current ref: ${GITHUB_REF})."
+          exit 1
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -68,6 +73,8 @@ jobs:
         run: npm run validate
 
       - name: Deploy to Cloudspace
+        env:
+          OPERATOR_ACCOUNT_SECRET: ${{ secrets.OPERATOR_ACCOUNT_SECRET }}
         run: npm run deploy:cloudspace
 
       - name: Bootstrap live collector workspace

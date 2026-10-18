@@ -176,3 +176,13 @@ test("tracked operator files do not embed collector or smoke passwords", () => {
   assert.match(deploy, /OPERATOR_ACCOUNT_SECRET is missing or empty/);
   assert.doesNotMatch(deploy, /const required = \[/);
 });
+
+test("deploy workflow keeps the operator secret on the deploy step and manual dispatch on main", () => {
+  const workflow = readFileSync(resolve(ROOT, ".github/workflows/deploy-cloudspace.yml"), "utf8");
+  assert.match(workflow, /workflow_dispatch deploy is allowed only from refs\/heads\/main/);
+  const jobEnv = workflow.slice(workflow.indexOf("    env:"), workflow.indexOf("    steps:"));
+  assert.equal(jobEnv.includes("OPERATOR_ACCOUNT_SECRET"), false);
+  const deployStep = workflow.slice(workflow.indexOf("name: Deploy to Cloudspace"), workflow.indexOf("name: Bootstrap live collector"));
+  assert.match(deployStep, /OPERATOR_ACCOUNT_SECRET: \$\{\{ secrets\.OPERATOR_ACCOUNT_SECRET \}\}/);
+  assert.equal(workflow.split("\n").filter((line) => line.includes("OPERATOR_ACCOUNT_SECRET")).length, 1);
+});

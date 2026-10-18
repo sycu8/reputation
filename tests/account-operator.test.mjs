@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import api from "../apps/api-worker/src/index.ts";
-import { smokeRecoveryPlan } from "../scripts/operator-account.mjs";
+import { requireSmokeWindow, smokeRecoveryPlan } from "../scripts/operator-account.mjs";
 import { cookieFrom, makeLocalEnv } from "./helpers/local-env.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -17,6 +17,7 @@ function call(env, method, path, body, options = {}) {
   if (options.cookie) headers.cookie = options.cookie;
   if (options.operatorSecret !== undefined) headers["x-operator-secret"] = options.operatorSecret;
   if (options.ray) headers["cf-ray"] = options.ray;
+  if (options.ip) headers["cf-connecting-ip"] = options.ip;
   return api.fetch(new Request(`https://api.local${path}`, {
     method,
     headers,
@@ -258,31 +259,60 @@ test("super_admin session gets 403 on reset-password and the victim stays signed
   assert.equal(victimAfter.status, 401);
 });
 
-test("repeated admin attempts against one account return 429", async () => {
-  const env = makeLocalEnv({
-    SUPER_ADMIN_EMAILS: "collector@example.com",
-    OPERATOR_ACCOUNT_SECRET: OPERATOR_SECRET
-  });
-  const collector = await signup(env, "collector@example.com");
+test("a normal user's denial spam does not block an operator-secret reset", async () => {
+  const env = makeLocalEnv({ OPERATOR_ACCOUNT_SECRET: OPERATOR_SECRET });
+  const member = await signup(env, "member@example.com");
+  assert.equal(member.body.user.globalRole, "user");
   await signup(env, "victim-rate@example.com");
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  for (let attempt = 0; attempt < 9; attempt += 1) {
     const denied = await call(env, "POST", "/v1/admin/accounts/reset-password", {
       email: "victim-rate@example.com",
       password: NEW_PASSWORD
-    }, { cookie: collector.cookie });
+    }, { cookie: member.cookie });
     assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).error, "operator_secret_required");
   }
-  const limited = await call(env, "POST", "/v1/admin/accounts/reset-password", {
+  const reset = await call(env, "POST", "/v1/admin/accounts/reset-password", {
     email: "victim-rate@example.com",
     password: NEW_PASSWORD
-  }, { operatorSecret: OPERATOR_SECRET });
-  assert.equal(limited.status, 429);
-  assert.equal((await limited.json()).error, "rate_limited");
-  const login = await call(env, "POST", "/v1/auth/login", {
+  }, { operatorSecret: OPERATOR_SECRET, ray: "operator-after-spam" });
+  assert.equal(reset.status, 200);
+  assert.equal((await reset.json()).sessionsRevoked >= 1, true);
+  const oldPassword = await call(env, "POST", "/v1/auth/login", {
     email: "victim-rate@example.com",
     password: OLD_PASSWORD
   });
-  assert.equal(login.status, 200);
+  assert.equal(oldPassword.status, 401);
+  const newPassword = await call(env, "POST", "/v1/auth/login", {
+    email: "victim-rate@example.com",
+    password: NEW_PASSWORD
+  });
+  assert.equal(newPassword.status, 200);
+});
+
+test("anonymous wrong operator secrets are rate limited per IP", async () => {
+  const env = makeLocalEnv({ OPERATOR_ACCOUNT_SECRET: OPERATOR_SECRET });
+  const ip = "203.0.113.45";
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const rejected = await call(env, "POST", "/v1/admin/accounts/lock", {
+      email: "person@example.com"
+    }, { operatorSecret: "wrong-secret", ip });
+    assert.equal(rejected.status, 401);
+    assert.equal((await rejected.json()).error, "invalid_operator_secret");
+  }
+  const limited = await call(env, "POST", "/v1/admin/accounts/lock", {
+    email: "person@example.com"
+  }, { operatorSecret: "wrong-secret", ip });
+  assert.equal(limited.status, 429);
+  assert.equal((await limited.json()).error, "rate_limited");
+  const otherIp = await call(env, "POST", "/v1/admin/accounts/lock", {
+    email: "person@example.com"
+  }, { operatorSecret: "wrong-secret", ip: "203.0.113.46" });
+  assert.equal(otherIp.status, 401);
+  const valid = await call(env, "POST", "/v1/admin/accounts/lock", {
+    email: "missing-after-guesses@example.com"
+  }, { operatorSecret: OPERATOR_SECRET, ip });
+  assert.equal(valid.status, 404);
 });
 
 test("smoke recovery plan uses registry names and a capped timestamp window", () => {
@@ -331,6 +361,29 @@ test("unknown account and short password do not report success", async () => {
   }, { operatorSecret: OPERATOR_SECRET });
   assert.equal(short.status, 400);
   assert.equal((await short.json()).error, "password_too_short");
+});
+
+test("recover-smoke refuses to run without a valid window", () => {
+  assert.throws(() => requireSmokeWindow({}), /Missing SMOKE_RUN_START_MS/);
+  assert.throws(() => requireSmokeWindow({ SMOKE_RUN_START_MS: "10" }), /Missing SMOKE_RUN_END_MS/);
+  assert.throws(() => requireSmokeWindow({ SMOKE_RUN_START_MS: "later", SMOKE_RUN_END_MS: "20" }), /Invalid SMOKE_RUN_START_MS/);
+  assert.throws(() => requireSmokeWindow({ SMOKE_RUN_START_MS: "30", SMOKE_RUN_END_MS: "10" }), /after SMOKE_RUN_END_MS/);
+  assert.deepEqual(requireSmokeWindow({ SMOKE_RUN_START_MS: "10", SMOKE_RUN_END_MS: "20" }), { start: 10, end: 20 });
+
+  const env = { ...process.env, OPERATOR_ACCOUNT_SECRET: "present", API_BASE: "http://127.0.0.1:9" };
+  delete env.SMOKE_RUN_START_MS;
+  delete env.SMOKE_RUN_END_MS;
+  const missing = spawnSync(process.execPath, ["scripts/operator-account.mjs", "recover-smoke"], {
+    cwd: ROOT,
+    env,
+    encoding: "utf8",
+    timeout: 3000
+  });
+  assert.notEqual(missing.status, 0);
+  const output = `${missing.stdout || ""}\n${missing.stderr || ""}`;
+  assert.match(output, /SMOKE_RUN_START_MS/);
+  assert.equal(output.includes("present"), false);
+  assert.doesNotMatch(output, /ECONNREFUSED|fetch failed|ENOTFOUND/);
 });
 
 test("operator script exits before the network when required env is missing", () => {

@@ -324,14 +324,19 @@ export class UserDirectoryDO extends SqliteObject {
     );
   }
 
-  /** Per-account brake. A cross-isolate Workers Rate Limiting binding is not configured. */
-  private recentAdminAttempts(): number {
+  /**
+   * Caps denial audit writes for one actor on this account.
+   * Password reset and lock do not consult it: a valid operator secret is exempt.
+   */
+  private recentDenialsForActor(actorUserId: string): number {
     const since = new Date(Date.now() - 60_000).toISOString();
     const row = rows(this.sql.exec<{ n: number }>(
       `SELECT COUNT(*) AS n FROM audit_events
        WHERE created_at >= ?
-         AND action IN ('account.password_reset','account.lock','account.password_reset_denied','account.lock_denied')`,
-      since
+         AND actor_user_id = ?
+         AND action IN ('account.password_reset_denied','account.lock_denied')`,
+      since,
+      actorUserId
     ))[0];
     return Number(row?.n ?? 0);
   }
@@ -344,7 +349,6 @@ export class UserDirectoryDO extends SqliteObject {
     if (password.length < 10) return json({ error: "password_too_short" }, 400);
     const account = this.loadAccount(email);
     if (!account) return json({ error: "account_not_found" }, 404);
-    if (this.recentAdminAttempts() >= 8) return json({ error: "rate_limited" }, 429);
     const salt = new Uint8Array(16);
     crypto.getRandomValues(salt);
     const passwordHash = await derivePassword(password, salt);
@@ -379,7 +383,6 @@ export class UserDirectoryDO extends SqliteObject {
     if (status !== "suspended" && status !== "deleted") return json({ error: "invalid_status" }, 400);
     const account = this.loadAccount(email);
     if (!account) return json({ error: "account_not_found" }, 404);
-    if (this.recentAdminAttempts() >= 8) return json({ error: "rate_limited" }, 429);
     const updatedAt = nowIso();
     const sessionsRevoked = await this.state.storage.transaction(async () => {
       this.sql.exec(`UPDATE user_account SET status=?, updated_at=? WHERE id=?`, status, updatedAt, account.id);
@@ -401,7 +404,7 @@ export class UserDirectoryDO extends SqliteObject {
     const action = body.action === "account.lock_denied" ? "account.lock_denied" : "account.password_reset_denied";
     const account = this.loadAccount(email);
     if (!account) return json({ error: "account_not_found" }, 404);
-    if (this.recentAdminAttempts() >= 8) return json({ error: "rate_limited" }, 429);
+    if (this.recentDenialsForActor(actorUserId) >= 8) return json({ error: "rate_limited" }, 429);
     this.auditAccount(actorUserId, action, account.id, { email: account.email, result: "denied" });
     return json({ ok: true });
   }

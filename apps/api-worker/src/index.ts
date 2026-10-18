@@ -784,6 +784,33 @@ async function optionalSessionActor(request: Request, env: Env, ray: string): Pr
   }
 }
 
+const SECRET_GUESS_LIMIT = 8;
+const SECRET_GUESS_WINDOW_MS = 60_000;
+const secretGuesses = new Map<string, number[]>();
+
+function clientIp(request: Request): string {
+  const value = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+  return value.slice(0, 128);
+}
+
+/** Per-isolate memory only. A valid operator secret never calls this. */
+function anonymousSecretGuessLimited(request: Request): boolean {
+  const ip = clientIp(request);
+  const now = Date.now();
+  const recent = (secretGuesses.get(ip) ?? []).filter((ts) => now - ts < SECRET_GUESS_WINDOW_MS);
+  if (recent.length >= SECRET_GUESS_LIMIT) {
+    secretGuesses.set(ip, recent);
+    return true;
+  }
+  recent.push(now);
+  secretGuesses.set(ip, recent);
+  if (secretGuesses.size > 1024) {
+    const oldest = secretGuesses.keys().next().value;
+    if (oldest !== undefined) secretGuesses.delete(oldest);
+  }
+  return false;
+}
+
 /** Password reset and lock accept only X-Operator-Secret. A session alone is 403. */
 async function requireOperatorSecret(request: Request, env: Env): Promise<OperatorGate> {
   const ray = requestRay(request);
@@ -801,7 +828,10 @@ async function requireOperatorSecret(request: Request, env: Env): Promise<Operat
   }
   if (!(await operatorSecretMatches(header.trim(), expected))) {
     const sessionActor = await optionalSessionActor(request, env, ray);
-    if (!sessionActor) return { ok: false, status: 401, error: "invalid_operator_secret" };
+    if (!sessionActor) {
+      if (anonymousSecretGuessLimited(request)) return { ok: false, status: 429, error: "rate_limited" };
+      return { ok: false, status: 401, error: "invalid_operator_secret" };
+    }
     return { ok: false, status: 401, error: "invalid_operator_secret", sessionActor };
   }
   return { ok: true, actor: `operator_secret:${ray}` };
@@ -828,7 +858,7 @@ async function auditDenial(env: Env, email: unknown, actor: string, action: "acc
       body: JSON.stringify({ email: normalized, actorUserId: actor, action })
     });
   } catch {
-    // Missing account or the per-account brake. The caller still returns its auth error.
+    // Missing account, or this actor's denial-audit cap. The caller still returns its auth error.
   }
 }
 
