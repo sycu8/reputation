@@ -11,6 +11,20 @@ export interface JobEnvelope<T> {
   attempt: number;
   /** How many times this job was re-sent because a domain or the browser pool was busy. */
   congestionHops?: number | undefined;
+  /**
+   * Set on a domain wake. The value is the hostname whose parked jobs this message should run.
+   * A wake is not fetched.
+   */
+  congestionWake?: string | undefined;
+  /** Matches DomainCoordinatorDO's in-flight wake. A stale token is acked and does not drain. */
+  congestionWakeToken?: string | undefined;
+  /** Set on a wake that is continuing a chunked sweep. Does not count another hop-cap event. */
+  congestionSweep?: boolean | undefined;
+  /**
+   * How many times this parked job has been swept back onto the queue.
+   * The wake hop reset does not clear it, so a backoff that never ends cannot recycle the job forever.
+   */
+  congestionLifetime?: number | undefined;
   payload: T;
 }
 
