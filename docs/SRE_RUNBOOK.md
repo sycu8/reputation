@@ -68,6 +68,32 @@ Ticket/non-urgent:
 5. increase quiet-monitor intervals
 6. inspect source causing disproportionate browser use
 
+### Browser pool stuck (`browser_pool_busy` / HTTP 429 from BrowserPoolDO)
+
+`BrowserPoolDO` (name `global` on `reputa-state-production`) tracks leases, not a bare counter. Expired leases are deleted on acquire/release and by the Durable Object alarm. A crashed crawl cannot pin a slot past the lease TTL (90 seconds).
+
+Deploy `reputa-state-production` before `reputa-crawler-browser-production`. The new class ignores the legacy `pool_state.active` counter (the value that wedged production at 100) and counts unexpired `pool_leases` rows, so the pool unsticks on the first acquire after that deploy.
+
+To zero leases explicitly after deploy:
+
+1. Set a secret on the state worker (do not commit it):
+
+```text
+npx wrangler secret put BROWSER_POOL_RESET_TOKEN --config workers/state/wrangler.jsonc --env production
+```
+
+2. Confirm capacity, then reset. The cap defaults to the Workers Paid Browser Run concurrent-browser limit (200 as of 2026-08-20). Override with the `BROWSER_POOL_MAX` var when the account limit differs. Quick Actions are additionally limited to 30 requests/second on Workers Paid.
+
+```text
+curl -sS -H "Authorization: Bearer $BROWSER_POOL_RESET_TOKEN" \
+  https://reputa-state-production.sycu-lee.workers.dev/internal/browser-pool/state
+
+curl -sS -X POST -H "Authorization: Bearer $BROWSER_POOL_RESET_TOKEN" \
+  https://reputa-state-production.sycu-lee.workers.dev/internal/browser-pool/reset
+```
+
+The reset route fails closed (HTTP 503) until the secret is set, and HTTP 401 on a wrong token. It deletes lease rows and sets the legacy counter back to 0. It does not touch tenant, monitor, or crawl data.
+
 ## 6. Incident: AI backlog
 
 1. separate priority and normal queues

@@ -1,4 +1,4 @@
-import { assertPublicHttpUrl, createJob, htmlToPlainText, normalizeUrl, sha256Hex, unwrapBrowserRunPayload, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
+import { assertPublicHttpUrl, BROWSER_RUN_ACCOUNT_CONCURRENCY, createJob, htmlToPlainText, normalizeUrl, sha256Hex, unwrapBrowserRunPayload, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 
@@ -39,6 +39,26 @@ async function doCall<T>(stub: DurableObjectStub, path: string, body: Record<str
   return { response, data };
 }
 
+async function releaseQuietly(
+  stub: DurableObjectStub,
+  path: string,
+  body: Record<string, unknown>,
+  log: { message: string; requestId: string; tenantId?: string | undefined; monitorId?: string | undefined; extra: Record<string, unknown> }
+): Promise<void> {
+  try {
+    await doCall(stub, path, body);
+  } catch (error) {
+    structuredLog("warn", log.message, {
+      requestId: log.requestId,
+      tenantId: log.tenantId,
+      monitorId: log.monitorId
+    }, {
+      ...log.extra,
+      error: error instanceof Error ? error.message : "unknown"
+    });
+  }
+}
+
 async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
   const job = message.body;
   const target = assertPublicHttpUrl(job.payload.url);
@@ -47,9 +67,18 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
   const domainStub = env.DOMAIN_DO.get(env.DOMAIN_DO.idFromName(domain));
   const poolStub = env.BROWSER_POOL_DO.get(env.BROWSER_POOL_DO.idFromName("global"));
 
-  const poolLease = await doCall<{ granted: boolean; retryAfterMs?: number }>(poolStub, "/internal/acquire", { maxActive: 100, priority: job.priority });
-  if (!poolLease.response.ok || !poolLease.data.granted) throw new Error(`browser_pool_busy:${poolLease.data.retryAfterMs ?? 1000}`);
+  const poolLease = await doCall<{ granted: boolean; retryAfterMs?: number; leaseId?: string }>(
+    poolStub,
+    "/internal/acquire",
+    { maxActive: BROWSER_RUN_ACCOUNT_CONCURRENCY, priority: job.priority }
+  );
+  if (!poolLease.response.ok || !poolLease.data.granted || !poolLease.data.leaseId) {
+    throw new Error(`browser_pool_busy:${poolLease.data.retryAfterMs ?? 1000}`);
+  }
+  const leaseId = poolLease.data.leaseId;
   let domainAcquired = false;
+  let domainStatus = 500;
+  let domainRetryAfterMs = 2000;
   const started = Date.now();
   try {
     const domainLease = await doCall<{ granted: boolean; retryAfterMs?: number }>(domainStub, "/internal/acquire", {
@@ -111,11 +140,27 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
       priority: job.priority
     }));
     env.ANALYTICS?.writeDataPoint({ indexes: [urlHash], blobs: ["browser_success", job.payload.source], doubles: [browserMs, html.length] });
-    if (domainAcquired) await doCall(domainStub, "/internal/release", { status: 200, retryAfterMs: 0 });
-    domainAcquired = false;
+    domainStatus = 200;
+    domainRetryAfterMs = 0;
   } finally {
-    if (domainAcquired) await doCall(domainStub, "/internal/release", { status: 500, retryAfterMs: 2000 });
-    await doCall(poolStub, "/internal/release", {});
+    // Domain release errors must not skip the pool release. Pool release errors must not
+    // replace a successful crawl (the lease expires via the DO alarm if this call fails).
+    if (domainAcquired) {
+      await releaseQuietly(domainStub, "/internal/release", { status: domainStatus, retryAfterMs: domainRetryAfterMs }, {
+        message: "domain_release_failed",
+        requestId: job.traceId,
+        tenantId: job.tenantId,
+        monitorId: job.monitorId,
+        extra: { domain }
+      });
+    }
+    await releaseQuietly(poolStub, "/internal/release", { leaseId }, {
+      message: "browser_pool_release_failed",
+      requestId: job.traceId,
+      tenantId: job.tenantId,
+      monitorId: job.monitorId,
+      extra: { leaseId }
+    });
   }
 }
 
