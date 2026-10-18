@@ -10,6 +10,7 @@ import {
 } from "../../../packages/source-adapters/src/index.ts";
 import { monitorProfileUrls, type MonitorProfile } from "../../../packages/types/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
+import { batchCrawlJobs, crawlMessageBytes, fitCrawlJob } from "./messages.ts";
 
 interface DiscoveryPayload {
   reason: "scheduled";
@@ -131,41 +132,123 @@ async function discoverAll(query: string, providers: DiscoveryProvider[]): Promi
   return dedupeByUrl(batches.flat());
 }
 
-async function processMessage(message: Message<JobEnvelope<DiscoveryPayload>>, env: Env): Promise<void> {
+const DISCOVERY_JOB_BUDGET_MS = 90_000;
+
+interface DiscoveryRun {
+  enqueued: number;
+  skipped: number;
+  queriesRun: number;
+  queriesDeferred: number;
+}
+
+async function enqueueCrawls(
+  env: Env,
+  jobs: Array<JobEnvelope<CrawlPayload>>,
+  context: { requestId: string; tenantId?: string | undefined; monitorId?: string | undefined }
+): Promise<{ enqueued: number; skipped: number }> {
+  let enqueued = 0;
+  let skipped = 0;
+  for (const batch of batchCrawlJobs(jobs)) {
+    try {
+      await env.CRAWL_STATIC.sendBatch(batch.map((body) => ({ body })));
+      enqueued += batch.length;
+    } catch {
+      for (const body of batch) {
+        try {
+          await env.CRAWL_STATIC.send(body);
+          enqueued += 1;
+        } catch (error) {
+          skipped += 1;
+          structuredLog("warn", "discovery_candidate_skipped", context, {
+            url: body.payload.url,
+            bytes: crawlMessageBytes(body),
+            error: error instanceof Error ? error.message : "unknown"
+          });
+        }
+      }
+    }
+  }
+  return { enqueued, skipped };
+}
+
+async function processMessage(message: Message<JobEnvelope<DiscoveryPayload>>, env: Env): Promise<DiscoveryRun> {
   const job = message.body;
   if (!job.tenantId || !job.monitorId) throw new Error("missing_tenant_or_monitor");
+  const started = Date.now();
   const queries = await getQueries(env, job.tenantId, job.monitorId);
   const providers = buildProviders(env);
   const health = sourceHealthSnapshot(providers);
   const profile = await getMonitorProfile(env, job.tenantId, job.monitorId);
-  let candidateCount = 0;
   const profileSeeds = profileCandidates(profile);
-  for (const query of queries) {
-    const candidates = dedupeByUrl([...profileSeeds, ...await discoverAll(query.rawQuery, providers)]);
-    candidateCount += candidates.length;
-    for (const candidate of candidates.slice(0, 80)) {
-      const discoveryKey = await idempotencyKey([job.monitorId, candidate.source, candidate.url]);
-      const crawl = createJob<CrawlPayload>({
-        source: candidate.source,
-        url: candidate.url,
-        discoveryKey,
-        title: candidate.title,
-        snippet: candidate.snippet,
-        publishedAt: candidate.publishedAt
-      }, {
-        traceId: job.traceId,
-        tenantId: job.tenantId,
-        monitorId: job.monitorId,
-        priority: job.priority
-      });
-      await env.CRAWL_STATIC.send(crawl);
+  const context = { requestId: job.traceId, tenantId: job.tenantId, monitorId: job.monitorId };
+  // Rotate the start query so a budget cutoff does not starve the same tail forever.
+  const offset = queries.length > 0 ? Math.floor(started / 60_000) % queries.length : 0;
+  const ordered = queries.slice(offset).concat(queries.slice(0, offset));
+  let candidateCount = 0;
+  let enqueued = 0;
+  let skipped = 0;
+  let queriesRun = 0;
+  let queriesDeferred = 0;
+  for (const query of ordered) {
+    if (Date.now() - started > DISCOVERY_JOB_BUDGET_MS) {
+      queriesDeferred += 1;
+      continue;
     }
+    queriesRun += 1;
+    let candidates: DiscoveryResult[] = [];
+    try {
+      candidates = dedupeByUrl([...profileSeeds, ...await discoverAll(query.rawQuery, providers)]);
+    } catch (error) {
+      structuredLog("warn", "discovery_query_failed", context, {
+        queryId: query.id,
+        error: error instanceof Error ? error.message : "unknown"
+      });
+      continue;
+    }
+    candidateCount += candidates.length;
+    const jobs: Array<JobEnvelope<CrawlPayload>> = [];
+    for (const candidate of candidates.slice(0, 80)) {
+      try {
+        const discoveryKey = await idempotencyKey([job.monitorId, candidate.source, candidate.url]);
+        jobs.push(fitCrawlJob(createJob<CrawlPayload>({
+          source: candidate.source,
+          url: candidate.url,
+          discoveryKey,
+          title: candidate.title,
+          snippet: candidate.snippet,
+          publishedAt: candidate.publishedAt
+        }, {
+          traceId: job.traceId,
+          tenantId: job.tenantId,
+          monitorId: job.monitorId,
+          priority: job.priority
+        })));
+      } catch (error) {
+        skipped += 1;
+        structuredLog("warn", "discovery_candidate_skipped", context, {
+          url: candidate.url,
+          error: error instanceof Error ? error.message : "unknown"
+        });
+      }
+    }
+    const sent = await enqueueCrawls(env, jobs, context);
+    enqueued += sent.enqueued;
+    skipped += sent.skipped;
+  }
+  if (queriesDeferred > 0) {
+    structuredLog("warn", "discovery_budget_exhausted", context, {
+      queriesRun,
+      queriesDeferred,
+      elapsedMs: Date.now() - started
+    });
   }
   env.ANALYTICS?.writeDataPoint({
     indexes: [job.monitorId],
     blobs: ["discovery", job.priority, JSON.stringify(health)],
     doubles: [queries.length, candidateCount, providers.length]
   });
+  if (skipped > 0 && enqueued === 0 && candidateCount > 0) throw new Error("discovery_enqueue_failed");
+  return { enqueued, skipped, queriesRun, queriesDeferred };
 }
 
 export default {
@@ -183,6 +266,7 @@ export default {
           jobId: message.body.jobId,
           error: error instanceof Error ? error.message : "unknown"
         });
+        // Retry only when nothing was enqueued (processMessage throws before or instead of a partial send).
         message.retry();
       }
     }

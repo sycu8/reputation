@@ -9,6 +9,8 @@ interface SqlStorage {
 interface DurableObjectStorage {
   sql: SqlStorage;
   transaction<T>(closure: () => Promise<T>): Promise<T>;
+  setAlarm(scheduledTime: number | Date): Promise<void>;
+  deleteAlarm(): Promise<void>;
 }
 
 interface DurableObjectState {

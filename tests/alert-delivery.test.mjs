@@ -21,7 +21,7 @@ test("idempotent channel decisions skip already-sent deliveries", () => {
   ]);
 });
 
-test("unconfigured channels are skipped and summary fails without any channel", () => {
+test("unconfigured channels are a non-retry skip that needs setup", () => {
   const decisions = decideChannelActions(
     [
       { channel: "email", configured: false },
@@ -37,8 +37,9 @@ test("unconfigured channels are skipped and summary fails without any channel", 
       { channel: "telegram", status: "skipped" }
     ]
   });
-  assert.equal(summary.alertState, "failed");
+  assert.equal(summary.alertState, "needs_setup");
   assert.equal(summary.reason, "no_channels_configured");
+  assert.notEqual(summary.alertState, "failed");
 });
 
 test("summary marks sent when at least one configured channel succeeded", () => {
@@ -125,4 +126,26 @@ test("MonitorDO alert delivery upsert is unique per alert+channel", async () => 
   assert.equal(body.deliveries.length, 1);
   assert.equal(body.deliveries[0].status, "failed");
   assert.equal(body.deliveries[0].channel, "email");
+});
+
+test("MonitorDO records needs_setup when no notification channel is configured", async () => {
+  const monitor = new MonitorDO(new FakeState(), {});
+  await monitor.fetch(new Request("https://do.internal/internal/init", {
+    method: "POST",
+    body: JSON.stringify({ id: "m1", tenantId: "t1", name: "Acme", type: "company" })
+  }));
+  const alertCreate = await monitor.fetch(new Request("https://do.internal/internal/alerts/upsert", {
+    method: "POST",
+    body: JSON.stringify({ dedupeKey: "d-setup", type: "negative_mention", severity: "high", mentionId: "n1" })
+  }));
+  const { alertId } = await alertCreate.json();
+  const patched = await monitor.fetch(new Request(`https://do.internal/internal/alerts/${alertId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ state: "needs_setup" })
+  }));
+  assert.equal(patched.status, 200);
+  const listed = await monitor.fetch(new Request("https://do.internal/internal/alerts?state=needs_setup"));
+  const body = await listed.json();
+  assert.equal(body.alerts.length, 1);
+  assert.equal(body.alerts[0].state, "needs_setup");
 });

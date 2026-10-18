@@ -73,6 +73,27 @@ export function boundedRetryDelayMs(attempt: number, baseMs = 500, capMs = 30_00
   return exponential + jitter;
 }
 
+/**
+ * Workers Paid Browser Run concurrent browsers per account.
+ * Published default since 2026-08-20 (limits page current 2026-10-14).
+ * Quick Actions are also rate-limited (30 requests/second on Workers Paid).
+ * The state worker var `BROWSER_POOL_MAX` overrides this when the account limit differs.
+ */
+export const BROWSER_RUN_ACCOUNT_CONCURRENCY = 200;
+
+/** Hard ceiling for `BROWSER_POOL_MAX` so a bad var cannot open an unbounded pool. */
+export const BROWSER_POOL_MAX_CEILING = 1_000;
+
+/** Lease lifetime. Longer than a Browser Run content action (15s) so a live crawl is not expired mid-flight. */
+export const BROWSER_POOL_LEASE_TTL_MS = 90_000;
+
+/** Resolve the pool cap from the optional worker var, otherwise the published account concurrency. */
+export function browserPoolCap(raw: string | number | undefined): number {
+  const parsed = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 1) return BROWSER_RUN_ACCOUNT_CONCURRENCY;
+  return Math.max(1, Math.min(BROWSER_POOL_MAX_CEILING, Math.floor(parsed)));
+}
+
 export const DEFAULT_SCHEDULER_SHARD_COUNT = 64;
 
 /** Stable shard index for a tenant: SHA-256(tenantId) as big-endian uint32 mod shardCount. */

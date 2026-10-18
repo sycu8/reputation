@@ -1160,6 +1160,8 @@ function renderAlerts() {
           discovered_at: mention.discovered_at || alert.created_at
         })
       : `Alert ${formatMentionTime(alert.created_at)}`;
+    const needsSetup = alert.state === "needs_setup";
+    const stateLabel = needsSetup ? "Needs notification setup" : (alert.state || "pending");
     const title = mention ? mentionTitle(mention) : (alert.reason || "Untitled alert");
     const excerpt = readableMentionBody(mention?.excerpt || alert.reason || "").replace(/\s+/g, " ").slice(0, 280);
     const sourceUrl = mention?.canonical_url || "";
@@ -1169,11 +1171,12 @@ function renderAlerts() {
         ${mention?.sentiment ? sentimentTagHtml(mention.sentiment) : ""}
         <span class="tag tag-severity severity-${escapeHtml(String(alert.severity || "unknown").toLowerCase())}">${escapeHtml(alert.severity || "severity")}</span>
         <span class="tag tag-severity">${escapeHtml(scoreLabel)}</span>
-        <span class="tag tag-state">${escapeHtml(alert.state || "pending")}</span>
+        <span class="tag tag-state${needsSetup ? " needs-setup" : ""}">${escapeHtml(stateLabel)}</span>
       </div>
       <strong>${escapeHtml(title)}</strong>
       <small class="mention-time">${escapeHtml(timeLine)}</small>
       <p class="alert-excerpt">${escapeHtml(excerpt)}</p>
+      ${needsSetup ? `<p class="hint">No email or Telegram channel is configured for this workspace, so this alert was not sent and will not be retried.</p>` : ""}
       <div class="actions">
         ${sourceUrl
           ? `<a class="secondary alert-source-link" href="${escapeHtml(sourceUrl)}" target="_blank" rel="noreferrer">Open source</a>`

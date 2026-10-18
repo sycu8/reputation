@@ -1,9 +1,13 @@
-import { advanceNextScanAt, claimLeaseUntil, isClaimable } from "../../../packages/crawler-core/src/index.ts";
+import { advanceNextScanAt, browserPoolCap, BROWSER_POOL_LEASE_TTL_MS, claimLeaseUntil, isClaimable } from "../../../packages/crawler-core/src/index.ts";
 import { hammingDistance64, simHashFromHex } from "../../../packages/dedupe/src/index.ts";
 import type { GlobalRole, MonitorProfile, MonitorRecord, MonitorStatus, MonitorType, QueryRecord, WorkspaceRole } from "../../../packages/types/src/index.ts";
 import { normalizeMonitorProfile, parseMonitorProfileJson } from "../../../packages/types/src/index.ts";
 
-interface Env {}
+interface Env {
+  BROWSER_POOL_DO?: DurableObjectNamespace;
+  BROWSER_POOL_RESET_TOKEN?: string;
+  BROWSER_POOL_MAX?: string;
+}
 
 function hasColumn(sql: SqlStorage, table: string, column: string): boolean {
   const cols = rows(sql.exec<{ name: string }>(`PRAGMA table_info(${table})`));
@@ -929,7 +933,7 @@ export class MonitorDO extends SqliteObject {
       // Default triage queue: everything except resolved.
       clauses.push("a.state != ?");
       params.push("resolved");
-    } else if (state && ["pending", "sent", "acknowledged", "resolved", "failed"].includes(state)) {
+    } else if (state && ["pending", "sent", "acknowledged", "resolved", "failed", "needs_setup"].includes(state)) {
       clauses.push("a.state = ?");
       params.push(state);
     }
@@ -1038,7 +1042,7 @@ export class MonitorDO extends SqliteObject {
   private async patchAlert(request: Request, alertId: string): Promise<Response> {
     const body = await readJson(request);
     const state = typeof body.state === "string" ? body.state : null;
-    if (!state || !new Set(["pending", "sent", "acknowledged", "resolved", "failed"]).has(state)) return json({ error: "invalid_alert_state" }, 400);
+    if (!state || !new Set(["pending", "sent", "acknowledged", "resolved", "failed", "needs_setup"]).has(state)) return json({ error: "invalid_alert_state" }, 400);
     const ts = nowIso();
     this.sql.exec(
       `UPDATE alerts SET state=?,sent_at=CASE WHEN ?='sent' THEN COALESCE(sent_at,?) ELSE sent_at END,
@@ -1166,7 +1170,14 @@ export class DomainCoordinatorDO extends SqliteObject {
       const body = await readJson(request);
       const status = typeof body.status === "number" ? body.status : 200;
       const retryAfterMs = typeof body.retryAfterMs === "number" ? Math.max(0, Math.floor(body.retryAfterMs)) : 0;
+      const domain = typeof body.domain === "string" && body.domain.trim() ? body.domain.trim().toLowerCase() : "unknown";
       const now = Date.now();
+      // Upsert so a 429 can record backoff even when this worker never acquired a slot.
+      this.sql.exec(
+        `INSERT OR IGNORE INTO domain_state(key,domain,next_allowed_at,active_requests,consecutive_errors,recent_429,recent_403,backoff_until,updated_at)
+         VALUES('self',?,0,0,0,0,0,0,?)`,
+        domain, nowIso()
+      );
       this.sql.exec(
         `UPDATE domain_state SET
           active_requests=MAX(active_requests-1,0),
@@ -1193,30 +1204,168 @@ export class BrowserPoolDO extends SqliteObject {
       key TEXT PRIMARY KEY, active INTEGER NOT NULL DEFAULT 0, max_active INTEGER NOT NULL DEFAULT 100, updated_at TEXT NOT NULL
     )`);
     this.sql.exec(`INSERT OR IGNORE INTO pool_state(key,active,max_active,updated_at) VALUES('global',0,100,?)`, nowIso());
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS pool_leases (
+      lease_id TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL,
+      acquired_at INTEGER NOT NULL
+    )`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_pool_leases_expires ON pool_leases(expires_at)`);
+  }
+
+  async alarm(): Promise<void> {
+    this.sweep(Date.now());
+    await this.syncAlarm();
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (request.method === "POST" && url.pathname === "/internal/acquire") {
-      const body = await readJson(request);
-      const requestedMax = typeof body.maxActive === "number" ? Math.max(1, Math.min(110, Math.floor(body.maxActive))) : 100;
-      return this.state.storage.transaction(async () => {
-        const row = rows(this.sql.exec<{ active: number; max_active: number }>(`SELECT active,max_active FROM pool_state WHERE key='global' LIMIT 1`))[0]!;
-        const effectiveMax = Math.min(row.max_active, requestedMax);
-        if (row.active >= effectiveMax) return json({ granted: false, retryAfterMs: 1000 }, 429);
-        this.sql.exec(`UPDATE pool_state SET active=active+1,updated_at=? WHERE key='global'`, nowIso());
-        return json({ granted: true, leaseId: crypto.randomUUID(), active: row.active + 1, maxActive: effectiveMax });
-      });
+    try {
+      if (request.method === "POST" && url.pathname === "/internal/acquire") return await this.acquire(request);
+      if (request.method === "POST" && url.pathname === "/internal/release") return await this.release(request);
+      if (request.method === "POST" && url.pathname === "/internal/reset") return await this.reset();
+      if (request.method === "GET" && url.pathname === "/internal/state") return this.snapshot();
+      return json({ error: "not_found" }, 404);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "internal_error";
+      return json({ error: message }, message.startsWith("invalid_") ? 400 : 500);
     }
-    if (request.method === "POST" && url.pathname === "/internal/release") {
-      this.sql.exec(`UPDATE pool_state SET active=MAX(active-1,0),updated_at=? WHERE key='global'`, nowIso());
-      return json({ ok: true });
-    }
-    if (request.method === "GET" && url.pathname === "/internal/state") {
-      return json({ state: rows(this.sql.exec<Record<string, unknown>>(`SELECT * FROM pool_state WHERE key='global' LIMIT 1`))[0] });
-    }
-    return json({ error: "not_found" }, 404);
   }
+
+  private accountCap(): number {
+    return browserPoolCap(this.env.BROWSER_POOL_MAX);
+  }
+
+  private activeLeases(): number {
+    const row = rows(this.sql.exec<{ active: number }>(`SELECT COUNT(*) AS active FROM pool_leases`))[0];
+    return Number(row?.active ?? 0);
+  }
+
+  /** Drop expired leases and mirror the live count onto the legacy counter so it cannot drift. */
+  private sweep(now: number): number {
+    this.sql.exec(`DELETE FROM pool_leases WHERE expires_at <= ?`, now);
+    const active = this.activeLeases();
+    this.sql.exec(
+      `UPDATE pool_state SET active=?, max_active=?, updated_at=? WHERE key='global'`,
+      active, this.accountCap(), nowIso()
+    );
+    return active;
+  }
+
+  private async syncAlarm(): Promise<void> {
+    const row = rows(this.sql.exec<{ expires_at: number | null }>(
+      `SELECT MIN(expires_at) AS expires_at FROM pool_leases`
+    ))[0];
+    const expiresAt = row?.expires_at == null ? null : Number(row.expires_at);
+    if (expiresAt != null && Number.isFinite(expiresAt)) await this.state.storage.setAlarm(expiresAt);
+    else await this.state.storage.deleteAlarm();
+  }
+
+  private async acquire(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const requested = typeof body.maxActive === "number" ? body.maxActive : this.accountCap();
+    const effectiveMax = Math.max(1, Math.min(this.accountCap(), Math.floor(requested)));
+    const now = Date.now();
+    const outcome = await this.state.storage.transaction(async () => {
+      const active = this.sweep(now);
+      if (active >= effectiveMax) {
+        const next = rows(this.sql.exec<{ expires_at: number | null }>(
+          `SELECT MIN(expires_at) AS expires_at FROM pool_leases`
+        ))[0];
+        const wait = next?.expires_at == null ? 1000 : Math.max(250, Number(next.expires_at) - now);
+        return { granted: false as const, retryAfterMs: wait, active, maxActive: effectiveMax };
+      }
+      const leaseId = crypto.randomUUID();
+      const expiresAt = now + BROWSER_POOL_LEASE_TTL_MS;
+      this.sql.exec(
+        `INSERT INTO pool_leases(lease_id, expires_at, acquired_at) VALUES(?,?,?)`,
+        leaseId, expiresAt, now
+      );
+      this.sql.exec(
+        `UPDATE pool_state SET active=?, max_active=?, updated_at=? WHERE key='global'`,
+        active + 1, effectiveMax, nowIso()
+      );
+      return {
+        granted: true as const,
+        leaseId,
+        expiresAt,
+        active: active + 1,
+        maxActive: effectiveMax,
+        retryAfterMs: 0
+      };
+    });
+    await this.syncAlarm();
+    if (!outcome.granted) return json(outcome, 429);
+    return json(outcome);
+  }
+
+  private async release(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const leaseId = typeof body.leaseId === "string" ? body.leaseId.trim() : "";
+    const released = await this.state.storage.transaction(async () => {
+      this.sweep(Date.now());
+      const before = this.activeLeases();
+      if (leaseId) {
+        this.sql.exec(`DELETE FROM pool_leases WHERE lease_id=?`, leaseId);
+      } else if (before > 0) {
+        // In-flight callers from the pre-lease worker omit leaseId. Free the oldest slot.
+        this.sql.exec(
+          `DELETE FROM pool_leases WHERE lease_id = (
+            SELECT lease_id FROM pool_leases ORDER BY acquired_at ASC LIMIT 1
+          )`
+        );
+      }
+      const active = this.activeLeases();
+      this.sql.exec(
+        `UPDATE pool_state SET active=?, max_active=?, updated_at=? WHERE key='global'`,
+        active, this.accountCap(), nowIso()
+      );
+      return { released: before - active, active };
+    });
+    await this.syncAlarm();
+    return json({ ok: true, released: released.released, active: released.active });
+  }
+
+  private async reset(): Promise<Response> {
+    const cleared = await this.state.storage.transaction(async () => {
+      const active = this.activeLeases();
+      this.sql.exec(`DELETE FROM pool_leases`);
+      this.sql.exec(
+        `UPDATE pool_state SET active=0, max_active=?, updated_at=? WHERE key='global'`,
+        this.accountCap(), nowIso()
+      );
+      return active;
+    });
+    await this.syncAlarm();
+    return json({ ok: true, cleared, maxActive: this.accountCap() });
+  }
+
+  private snapshot(): Response {
+    const legacy = rows(this.sql.exec<{ active: number; max_active: number }>(
+      `SELECT active, max_active FROM pool_state WHERE key='global' LIMIT 1`
+    ))[0];
+    const legacyCounter = Number(legacy?.active ?? 0);
+    const active = this.sweep(Date.now());
+    const next = rows(this.sql.exec<{ expires_at: number | null }>(
+      `SELECT MIN(expires_at) AS expires_at FROM pool_leases`
+    ))[0];
+    return json({
+      state: {
+        active,
+        maxActive: this.accountCap(),
+        legacyCounterBeforeSweep: legacyCounter,
+        nextExpiresAt: next?.expires_at == null ? null : Number(next.expires_at),
+        leaseTtlMs: BROWSER_POOL_LEASE_TTL_MS
+      }
+    });
+  }
+}
+
+/** Shared-secret gate for the post-deploy pool reset. Missing token fails closed. */
+export function browserPoolAdminAllowed(expected: string | undefined, authorization: string | null): "ok" | "not_configured" | "unauthorized" {
+  const token = expected?.trim() ?? "";
+  if (!token) return "not_configured";
+  const provided = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+  return constantTimeEqual(provided, token) ? "ok" : "unauthorized";
 }
 
 
@@ -1369,7 +1518,22 @@ export class SchedulerShardDO extends SqliteObject {
 }
 
 export default {
-  fetch(): Response {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/internal/browser-pool/reset" || url.pathname === "/internal/browser-pool/state") {
+      const allowed = browserPoolAdminAllowed(env.BROWSER_POOL_RESET_TOKEN, request.headers.get("authorization"));
+      if (allowed === "not_configured") return json({ error: "reset_not_configured" }, 503);
+      if (allowed === "unauthorized") return json({ error: "unauthorized" }, 401);
+      if (!env.BROWSER_POOL_DO) return json({ error: "browser_pool_unbound" }, 500);
+      const stub = env.BROWSER_POOL_DO.get(env.BROWSER_POOL_DO.idFromName("global"));
+      if (request.method === "POST" && url.pathname === "/internal/browser-pool/reset") {
+        return stub.fetch("https://do.internal/internal/reset", { method: "POST", body: "{}" });
+      }
+      if (request.method === "GET" && url.pathname === "/internal/browser-pool/state") {
+        return stub.fetch("https://do.internal/internal/state");
+      }
+      return json({ error: "method_not_allowed" }, 405);
+    }
     return json({ service: "state", status: "ok" });
   }
 };

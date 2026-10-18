@@ -19,7 +19,7 @@ export interface ChannelDecision {
 }
 
 export interface DeliverySummary {
-  alertState: "sent" | "failed";
+  alertState: "sent" | "failed" | "needs_setup";
   reason: string;
   sentCount: number;
   failedCount: number;
@@ -58,7 +58,7 @@ export function summarizeDeliveryOutcomes(input: {
 
   if (configuredCount === 0) {
     return {
-      alertState: "failed",
+      alertState: "needs_setup",
       reason: "no_channels_configured",
       sentCount: 0,
       failedCount: 0,
