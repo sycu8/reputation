@@ -27,10 +27,11 @@
   "r2_buckets": [{ "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-dev" }],
   "queues": {
     "consumers": [
-      { "queue": "reputa-crawl-static-dev", "max_batch_size": 20, "max_batch_timeout": 2, "max_retries": 3, "dead_letter_queue": "reputa-crawl-dlq-dev" }
+      { "queue": "reputa-crawl-static-dev", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 3, "max_concurrency": 80, "dead_letter_queue": "reputa-crawl-dlq-dev" }
     ],
     "producers": [
       { "binding": "CRAWL_BROWSER", "queue": "reputa-crawl-browser-dev" },
+      { "binding": "CRAWL_STATIC", "queue": "reputa-crawl-static-dev" },
       { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-dev" }
     ]
   },
@@ -53,10 +54,11 @@
       "r2_buckets": [{ "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-production" }],
       "queues": {
         "consumers": [
-          { "queue": "reputa-crawl-static-production", "max_batch_size": 20, "max_batch_timeout": 2, "max_retries": 3, "dead_letter_queue": "reputa-crawl-dlq-production" }
+          { "queue": "reputa-crawl-static-production", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 3, "max_concurrency": 80, "dead_letter_queue": "reputa-crawl-dlq-production" }
         ],
         "producers": [
           { "binding": "CRAWL_BROWSER", "queue": "reputa-crawl-browser-production" },
+          { "binding": "CRAWL_STATIC", "queue": "reputa-crawl-static-production" },
           { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-production" }
         ]
       },

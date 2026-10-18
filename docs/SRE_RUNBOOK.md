@@ -82,7 +82,7 @@ To zero leases explicitly after deploy:
 npx wrangler secret put BROWSER_POOL_RESET_TOKEN --config workers/state/wrangler.jsonc --env production
 ```
 
-2. Confirm capacity, then reset. The cap defaults to the Workers Paid Browser Run concurrent-browser limit (200 as of 2026-08-20). Override with the `BROWSER_POOL_MAX` var when the account limit differs. Quick Actions are additionally limited to 30 requests/second on Workers Paid.
+2. Confirm capacity, then reset. The cap defaults to the Workers Paid Browser Run concurrent-browser limit (200 as of 2026-08-20). Override with the `BROWSER_POOL_MAX` var when the account limit differs. Quick Actions are additionally limited to 30 requests/second on Workers Paid. A Browser Run HTTP 429, or an error that says the account is out of sessions, is congestion: the browser consumer re-sends the job with hop backoff instead of `message.retry()`.
 
 ```text
 curl -sS -H "Authorization: Bearer $BROWSER_POOL_RESET_TOKEN" \

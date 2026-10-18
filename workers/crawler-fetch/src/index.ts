@@ -1,7 +1,7 @@
 import { assertPublicHttpUrl, crawlAttemptKey, crawlCacheHit, crawlCacheSkipReason, createJob, isHardPaywalledHost, normalizeUrl, parseHardPaywallHosts, sha256Hex, shouldApplyUrlRetryCap, urlRetryCapReached, type CrawlCacheRecord, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
-import { classifyUpstreamStatus, crawlFailureLog, crawlSkipTtlSeconds, countsTowardUrlCap, fetchFailureAction, nextDomainBackoffMs, noteUrlFailure, parseRetryAfterMs } from "./upstream.ts";
+import { classifyUpstreamStatus, fetchFailureAction, handleCrawlQueueBatch, nextDomainBackoffMs, noteQueuedUrlFailure, parseRetryAfterMs, rememberQueuedSkip } from "./upstream.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -28,6 +28,7 @@ interface Env {
   RAW_CONTENT: R2Bucket;
   CRAWL_CACHE: KVNamespace;
   CRAWL_BROWSER: Queue<JobEnvelope<CrawlPayload>>;
+  CRAWL_STATIC: Queue<JobEnvelope<CrawlPayload>>;
   PROCESS_CONTENT: Queue<JobEnvelope<ProcessPayload>>;
   DOMAIN_DO?: DurableObjectNamespace;
   ANALYTICS?: AnalyticsEngineDataset;
@@ -292,51 +293,30 @@ async function urlHashForPayload(rawUrl: string): Promise<string | null> {
   }
 }
 
+function logCrawlQueue(level: "info" | "warn" | "error", event: string, fields: Record<string, unknown>): void {
+  structuredLog(level, event, {
+    requestId: typeof fields.requestId === "string" ? fields.requestId : "",
+    tenantId: typeof fields.tenantId === "string" ? fields.tenantId : undefined,
+    monitorId: typeof fields.monitorId === "string" ? fields.monitorId : undefined
+  }, fields);
+}
+
 export default {
   async fetch(): Promise<Response> {
     return workerHealthResponse("crawler-fetch");
   },
 
   async queue(batch: MessageBatch<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
-    for (const message of batch.messages) {
-      try {
-        await processMessage(message, env);
-        message.ack();
-      } catch (error) {
-        const messageText = error instanceof Error ? error.message : "unknown";
-        const urlHash = await urlHashForPayload(message.body.payload.url);
-        let urlFailures = 0;
-        if (urlHash && countsTowardUrlCap(messageText)) {
-          try {
-            urlFailures = await noteUrlFailure(env.CRAWL_CACHE, message.body.tenantId, urlHash);
-          } catch {
-            urlFailures = 0;
-          }
-        }
-        const decision = fetchFailureAction(messageText, {
-          attempts: message.attempts,
-          urlFailures,
-          random: Math.random
-        });
-        const log = crawlFailureLog("fetch", messageText, decision);
-        structuredLog(log.level, log.event, {
-          requestId: message.body.traceId,
-          tenantId: message.body.tenantId,
-          monitorId: message.body.monitorId
-        }, { jobId: message.body.jobId, url: message.body.payload.url, error: messageText, attempts: message.attempts, urlFailures });
-        if (decision.action === "ack") {
-          const ttl = urlHash ? crawlSkipTtlSeconds(messageText) : null;
-          if (urlHash && ttl) {
-            try {
-              await env.CRAWL_CACHE.put(`crawl:${urlHash}`, JSON.stringify({ skip: messageText }), { expirationTtl: ttl });
-            } catch {
-              /* ack even if the skip marker cannot be stored */
-            }
-          }
-          message.ack();
-        } else if (decision.delaySeconds != null) message.retry({ delaySeconds: decision.delaySeconds });
-        else message.retry();
-      }
-    }
+    await handleCrawlQueueBatch<JobEnvelope<CrawlPayload>, Message<JobEnvelope<CrawlPayload>>>(batch.messages, {
+      worker: "fetch",
+      process: (message) => processMessage(message, env),
+      failureAction: (errorMessage, attempts, urlFailures) => fetchFailureAction(errorMessage, { attempts, urlFailures, random: Math.random }),
+      noteUrlFailure: (body, errorMessage) => noteQueuedUrlFailure(env.CRAWL_CACHE, body, errorMessage, urlHashForPayload),
+      rememberSkip: (body, errorMessage, ttlSeconds) => rememberQueuedSkip(env.CRAWL_CACHE, body, errorMessage, ttlSeconds, urlHashForPayload),
+      requeue: async (body, delaySeconds, hops) => {
+        await env.CRAWL_STATIC.send({ ...body, congestionHops: hops }, { delaySeconds });
+      },
+      log: logCrawlQueue
+    });
   }
 };

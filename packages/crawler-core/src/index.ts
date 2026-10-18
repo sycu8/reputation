@@ -9,6 +9,8 @@ export interface JobEnvelope<T> {
   priority: JobPriority;
   createdAt: string;
   attempt: number;
+  /** How many times this job was re-sent because a domain or the browser pool was busy. */
+  congestionHops?: number | undefined;
   payload: T;
 }
 
@@ -84,7 +86,7 @@ export function isHardPaywalledHost(hostname: string, hosts: readonly string[] =
   });
 }
 
-/** Jittered queue delay for domain/pool congestion. Short hints (for example 250ms) become 30–60s. */
+/** Jittered delay for browser transients. Congestion re-sends use congestionBackoffDelaySeconds instead. */
 export const BUSY_REQUEUE_MIN_SECONDS = 30;
 export const BUSY_REQUEUE_MAX_SECONDS = 60;
 export const BUSY_REQUEUE_CAP_SECONDS = 900;
@@ -103,6 +105,7 @@ export function busyRequeueDelaySeconds(waitMs: number, random: () => number = M
  * Real fetch failures remembered per tenant and normalized URL.
  * Congestion delays are not counted. A fresh message is skipped once the cap is reached.
  * An in-flight transient retry is not skipped here; the queue dead-letters it after max_retries.
+ * Congestion uses congestionHops and does not enter that budget.
  */
 export const URL_RETRY_CAP = 8;
 export const URL_RETRY_WINDOW_SECONDS = 15 * 60;

@@ -5,8 +5,11 @@ export {
   crawlFailureLog,
   crawlSkipTtlSeconds,
   fetchFailureAction,
+  handleCrawlQueueBatch,
   isTerminalCrawlFailure,
+  noteQueuedUrlFailure,
   noteUrlFailure,
+  rememberQueuedSkip,
   type CrawlFailureContext,
   type CrawlFailureDecision,
   type UpstreamAction

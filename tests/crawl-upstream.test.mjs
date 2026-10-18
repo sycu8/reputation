@@ -10,6 +10,7 @@ import {
 } from "../workers/crawler-fetch/src/upstream.ts";
 import {
   browserFailureAction,
+  browserRunFailureMessage,
   countsTowardUrlCap,
   crawlFailureLog,
   noteUrlFailure
@@ -46,8 +47,8 @@ test("429 and domain backoff retry after a delay instead of immediately", () => 
   assert.equal(decision.action, "retry");
   assert.equal(decision.delaySeconds, 45);
   const busy = fetchFailureAction("domain_busy:120000", { random: () => 0 });
-  assert.equal(busy.action, "retry");
-  assert.equal(busy.delaySeconds, 120);
+  assert.equal(busy.action, "requeue");
+  assert.equal(busy.waitMs, 120000);
   assert.deepEqual(fetchFailureAction("upstream_http_503"), { action: "retry" });
   assert.deepEqual(fetchFailureAction("upstream_http_401"), { action: "ack" });
   assert.deepEqual(fetchFailureAction("upstream_http_402"), { action: "ack" });
@@ -56,18 +57,18 @@ test("429 and domain backoff retry after a delay instead of immediately", () => 
   assert.deepEqual(fetchFailureAction("body_too_large"), { action: "ack" });
 });
 
-test("domain_busy requeues for 30-60s instead of the 250ms hint", () => {
+test("domain_busy keeps the coordinator hint for hop backoff", () => {
   const low = fetchFailureAction("domain_busy:250", { random: () => 0, attempts: 1, urlFailures: 0 });
-  assert.equal(low.action, "retry");
-  assert.equal(low.delaySeconds, 30);
+  assert.equal(low.action, "requeue");
+  assert.equal(low.waitMs, 250);
   const high = fetchFailureAction("domain_busy:250", { random: () => 1, attempts: 1, urlFailures: 0 });
-  assert.equal(high.action, "retry");
-  assert.equal(high.delaySeconds, 60);
+  assert.equal(high.action, "requeue");
+  assert.equal(high.waitMs, 250);
   const mid = busyRequeueDelaySeconds(250, () => 0.5);
   assert.ok(mid >= 30 && mid <= 60);
   const pool = browserFailureAction("browser_pool_busy:250", { random: () => 0, attempts: 1, urlFailures: 0 });
-  assert.equal(pool.action, "retry");
-  assert.equal(pool.delaySeconds, 30);
+  assert.equal(pool.action, "requeue");
+  assert.equal(pool.waitMs, 250);
   assert.deepEqual(crawlFailureLog("fetch", "domain_busy:250", low), { level: "info", event: "crawl_domain_busy" });
   assert.equal(crawlFailureLog("browser", "domain_busy:250", low).level, "info");
   assert.notEqual(crawlFailureLog("browser", "browser_http_500", { action: "retry", delaySeconds: 30 }).event, "crawl_domain_busy");
@@ -77,8 +78,8 @@ test("transient errors keep retrying after the cap so the queue can dead-letter 
   assert.equal(urlRetryCapReached(URL_RETRY_CAP - 1), false);
   assert.equal(urlRetryCapReached(URL_RETRY_CAP), true);
   const cappedBusy = fetchFailureAction("domain_busy:250", { random: () => 0, attempts: 4, urlFailures: URL_RETRY_CAP });
-  assert.equal(cappedBusy.action, "retry");
-  assert.equal(cappedBusy.delaySeconds, 30);
+  assert.equal(cappedBusy.action, "requeue");
+  assert.equal(cappedBusy.waitMs, 250);
   const cappedFetch = fetchFailureAction("upstream_http_503", { attempts: 4, urlFailures: URL_RETRY_CAP });
   assert.equal(cappedFetch.action, "retry");
   assert.equal(cappedFetch.delaySeconds, undefined);
@@ -88,14 +89,46 @@ test("transient errors keep retrying after the cap so the queue can dead-letter 
   const cappedBrowser = browserFailureAction("browser_http_503", { attempts: 4, urlFailures: URL_RETRY_CAP, random: () => 0 });
   assert.equal(cappedBrowser.action, "retry");
   const cappedPool = browserFailureAction("browser_pool_busy:250", { attempts: 4, urlFailures: URL_RETRY_CAP, random: () => 0 });
-  assert.equal(cappedPool.action, "retry");
-  assert.equal(cappedPool.delaySeconds, 30);
+  assert.equal(cappedPool.action, "requeue");
+  assert.equal(cappedPool.waitMs, 250);
+  const session = browserFailureAction("browser_http_429", { random: () => 0 });
+  assert.equal(session.action, "requeue");
+  assert.equal(session.waitMs, 0);
+  const hinted = browserFailureAction("browser_http_429:120000:Too many requests", { random: () => 0 });
+  assert.equal(hinted.action, "requeue");
+  assert.equal(hinted.waitMs, 120000);
+  const sessions = browserFailureAction("Unable to create new browser: too many sessions", { random: () => 0 });
+  assert.equal(sessions.action, "requeue");
+  assert.equal(sessions.waitMs, 0);
+  assert.equal(browserFailureAction("browser_http_500:0:too many sessions", { random: () => 0 }).action, "requeue");
   assert.equal(browserFailureAction("browser_extraction_too_small").action, "ack");
   for (const status of [401, 402, 404, 422]) {
     assert.equal(browserFailureAction(`browser_http_${status}`).action, "ack");
   }
+  assert.equal(browserFailureAction("browser_http_404:0:Not Found").action, "ack");
   assert.equal(fetchFailureAction("hard_paywall_host").action, "ack");
   assert.equal(crawlFailureLog("browser", "browser_http_422", { action: "ack" }).level, "warn");
+  assert.deepEqual(
+    crawlFailureLog("browser", "browser_http_429:0:Too many requests", { action: "requeue", waitMs: 0 }),
+    { level: "info", event: "crawl_browser_session_busy" }
+  );
+});
+
+test("browser run failures keep the status, retry-after, and session-limit text", () => {
+  const now = Date.parse("2026-10-18T10:00:00.000Z");
+  const limited = browserRunFailureMessage(429, "30", JSON.stringify({
+    success: false,
+    errors: [{ message: "Too many requests" }]
+  }), now);
+  assert.equal(limited, "browser_http_429:30000:Too many requests");
+  assert.equal(browserFailureAction(limited).action, "requeue");
+  assert.equal(browserFailureAction(limited).waitMs, 30000);
+  const sessions = browserRunFailureMessage(500, null, "Unable to create new browser: too many sessions", now);
+  assert.equal(sessions, "browser_http_500:0:Unable to create new browser: too many sessions");
+  assert.equal(browserFailureAction(sessions).action, "requeue");
+  const httpDate = browserRunFailureMessage(429, "Sun, 18 Oct 2026 10:00:15 GMT", "", now);
+  assert.equal(httpDate, "browser_http_429:15000");
+  assert.equal(browserFailureAction("browser_http_503:0:upstream timeout").action, "retry");
 });
 
 test("per-URL cap ignores congestion and is scoped per tenant", () => {
@@ -104,6 +137,9 @@ test("per-URL cap ignores congestion and is scoped per tenant", () => {
   assert.equal(countsTowardUrlCap("upstream_http_503"), true);
   assert.equal(countsTowardUrlCap("upstream_backoff_429:30000"), true);
   assert.equal(countsTowardUrlCap("browser_http_503"), true);
+  assert.equal(countsTowardUrlCap("browser_http_429"), false);
+  assert.equal(countsTowardUrlCap("browser_http_429:1000:Too many requests"), false);
+  assert.equal(countsTowardUrlCap("too many sessions"), false);
   assert.equal(countsTowardUrlCap("upstream_http_permanent:404"), false);
   assert.equal(countsTowardUrlCap("browser_http_422"), false);
   assert.equal(shouldApplyUrlRetryCap(1), true);
