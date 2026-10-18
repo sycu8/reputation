@@ -12,13 +12,17 @@ Snapshot from the 2026-10-18 16:51 UTC+7 check:
 
 Both main queues already have the correct single consumer. `max_batch_size`, `max_batch_timeout`, and `max_retries` 3 are set. `max_concurrency` and `retry_delay` are unset, which is valid. The DLQ has no consumer because no worker lists it.
 
-## Why the main queues still hold 14 October messages
+## What the logs showed
 
-Cloudflare Queues applies `max_retries` when a delivery fails or the handler calls `retryAll()`. Per-message `message.retry({ delaySeconds })` does not spend that budget. The crawl workers used that call for `domain_busy`, `browser_pool_busy`, 429, and 5xx. Each call kept the original message id and timestamp and scheduled another delivery. A 30–900 second delay cannot hide a message for four days; only repeating the retry can. Default retention is 4 days (345,600 seconds). The oldest main-queue messages were about 3 days 23 hours old at the check, which is the retention horizon, not a consumer pointed at the wrong queue.
+Production Workers Logs show `message.retry()` does spend `max_retries`. `domain_busy` deliveries were attempts 1 (2,542), 2 (2,290), 3 (2,049), and 4 (1,941), and none past 4. Those messages already reach `reputa-crawl-dlq-production`. A claim that per-message `retry()` ignores `max_retries` is wrong.
 
-The 861,075 DLQ messages are the deliveries that did fail the budget (uncaught failures and killed invocations during the retry storm). A DLQ with no consumer keeps messages for four days and then deletes them. That is why this queue does not drain on its own. Its oldest timestamp is already past that window, so deletion is in progress or the timestamp is the original produce time.
+Why messages from 14 October are still on the two main queues is not established. The consumers are the right workers. Batch size, batch timeout, and `max_retries` 3 are set. A read-only dashboard check is still open. This note does not give a cause for that backlog.
 
-The code fix makes transient crawl failures call `retryAll()` instead. After deploy, the roughly 1,600 messages still on the main queues can reach this DLQ in a few retries. They should not be treated as a new incident.
+The DLQ has no consumer in wrangler. A DLQ with no consumer is kept for four days and then deleted, which is why 861,075 messages do not drain on their own.
+
+## What the code change does
+
+`domain_busy` and `browser_pool_busy` are re-sent on the same queue with `delaySeconds` (at most 900 seconds) and a `congestionHops` counter, and the original message is acked. After 12 hops the worker logs `crawl_congestion_cap` and acks. Congestion does not enter the DLQ. Real transients (5xx, network, upstream 429) still use `message.retry()` and the existing `max_retries` 3 DLQ path. This does not explain or clear the 14 October main-queue messages.
 
 ## Option A — leave the DLQ with no consumer
 
@@ -46,7 +50,7 @@ Pros:
 Cons:
 
 - About 861,000 reads, plus the small number that arrive after the main-queue fix.
-- A bug that retries instead of acking would pin the DLQ the same way the main queues were pinned.
+- A bug that retries instead of acking would leave the DLQ messages in place until `max_retries` moves them again or retention deletes them.
 
 Risks: medium, mostly cost and a bad retry loop. Safe only if the consumer acks every message and has no producer binding to the crawl queues.
 
@@ -62,7 +66,7 @@ Cons:
 
 - Almost all 861,075 messages are retry-storm residue (`domain_busy` tight loops, permanent 4xx, tiny extractions), not a fresh outage.
 - Replaying them recreates crawl load, browser-pool pressure, and duplicate processing. Content hashes make some duplicates harmless, but the fetch cost is not.
-- The new main-queue fix will DLQ a poison URL again after three tries, so replay without a filter just moves the same jobs in a circle.
+- Real transients still dead-letter after three retries, so replaying a poison URL without a filter sends it back to this queue. Congestion is no longer on that path.
 
 Risks: high. Do not replay the full DLQ.
 
@@ -79,12 +83,12 @@ Pros:
 Cons:
 
 - Irreversible. Any real mention that landed here in the last four days and was not recrawled is gone.
-- Purge does not fix the main queues. Those drain only after the `retryAll()` fix is deployed.
+- A purge does not explain or remove the 14 October messages on the main queues.
 
 Risks: data loss for that window. Acceptable for storm residue, not acceptable as a silent step.
 
 ## Recommendation
 
-1. Deploy the `retryAll()` fix first. That is what lets the main queues drain. Expect on the order of 1,600 additional DLQ messages, then a stop.
-2. Do not add a replay consumer.
-3. Prefer a purge of `reputa-crawl-dlq-production` over waiting out retention, but only after Cuong says so. Option A is the fallback if a purge is not approved. Option B is useful only if someone needs a sample before the purge.
+1. Do not treat this branch as the explanation for the 14 October main-queue backlog. Wait for the read-only dashboard check.
+2. Do not add a replay consumer. Congestion no longer needs a DLQ round-trip; replaying the storm residue recreates crawl load.
+3. Prefer leaving `reputa-crawl-dlq-production` to the four-day no-consumer retention unless Cuong approves a purge. Option B is useful only if someone needs a sample first. This change does not purge.

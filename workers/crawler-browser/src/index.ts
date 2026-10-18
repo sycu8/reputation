@@ -1,7 +1,7 @@
 import { assertPublicHttpUrl, BROWSER_RUN_ACCOUNT_CONCURRENCY, crawlAttemptKey, crawlCacheHit, crawlCacheSkipReason, createJob, htmlToPlainText, isHardPaywalledHost, normalizeUrl, parseHardPaywallHosts, sha256Hex, shouldApplyUrlRetryCap, unwrapBrowserRunPayload, urlRetryCapReached, type CrawlCacheRecord, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
-import { browserFailureAction, countsTowardUrlCap, crawlFailureLog, crawlSkipTtlSeconds, createPlatformRetryBatch, flushPlatformRetries, notePlatformRetry, noteUrlFailure } from "../../../packages/crawler-core/src/crawl-failure.ts";
+import { browserFailureAction, handleCrawlQueueBatch, noteQueuedUrlFailure, rememberQueuedSkip } from "../../../packages/crawler-core/src/crawl-failure.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -30,6 +30,7 @@ interface Env {
   CRAWL_CACHE: KVNamespace;
   DOMAIN_DO: DurableObjectNamespace;
   BROWSER_POOL_DO: DurableObjectNamespace;
+  CRAWL_BROWSER: Queue<JobEnvelope<CrawlPayload>>;
   PROCESS_CONTENT: Queue<JobEnvelope<ProcessPayload>>;
   ANALYTICS?: AnalyticsEngineDataset;
   /** Comma-separated registrable domains. Defaults to ft.com,nytimes.com when unset. */
@@ -219,62 +220,30 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
   }
 }
 
+function logCrawlQueue(level: "info" | "warn" | "error", event: string, fields: Record<string, unknown>): void {
+  structuredLog(level, event, {
+    requestId: typeof fields.requestId === "string" ? fields.requestId : "",
+    tenantId: typeof fields.tenantId === "string" ? fields.tenantId : undefined,
+    monitorId: typeof fields.monitorId === "string" ? fields.monitorId : undefined
+  }, fields);
+}
+
 export default {
   async fetch(): Promise<Response> {
     return workerHealthResponse("crawler-browser");
   },
 
   async queue(batch: MessageBatch<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
-    const platformRetries = createPlatformRetryBatch();
-    for (const message of batch.messages) {
-      try {
-        await processMessage(message, env);
-        message.ack();
-      } catch (error) {
-        const messageText = error instanceof Error ? error.message : "unknown";
-        const urlHash = await urlHashForPayload(message.body.payload.url);
-        let urlFailures = 0;
-        if (urlHash && countsTowardUrlCap(messageText)) {
-          try {
-            urlFailures = await noteUrlFailure(env.CRAWL_CACHE, message.body.tenantId, urlHash);
-          } catch {
-            urlFailures = 0;
-          }
-        }
-        const decision = browserFailureAction(messageText, {
-          attempts: message.attempts,
-          urlFailures,
-          random: Math.random
-        });
-        const log = crawlFailureLog("browser", messageText, decision);
-        structuredLog(log.level, log.event, {
-          requestId: message.body.traceId,
-          tenantId: message.body.tenantId,
-          monitorId: message.body.monitorId
-        }, {
-          jobId: message.body.jobId,
-          url: message.body.payload.url,
-          error: messageText,
-          attempts: message.attempts,
-          urlFailures
-        });
-        if (decision.action === "ack") {
-          const ttl = urlHash ? crawlSkipTtlSeconds(messageText) : null;
-          if (urlHash && ttl) {
-            try {
-              await env.CRAWL_CACHE.put(`crawl:${urlHash}`, JSON.stringify({ skip: messageText }), { expirationTtl: ttl });
-            } catch {
-              /* ack even if the skip marker cannot be stored */
-            }
-          }
-          message.ack();
-        } else notePlatformRetry(platformRetries, decision);
-      }
-    }
-    const flush = flushPlatformRetries(platformRetries);
-    if (flush.action === "retryAll") {
-      if (flush.delaySeconds != null) batch.retryAll({ delaySeconds: flush.delaySeconds });
-      else batch.retryAll();
-    }
+    await handleCrawlQueueBatch<JobEnvelope<CrawlPayload>, Message<JobEnvelope<CrawlPayload>>>(batch.messages, {
+      worker: "browser",
+      process: (message) => processMessage(message, env),
+      failureAction: (errorMessage, attempts, urlFailures) => browserFailureAction(errorMessage, { attempts, urlFailures, random: Math.random }),
+      noteUrlFailure: (body, errorMessage) => noteQueuedUrlFailure(env.CRAWL_CACHE, body, errorMessage, urlHashForPayload),
+      rememberSkip: (body, errorMessage, ttlSeconds) => rememberQueuedSkip(env.CRAWL_CACHE, body, errorMessage, ttlSeconds, urlHashForPayload),
+      requeue: async (body, delaySeconds, hops) => {
+        await env.CRAWL_BROWSER.send({ ...body, congestionHops: hops }, { delaySeconds });
+      },
+      log: logCrawlQueue
+    });
   }
 };
