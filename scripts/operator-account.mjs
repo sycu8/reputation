@@ -19,7 +19,8 @@
  * The command exits before any request when either bound is missing or invalid.
  * Optional: SMOKE_LOOKBACK_MS (default 15000), SMOKE_AHEAD_MS (default 2000).
  * The probe span is capped at 60s. Each miss creates an empty user Durable Object.
- * The command does not lock the collector.
+ * After listing tenants it prints the planned lock-request count and sends nothing
+ * until RECOVER_SMOKE_CONFIRM=yes. The command does not lock the collector.
  * Generate OPERATOR_ACCOUNT_SECRET with: openssl rand -base64 32
  *
  * The new password and the operator secret are read from the environment
@@ -142,9 +143,14 @@ async function recoverSmoke(apiBase, secret, windowBounds) {
     behindMs: process.env.SMOKE_LOOKBACK_MS,
     aheadMs: process.env.SMOKE_AHEAD_MS
   });
-  if (plan.length === 0) {
+  const planned = plan.reduce((sum, group) => sum + group.emails.length, 0);
+  console.log(`recover-smoke: planned lock requests=${planned} registryRows=${plan.length}`);
+  if (planned === 0) {
     console.log("recover-smoke: no Deploy Smoke or API Prefix Smoke registry rows in the run window");
     return;
+  }
+  if (String(process.env.RECOVER_SMOKE_CONFIRM ?? "").trim() !== "yes") {
+    fail(`Set RECOVER_SMOKE_CONFIRM=yes to send ${planned} lock requests. Nothing was locked.`);
   }
   const status = process.env.ACCOUNT_LOCK_STATUS || "suspended";
   if (status !== "suspended" && status !== "deleted") fail("ACCOUNT_LOCK_STATUS must be suspended or deleted.");

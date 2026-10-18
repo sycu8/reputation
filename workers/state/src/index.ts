@@ -176,7 +176,7 @@ export class UserDirectoryDO extends SqliteObject {
       if (request.method === "POST" && url.pathname === "/internal/account/reset-password") return await this.resetPassword(request);
       if (request.method === "POST" && url.pathname === "/internal/account/lock") return await this.lockAccount(request);
       if (request.method === "POST" && url.pathname === "/internal/account/audit-denied") return await this.auditDenied(request);
-      if (request.method === "GET" && url.pathname === "/internal/account/audit") return this.listAccountAudit();
+      if (request.method === "GET" && url.pathname === "/internal/account/audit") return this.listAccountAudit(request);
       return json({ error: "not_found" }, 404);
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
@@ -325,18 +325,22 @@ export class UserDirectoryDO extends SqliteObject {
   }
 
   /**
-   * Caps denial audit writes for one actor on this account.
-   * Password reset and lock do not consult it: a valid operator secret is exempt.
+   * Caps denial audit writes for one user on this account.
+   * The stored actor is `{userId}:{cf-ray}`; the cap uses userId only, because every
+   * production request has a distinct cf-ray. Password reset and lock do not consult it.
    */
-  private recentDenialsForActor(actorUserId: string): number {
+  private recentDenialsForUser(actorUserId: string): number {
+    const userId = actorUserId.split(":", 1)[0] ?? actorUserId;
     const since = new Date(Date.now() - 60_000).toISOString();
     const row = rows(this.sql.exec<{ n: number }>(
       `SELECT COUNT(*) AS n FROM audit_events
        WHERE created_at >= ?
-         AND actor_user_id = ?
-         AND action IN ('account.password_reset_denied','account.lock_denied')`,
+         AND action IN ('account.password_reset_denied','account.lock_denied')
+         AND (actor_user_id = ? OR substr(actor_user_id, 1, length(?) + 1) = (? || ':'))`,
       since,
-      actorUserId
+      userId,
+      userId,
+      userId
     ))[0];
     return Number(row?.n ?? 0);
   }
@@ -404,12 +408,39 @@ export class UserDirectoryDO extends SqliteObject {
     const action = body.action === "account.lock_denied" ? "account.lock_denied" : "account.password_reset_denied";
     const account = this.loadAccount(email);
     if (!account) return json({ error: "account_not_found" }, 404);
-    if (this.recentDenialsForActor(actorUserId) >= 8) return json({ error: "rate_limited" }, 429);
+    if (this.recentDenialsForUser(actorUserId) >= 8) return json({ error: "rate_limited" }, 429);
     this.auditAccount(actorUserId, action, account.id, { email: account.email, result: "denied" });
     return json({ ok: true });
   }
 
-  private listAccountAudit(): Response {
+  private listAccountAudit(request: Request): Response {
+    const requested = new URL(request.url).searchParams.get("action");
+    if (requested && requested !== "mutations" && requested !== "account.password_reset" && requested !== "account.lock" && requested !== "account.password_reset_denied" && requested !== "account.lock_denied") {
+      return json({ error: "invalid_audit_action" }, 400);
+    }
+    const events = this.selectAuditEvents(requested);
+    if (requested) return json({ action: requested, events });
+    return json({
+      events,
+      mutations: this.selectAuditEvents("mutations")
+    });
+  }
+
+  /** Reset and lock are queried on their own so denial rows cannot push them out of the newest 50. */
+  private selectAuditEvents(action: string | null): Array<{
+    id: string;
+    actorUserId: string;
+    action: string;
+    targetType: string;
+    targetId: string;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }> {
+    const query = action === "mutations"
+      ? `SELECT id,actor_user_id,action,target_type,target_id,metadata_json,created_at FROM audit_events WHERE action IN ('account.password_reset','account.lock') ORDER BY created_at DESC LIMIT 50`
+      : action
+        ? `SELECT id,actor_user_id,action,target_type,target_id,metadata_json,created_at FROM audit_events WHERE action = ? ORDER BY created_at DESC LIMIT 50`
+        : `SELECT id,actor_user_id,action,target_type,target_id,metadata_json,created_at FROM audit_events ORDER BY created_at DESC LIMIT 50`;
     const events = rows(this.sql.exec<{
       id: string;
       actor_user_id: string;
@@ -418,20 +449,16 @@ export class UserDirectoryDO extends SqliteObject {
       target_id: string;
       metadata_json: string;
       created_at: string;
-    }>(
-      `SELECT id,actor_user_id,action,target_type,target_id,metadata_json,created_at FROM audit_events ORDER BY created_at DESC LIMIT 50`
-    ));
-    return json({
-      events: events.map((event) => ({
-        id: event.id,
-        actorUserId: event.actor_user_id,
-        action: event.action,
-        targetType: event.target_type,
-        targetId: event.target_id,
-        metadata: JSON.parse(event.metadata_json) as Record<string, unknown>,
-        createdAt: event.created_at
-      }))
-    });
+    }>(query, ...(action && action !== "mutations" ? [action] : [])));
+    return events.map((event) => ({
+      id: event.id,
+      actorUserId: event.actor_user_id,
+      action: event.action,
+      targetType: event.target_type,
+      targetId: event.target_id,
+      metadata: JSON.parse(event.metadata_json) as Record<string, unknown>,
+      createdAt: event.created_at
+    }));
   }
 }
 

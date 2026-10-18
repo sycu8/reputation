@@ -140,7 +140,7 @@ Use this after a collector or smoke-account password has been committed. Do not 
 
 The product stores the hash on the user Durable Object for that email. `scripts/operator-account.mjs reset-password` replaces the hash and sets `revoked_at` on every session row for that account. `lock` sets the account to `suspended` (or `deleted` when `ACCOUNT_LOCK_STATUS=deleted`) and revokes every session. Login and session checks reject any status other than `active`.
 
-Reset and lock both require `X-Operator-Secret` for every target. A session alone, including `super_admin`, receives `403 operator_secret_required`. Generate `OPERATOR_ACCOUNT_SECRET` outside the repo with `openssl rand -base64 32`. Denial audits are capped at 8 per actor per account per 60 seconds and do not apply to a valid operator secret. Anonymous wrong-secret guesses are capped at 8 per IP per 60 seconds inside one Worker isolate. A correct secret from that IP still succeeds. A Workers Rate Limiting binding is not configured, because that binding needs a Cloudflare config change. These routes are not deployed until this change is on `main` and the deploy workflow runs.
+Reset and lock both require `X-Operator-Secret` for every target. A session alone, including `super_admin`, receives `403 operator_secret_required`. Generate `OPERATOR_ACCOUNT_SECRET` outside the repo with `openssl rand -base64 32`. Denial audits are capped at 8 per user id per account per 60 seconds. The audit actor still includes the cf-ray, and the cap does not. A valid operator secret does not consume that cap. Audit reads keep reset and lock rows on a separate `mutations` list and behind `action=` so denial rows cannot push them out of the newest 50. Every `X-Operator-Secret` attempt, with or without a cookie, counts toward 8 per IP per 60 seconds inside one Worker isolate, and the cap is checked before the secret is compared. A Workers Rate Limiting binding is not configured. Recommended, and not applied: a Cloudflare WAF rate limiting rule of about 10 requests per minute per IP on `/v1/admin/accounts*` and `/v1/admin/tenants`. Cuong has to approve that rule before anyone creates it. These routes are not deployed until this change is on `main` and the deploy workflow runs.
 
 Ordered steps:
 
@@ -159,11 +159,14 @@ node scripts/operator-account.mjs reset-password
 4. Read `sessionsRevoked` in that command's output. The reset is the revocation: every session for that account has `revoked_at` set. Run the same command again if a new session appears before you finish. Do not log in with the previous password.
 5. Disable smoke accounts from the tenant registry, not from signup logs. Signup bodies were never logged. Deploy created a workspace named exactly `Deploy Smoke` (`deploy-smoke-<unix-ms>@example.com`) or `API Prefix Smoke` (`deploy-api-prefix-<unix-ms>@example.com`). The registry row stores `name` and `createdAt`, not the email. `createdAt` is server time after signup, so the email's `Date.now()` is near `createdAt` and usually earlier. `recover-smoke` exits before any request unless `SMOKE_RUN_START_MS` and `SMOKE_RUN_END_MS` are both finite unix milliseconds and the start is not after the end. Take them from that GitHub Actions run (start through completion). The script keeps registry rows with those names inside the run window, then tries addresses from 2 seconds after `createdAt` back to 15 seconds before it, and stops at the first account that exists. The total span is capped at 60 seconds. A miss creates an empty user Durable Object, so narrow the run window before probing. This command does not lock the collector.
 
+The command prints `planned lock requests=` after reading the registry and sends no lock until `RECOVER_SMOKE_CONFIRM=yes`.
+
 ```text
 API_BASE=https://reputa-api-production.sycu-lee.workers.dev \
 OPERATOR_ACCOUNT_SECRET="$OPERATOR_ACCOUNT_SECRET" \
 SMOKE_RUN_START_MS="$SMOKE_RUN_START_MS" \
 SMOKE_RUN_END_MS="$SMOKE_RUN_END_MS" \
+RECOVER_SMOKE_CONFIRM=yes \
 node scripts/operator-account.mjs recover-smoke
 ```
 

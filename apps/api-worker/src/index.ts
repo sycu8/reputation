@@ -793,8 +793,11 @@ function clientIp(request: Request): string {
   return value.slice(0, 128);
 }
 
-/** Per-isolate memory only. A valid operator secret never calls this. */
-function anonymousSecretGuessLimited(request: Request): boolean {
+/**
+ * Per-isolate memory only. Counts every presented operator secret, with or without a
+ * cookie, and runs before the secret is compared. A session with no secret header is not counted.
+ */
+function secretAttemptLimited(request: Request): boolean {
   const ip = clientIp(request);
   const now = Date.now();
   const recent = (secretGuesses.get(ip) ?? []).filter((ts) => now - ts < SECRET_GUESS_WINDOW_MS);
@@ -826,12 +829,10 @@ async function requireOperatorSecret(request: Request, env: Env): Promise<Operat
     if (!sessionActor) return { ok: false, status: 503, error: "operator_secret_not_configured" };
     return { ok: false, status: 503, error: "operator_secret_not_configured", sessionActor };
   }
+  if (secretAttemptLimited(request)) return { ok: false, status: 429, error: "rate_limited" };
   if (!(await operatorSecretMatches(header.trim(), expected))) {
     const sessionActor = await optionalSessionActor(request, env, ray);
-    if (!sessionActor) {
-      if (anonymousSecretGuessLimited(request)) return { ok: false, status: 429, error: "rate_limited" };
-      return { ok: false, status: 401, error: "invalid_operator_secret" };
-    }
+    if (!sessionActor) return { ok: false, status: 401, error: "invalid_operator_secret" };
     return { ok: false, status: 401, error: "invalid_operator_secret", sessionActor };
   }
   return { ok: true, actor: `operator_secret:${ray}` };
@@ -927,10 +928,22 @@ async function lockAccount(request: Request, env: Env): Promise<Response> {
   });
 }
 
+const AUDIT_ACTIONS = new Set([
+  "mutations",
+  "account.password_reset",
+  "account.lock",
+  "account.password_reset_denied",
+  "account.lock_denied"
+]);
+
 async function listAccountAudit(request: Request, env: Env): Promise<Response> {
-  const email = accountEmail(new URL(request.url).searchParams.get("email"));
+  const url = new URL(request.url);
+  const email = accountEmail(url.searchParams.get("email"));
+  const action = url.searchParams.get("action");
+  if (action && !AUDIT_ACTIONS.has(action)) throw new HttpError(400, "invalid_audit_action");
   await requireAccountReader(request, env);
-  const audit = await doJson(userStub(env, await shardForEmail(email)), "/internal/account/audit");
+  const query = action ? `?action=${encodeURIComponent(action)}` : "";
+  const audit = await doJson(userStub(env, await shardForEmail(email)), `/internal/account/audit${query}`);
   return json(audit);
 }
 
