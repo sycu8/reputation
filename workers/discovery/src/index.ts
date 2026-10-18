@@ -1,5 +1,5 @@
 import { parseBooleanQuery } from "../../../packages/boolean-query/src/index.ts";
-import { createJob, idempotencyKey, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
+import { createJob, discoveryDedupeKey, idempotencyKey, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import {
   createFederatedDiscoveryProviders,
   createSocialDiscoveryProviders,
@@ -107,10 +107,10 @@ function dedupeByUrl(candidates: DiscoveryResult[]): DiscoveryResult[] {
   const seen = new Set<string>();
   const out: DiscoveryResult[] = [];
   for (const candidate of candidates) {
-    const key = candidate.url.toLowerCase();
+    const key = discoveryDedupeKey(candidate.url);
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(candidate);
+    out.push(key === candidate.url ? candidate : { ...candidate, url: key });
   }
   return out;
 }

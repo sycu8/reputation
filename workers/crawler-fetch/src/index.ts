@@ -1,7 +1,7 @@
-import { assertPublicHttpUrl, createJob, normalizeUrl, sha256Hex, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
+import { assertPublicHttpUrl, crawlAttemptKey, crawlCacheHit, crawlCacheSkipReason, createJob, isHardPaywalledHost, normalizeUrl, parseHardPaywallHosts, sha256Hex, shouldApplyUrlRetryCap, urlRetryCapReached, type CrawlCacheRecord, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
-import { classifyUpstreamStatus, fetchFailureAction, nextDomainBackoffMs, parseRetryAfterMs } from "./upstream.ts";
+import { classifyUpstreamStatus, crawlFailureLog, crawlSkipTtlSeconds, countsTowardUrlCap, fetchFailureAction, nextDomainBackoffMs, noteUrlFailure, parseRetryAfterMs } from "./upstream.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -31,6 +31,8 @@ interface Env {
   PROCESS_CONTENT: Queue<JobEnvelope<ProcessPayload>>;
   DOMAIN_DO?: DurableObjectNamespace;
   ANALYTICS?: AnalyticsEngineDataset;
+  /** Comma-separated registrable domains. Defaults to ft.com,nytimes.com when unset. */
+  HARD_PAYWALL_HOSTS?: string;
 }
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
@@ -67,9 +69,10 @@ async function readLimitedText(response: Response, limit: number): Promise<strin
   return new TextDecoder().decode(merged);
 }
 
-async function safeFetch(input: string): Promise<{ response: Response; finalUrl: string }> {
+async function safeFetch(input: string, paywallHosts: readonly string[]): Promise<{ response: Response; finalUrl: string }> {
   let current = assertPublicHttpUrl(input).toString();
   for (let redirect = 0; redirect <= 5; redirect += 1) {
+    if (isHardPaywalledHost(new URL(current).hostname, paywallHosts)) throw new Error("hard_paywall_host");
     const response = await fetch(current, {
       redirect: "manual",
       headers: {
@@ -154,31 +157,50 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
   const normalized = normalizeUrl(assertPublicHttpUrl(payload.url).toString());
   const urlHash = await sha256Hex(normalized);
   const cacheKey = `crawl:${urlHash}`;
+  const paywallHosts = parseHardPaywallHosts(env.HARD_PAYWALL_HOSTS);
+  const domain = new URL(normalized).hostname.toLowerCase();
+  if (isHardPaywalledHost(domain, paywallHosts)) throw new Error("hard_paywall_host");
   const cached = await env.CRAWL_CACHE.get(cacheKey);
   if (cached) {
-    const record = JSON.parse(cached) as { contentId: string; rawR2Key: string; fetchedAt: string; canonicalUrl: string };
-    await env.PROCESS_CONTENT.send(createJob<ProcessPayload>({
-      ...record,
-      source: payload.source,
-      discoveryTitle: payload.title,
-      discoverySnippet: payload.snippet,
-      publishedAt: payload.publishedAt,
-      acquisition: "cache"
-    }, {
-      traceId: job.traceId,
-      tenantId: job.tenantId,
-      monitorId: job.monitorId,
-      priority: job.priority
-    }));
-    env.ANALYTICS?.writeDataPoint({ indexes: [urlHash], blobs: ["crawl_cache_hit", payload.source], doubles: [1] });
-    return;
+    const record = JSON.parse(cached) as CrawlCacheRecord;
+    const skip = crawlCacheSkipReason(record);
+    if (skip) {
+      structuredLog("info", "crawl_fetch_skipped", {
+        requestId: job.traceId,
+        tenantId: job.tenantId,
+        monitorId: job.monitorId
+      }, { jobId: job.jobId, url: payload.url, reason: skip });
+      return;
+    }
+    const hit = crawlCacheHit(record);
+    if (hit) {
+      await env.PROCESS_CONTENT.send(createJob<ProcessPayload>({
+        ...hit,
+        source: payload.source,
+        discoveryTitle: payload.title,
+        discoverySnippet: payload.snippet,
+        publishedAt: payload.publishedAt,
+        acquisition: "cache"
+      }, {
+        traceId: job.traceId,
+        tenantId: job.tenantId,
+        monitorId: job.monitorId,
+        priority: job.priority
+      }));
+      env.ANALYTICS?.writeDataPoint({ indexes: [urlHash], blobs: ["crawl_cache_hit", payload.source], doubles: [1] });
+      return;
+    }
   }
 
-  const domain = new URL(normalized).hostname.toLowerCase();
+  if (shouldApplyUrlRetryCap(message.attempts)) {
+    const recordedFailures = Number(await env.CRAWL_CACHE.get(crawlAttemptKey(job.tenantId, urlHash)) ?? "0");
+    if (urlRetryCapReached(Number.isFinite(recordedFailures) ? recordedFailures : 0)) throw new Error("url_retry_cap");
+  }
+
   const blocked = await domainBlockMs(env, domain);
   if (blocked.waitMs > 0) throw new Error(`domain_busy:${Math.ceil(blocked.waitMs)}`);
 
-  const { response, finalUrl } = await safeFetch(normalized);
+  const { response, finalUrl } = await safeFetch(normalized, paywallHosts);
   if (!response.ok) {
     const action = classifyUpstreamStatus(response.status);
     try { await response.body?.cancel(); } catch { /* already consumed */ }
@@ -262,6 +284,14 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
   env.ANALYTICS?.writeDataPoint({ indexes: [urlHash], blobs: ["crawl_fetch", payload.source], doubles: [body.length, quality.score] });
 }
 
+async function urlHashForPayload(rawUrl: string): Promise<string | null> {
+  try {
+    return await sha256Hex(normalizeUrl(assertPublicHttpUrl(rawUrl).toString()));
+  } catch {
+    return null;
+  }
+}
+
 export default {
   async fetch(): Promise<Response> {
     return workerHealthResponse("crawler-fetch");
@@ -274,15 +304,37 @@ export default {
         message.ack();
       } catch (error) {
         const messageText = error instanceof Error ? error.message : "unknown";
-        const decision = fetchFailureAction(messageText);
-        const retryableFailure = decision.action === "retry" && decision.delaySeconds == null;
-        structuredLog(retryableFailure ? "error" : "warn", retryableFailure ? "crawl_fetch_failed" : "crawl_fetch_skipped", {
+        const urlHash = await urlHashForPayload(message.body.payload.url);
+        let urlFailures = 0;
+        if (urlHash && countsTowardUrlCap(messageText)) {
+          try {
+            urlFailures = await noteUrlFailure(env.CRAWL_CACHE, message.body.tenantId, urlHash);
+          } catch {
+            urlFailures = 0;
+          }
+        }
+        const decision = fetchFailureAction(messageText, {
+          attempts: message.attempts,
+          urlFailures,
+          random: Math.random
+        });
+        const log = crawlFailureLog("fetch", messageText, decision);
+        structuredLog(log.level, log.event, {
           requestId: message.body.traceId,
           tenantId: message.body.tenantId,
           monitorId: message.body.monitorId
-        }, { jobId: message.body.jobId, url: message.body.payload.url, error: messageText });
-        if (decision.action === "ack") message.ack();
-        else if (decision.delaySeconds != null) message.retry({ delaySeconds: decision.delaySeconds });
+        }, { jobId: message.body.jobId, url: message.body.payload.url, error: messageText, attempts: message.attempts, urlFailures });
+        if (decision.action === "ack") {
+          const ttl = urlHash ? crawlSkipTtlSeconds(messageText) : null;
+          if (urlHash && ttl) {
+            try {
+              await env.CRAWL_CACHE.put(`crawl:${urlHash}`, JSON.stringify({ skip: messageText }), { expirationTtl: ttl });
+            } catch {
+              /* ack even if the skip marker cannot be stored */
+            }
+          }
+          message.ack();
+        } else if (decision.delaySeconds != null) message.retry({ delaySeconds: decision.delaySeconds });
         else message.retry();
       }
     }

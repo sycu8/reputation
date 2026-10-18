@@ -35,9 +35,15 @@
     ]
   },
   "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_crawl_fetch_dev" }],
+  "vars": {
+    "HARD_PAYWALL_HOSTS": "ft.com,nytimes.com"
+  },
   "env": {
     "production": {
       "name": "reputa-crawler-fetch-production",
+      "vars": {
+        "HARD_PAYWALL_HOSTS": "ft.com,nytimes.com"
+      },
       "durable_objects": {
         "bindings": [
           { "name": "DOMAIN_DO", "class_name": "DomainCoordinatorDO", "script_name": "reputa-state-production" }

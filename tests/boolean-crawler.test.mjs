@@ -36,6 +36,14 @@ test("URL normalization removes tracking and SSRF guard blocks private literals"
     normalizeUrl("https://Example.com:443/path/?utm_source=x&b=2&a=1#section"),
     "https://example.com/path?a=1&b=2"
   );
+  assert.equal(
+    normalizeUrl("https://www.ft.com/content/abc?syn-25a8e0=1&utm_medium=social&fbclid=IwAR123&story=markets"),
+    "https://www.ft.com/content/abc?story=markets"
+  );
+  assert.equal(
+    normalizeUrl("https://WWW.FT.COM/content/abc?syn-other=1&fbclid=zzz"),
+    normalizeUrl("https://www.ft.com/content/abc")
+  );
   assert.throws(() => assertPublicHttpUrl("http://127.0.0.1/admin"), /ssrf_blocked/);
   assert.throws(() => assertPublicHttpUrl("http://10.0.0.4/"), /ssrf_blocked/);
   assert.doesNotThrow(() => assertPublicHttpUrl("https://example.com/page"));

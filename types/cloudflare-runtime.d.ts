@@ -66,6 +66,8 @@ interface Message<T = unknown> {
   readonly id: string;
   readonly timestamp: Date;
   readonly body: T;
+  /** Deliveries so far, including the current one. The first delivery is 1. */
+  readonly attempts: number;
   ack(): void;
   retry(options?: { delaySeconds?: number }): void;
 }

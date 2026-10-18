@@ -35,13 +35,18 @@ export async function idempotencyKey(parts: Array<string | number | undefined>):
   return sha256Hex(parts.map((part) => String(part ?? "")).join("\u001f"));
 }
 
+const EXACT_TRACKING_PARAMS = new Set(["fbclid", "gclid", "mc_cid", "mc_eid"]);
+
+function isTrackingParam(key: string): boolean {
+  const lower = key.toLowerCase();
+  return lower.startsWith("utm_") || lower.startsWith("syn-") || EXACT_TRACKING_PARAMS.has(lower);
+}
+
 export function normalizeUrl(input: string): string {
   const url = new URL(input);
   url.hash = "";
-  const removable = new Set(["fbclid", "gclid", "mc_cid", "mc_eid"]);
   for (const key of [...url.searchParams.keys()]) {
-    const lower = key.toLowerCase();
-    if (lower.startsWith("utm_") || removable.has(lower)) url.searchParams.delete(key);
+    if (isTrackingParam(key)) url.searchParams.delete(key);
   }
   url.hostname = url.hostname.toLowerCase();
   if ((url.protocol === "https:" && url.port === "443") || (url.protocol === "http:" && url.port === "80")) url.port = "";
@@ -50,6 +55,103 @@ export function normalizeUrl(input: string): string {
   url.search = "";
   for (const [key, value] of sorted) url.searchParams.append(key, value);
   return url.toString();
+}
+
+/** Dedupe key for discovery. Invalid URLs fall back to a trimmed lowercase string. */
+export function discoveryDedupeKey(url: string): string {
+  try {
+    return normalizeUrl(url);
+  } catch {
+    return url.trim().toLowerCase();
+  }
+}
+
+/** Hosts whose article pages are hard paywalls. Subdomains match. Override with HARD_PAYWALL_HOSTS. */
+export const DEFAULT_HARD_PAYWALL_HOSTS = ["ft.com", "nytimes.com"] as const;
+
+export function parseHardPaywallHosts(raw: string | undefined | null): string[] {
+  if (raw == null || raw.trim() === "") return [...DEFAULT_HARD_PAYWALL_HOSTS];
+  const hosts = raw.split(",").map((item) => item.trim().toLowerCase().replace(/^\*\./, "").replace(/\.$/, "")).filter((item) => item.length > 0);
+  return hosts.length > 0 ? hosts : [...DEFAULT_HARD_PAYWALL_HOSTS];
+}
+
+export function isHardPaywalledHost(hostname: string, hosts: readonly string[] = DEFAULT_HARD_PAYWALL_HOSTS): boolean {
+  const host = hostname.trim().toLowerCase().replace(/\.$/, "");
+  if (!host) return false;
+  return hosts.some((blocked) => {
+    const rule = blocked.trim().toLowerCase().replace(/^\*\./, "").replace(/\.$/, "");
+    return rule.length > 0 && (host === rule || host.endsWith(`.${rule}`));
+  });
+}
+
+/** Jittered queue delay for domain/pool congestion. Short hints (for example 250ms) become 30–60s. */
+export const BUSY_REQUEUE_MIN_SECONDS = 30;
+export const BUSY_REQUEUE_MAX_SECONDS = 60;
+export const BUSY_REQUEUE_CAP_SECONDS = 900;
+
+export function busyRequeueDelaySeconds(waitMs: number, random: () => number = Math.random): number {
+  const roll = random();
+  const unit = Number.isFinite(roll) ? Math.min(1, Math.max(0, roll)) : 0;
+  const span = BUSY_REQUEUE_MAX_SECONDS - BUSY_REQUEUE_MIN_SECONDS;
+  const jittered = BUSY_REQUEUE_MIN_SECONDS + Math.floor(unit * (span + 1));
+  const windowed = Math.min(BUSY_REQUEUE_MAX_SECONDS, Math.max(BUSY_REQUEUE_MIN_SECONDS, jittered));
+  const hinted = Number.isFinite(waitMs) && waitMs > 0 ? Math.ceil(waitMs / 1000) : 0;
+  return Math.min(BUSY_REQUEUE_CAP_SECONDS, Math.max(windowed, hinted));
+}
+
+/**
+ * Real fetch failures remembered per tenant and normalized URL.
+ * Congestion delays are not counted. A fresh message is skipped once the cap is reached.
+ * An in-flight transient retry is not skipped here; the queue dead-letters it after max_retries.
+ */
+export const URL_RETRY_CAP = 8;
+export const URL_RETRY_WINDOW_SECONDS = 15 * 60;
+
+export function crawlAttemptKey(tenantId: string | undefined, urlHash: string): string {
+  const tenant = tenantId?.trim() ? tenantId.trim() : "_";
+  return `crawl-attempts:${tenant}:${urlHash}`;
+}
+
+/** The per-URL cap applies to a new delivery. Redeliveries keep retrying until the queue DLQ. */
+export function shouldApplyUrlRetryCap(attempts: number | undefined): boolean {
+  return (attempts ?? 1) <= 1;
+}
+
+export interface CrawlCacheRecord {
+  skip?: string;
+  contentId?: string;
+  rawR2Key?: string;
+  fetchedAt?: string;
+  canonicalUrl?: string;
+}
+
+export function crawlCacheSkipReason(record: CrawlCacheRecord): string | null {
+  if (typeof record.skip === "string" && record.skip.length > 0) return record.skip;
+  return null;
+}
+
+/** Content already stored for this URL. Callers forward it to the current tenant's monitor. */
+export function crawlCacheHit(record: CrawlCacheRecord): { contentId: string; rawR2Key: string; fetchedAt: string; canonicalUrl: string } | null {
+  if (crawlCacheSkipReason(record)) return null;
+  if (record.contentId && record.rawR2Key && record.fetchedAt && record.canonicalUrl) {
+    return {
+      contentId: record.contentId,
+      rawR2Key: record.rawR2Key,
+      fetchedAt: record.fetchedAt,
+      canonicalUrl: record.canonicalUrl
+    };
+  }
+  return null;
+}
+
+export function urlRetryCapReached(recordedFailures: number, cap = URL_RETRY_CAP): boolean {
+  if (!Number.isFinite(recordedFailures)) return false;
+  return recordedFailures >= cap;
+}
+
+export function nextUrlFailureCount(recordedFailures: number): number {
+  if (!Number.isFinite(recordedFailures) || recordedFailures < 0) return 1;
+  return Math.floor(recordedFailures) + 1;
 }
 
 export function assertPublicHttpUrl(input: string): URL {

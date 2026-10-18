@@ -283,6 +283,7 @@ Tracking denylist examples:
 
 ```text
 utm_*
+syn-*
 fbclid
 gclid
 mc_cid
@@ -619,6 +620,12 @@ body too large
 ```
 
 403 and 419 are blocks, not permanent failures: route them to the browser crawler instead of retrying the static fetch. 429 records per-domain backoff (honor `Retry-After`, grow while the domain stays hot) and retries after that delay.
+
+`domain_busy` and `browser_pool_busy` are congestion, not fetch failures. Requeue with the queue `delaySeconds` set to a jittered 30–60 seconds. A longer coordinator hint is honored, up to 15 minutes. Do not turn a 250ms lease hint into a 1 second retry loop. Log those events at info.
+
+Transient failures, including `domain_busy`, `browser_pool_busy`, 429, and 5xx, are retried with `message.retry()` until the queue dead-letters them (`max_retries` 3). The worker does not ack those errors when a cap is reached.
+
+Real fetch failures are counted per tenant and normalized URL, at most 8 in a 15-minute window. `domain_busy` and `browser_pool_busy` do not increment that counter. A new message for a capped tenant/URL is acked. A redelivery of a message already in retry continues so it can reach the DLQ. Permanent 4xx (including 401, 402, 404, and 422), oversized or empty browser extractions, and hard-paywall hosts are acked and are not retried. A browser cache hit is forwarded to processing for the current monitor. Paywall hosts default to `ft.com` and `nytimes.com` plus their subdomains. Override the list with the `HARD_PAYWALL_HOSTS` var.
 
 Use exponential backoff + jitter. Honor `Retry-After`.
 
