@@ -1,7 +1,7 @@
 import { assertPublicHttpUrl, BROWSER_RUN_ACCOUNT_CONCURRENCY, crawlAttemptKey, crawlCacheHit, crawlCacheSkipReason, createJob, htmlToPlainText, isHardPaywalledHost, normalizeUrl, parseHardPaywallHosts, sha256Hex, shouldApplyUrlRetryCap, unwrapBrowserRunPayload, urlRetryCapReached, type CrawlCacheRecord, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
-import { browserFailureAction, handleCrawlQueueBatch, noteQueuedUrlFailure, rememberQueuedSkip } from "../../../packages/crawler-core/src/crawl-failure.ts";
+import { browserFailureAction, browserRunFailureMessage, handleCrawlQueueBatch, noteQueuedUrlFailure, rememberQueuedSkip } from "../../../packages/crawler-core/src/crawl-failure.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -152,7 +152,10 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
       rejectResourceTypes: ["image", "media", "font"],
       userAgent: "PulseWatchBot/0.1 (+public reputation monitoring; contact configured by operator)"
     });
-    if (!browserResponse.ok) throw new Error(`browser_http_${browserResponse.status}`);
+    if (!browserResponse.ok) {
+      const bodyText = await browserResponse.text().catch(() => "");
+      throw new Error(browserRunFailureMessage(browserResponse.status, browserResponse.headers.get("retry-after"), bodyText));
+    }
     const rawBody = await browserResponse.text();
     if (rawBody.length > 8 * 1024 * 1024) throw new Error("browser_body_too_large");
     const unwrapped = unwrapBrowserRunPayload(rawBody);

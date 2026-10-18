@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   browserFailureAction,
+  congestionBackoffDelaySeconds,
   CRAWL_QUEUE_MAX_RETRIES,
   CONGESTION_HOP_CAP,
   fetchFailureAction,
@@ -50,6 +51,9 @@ async function process(message) {
   if (url === "https://busy.example/a") throw new Error("domain_busy:250");
   if (url === "https://pool.example/a") throw new Error("browser_pool_busy:250");
   if (url === "https://long.example/a") throw new Error("domain_busy:1200000");
+  if (url === "https://render.example/a") throw new Error("browser_http_429:0:Too many requests");
+  if (url === "https://render.example/b") throw new Error("browser_http_500:0:too many sessions");
+  if (url === "https://render.example/c") throw new Error("browser_http_503:0:upstream timeout");
   throw new TypeError("Cannot read properties of null (reading 'url')");
 }
 
@@ -110,6 +114,66 @@ test("one batch acks, retries, and re-sends without sharing delays", async () =>
   assert.equal(events.some((item) => item.event === "crawl_domain_busy" && item.hops === CONGESTION_HOP_CAP + 1), false);
 });
 
+test("congestion re-send delay doubles by hop and then stays at 900s", async () => {
+  const expected = [30, 60, 120, 240, 480, 900, 900, 900, 900, 900, 900, 900];
+  const fromHint = [];
+  for (let hop = 0; hop < CONGESTION_HOP_CAP; hop += 1) {
+    fromHint.push(congestionBackoffDelaySeconds(250, hop));
+  }
+  assert.deepEqual(fromHint, expected);
+  assert.equal(fromHint.reduce((sum, delay) => sum + delay, 0), 7230);
+  assert.equal(congestionBackoffDelaySeconds(120_000, 0), 120);
+  assert.equal(congestionBackoffDelaySeconds(120_000, 2), 120);
+  assert.equal(congestionBackoffDelaySeconds(120_000, 3), 240);
+  assert.equal(congestionBackoffDelaySeconds(1_200_000, 0), 900);
+
+  const seen = [];
+  for (let hop = 0; hop < CONGESTION_HOP_CAP; hop += 1) {
+    const message = fake(hop === 0 ? job("https://busy.example/a") : job("https://busy.example/a", hop));
+    const sent = [];
+    await handleCrawlQueueBatch([message], {
+      worker: "fetch",
+      process,
+      failureAction,
+      async noteUrlFailure() { return 0; },
+      async rememberSkip() {},
+      async requeue(_body, delaySeconds, hops) { sent.push({ delaySeconds, hops }); },
+      log() {}
+    });
+    assert.equal(sent.length, 1);
+    seen.push(sent[0].delaySeconds);
+    assert.equal(sent[0].hops, hop + 1);
+    assert.deepEqual(message.ops, [{ op: "ack" }]);
+  }
+  assert.deepEqual(seen, expected);
+});
+
+test("browser session limits re-send with hop backoff instead of retry()", async () => {
+  const rateLimited = fake(job("https://render.example/a"));
+  const sessions = fake(job("https://render.example/b", 2));
+  const serverError = fake(job("https://render.example/c"));
+  const sent = [];
+  const events = [];
+  await handleCrawlQueueBatch([rateLimited, sessions, serverError], {
+    worker: "browser",
+    process,
+    failureAction,
+    async noteUrlFailure() { return 1; },
+    async rememberSkip() {},
+    async requeue(body, delaySeconds, hops) { sent.push({ url: body.payload.url, delaySeconds, hops }); },
+    log(_level, event, fields) { events.push({ event, hops: fields.hops, delaySeconds: fields.delaySeconds }); }
+  });
+  assert.deepEqual(rateLimited.ops, [{ op: "ack" }]);
+  assert.deepEqual(sessions.ops, [{ op: "ack" }]);
+  assert.deepEqual(serverError.ops, [{ op: "retry", options: { delaySeconds: 30 } }]);
+  assert.deepEqual(sent, [
+    { url: "https://render.example/a", delaySeconds: 30, hops: 1 },
+    { url: "https://render.example/b", delaySeconds: 120, hops: 3 }
+  ]);
+  assert.equal(events.filter((item) => item.event === "crawl_browser_session_busy").length, 2);
+  assert.equal(events.some((item) => item.event === "crawl_browser_failed"), true);
+});
+
 test("congestion re-send stops at the hop cap and acks", async () => {
   const under = fake(job("https://busy.example/a", CONGESTION_HOP_CAP - 1));
   const capped = fake(job("https://busy.example/a", CONGESTION_HOP_CAP));
@@ -126,7 +190,7 @@ test("congestion re-send stops at the hop cap and acks", async () => {
     },
     log(_level, event, fields) { events.push({ event, hops: fields.hops, error: fields.error }); }
   });
-  assert.deepEqual(sent, [{ hops: CONGESTION_HOP_CAP, delaySeconds: 30, previous: CONGESTION_HOP_CAP - 1 }]);
+  assert.deepEqual(sent, [{ hops: CONGESTION_HOP_CAP, delaySeconds: 900, previous: CONGESTION_HOP_CAP - 1 }]);
   assert.deepEqual(under.ops, [{ op: "ack" }]);
   assert.deepEqual(capped.ops, [{ op: "ack" }]);
   assert.equal(events.filter((item) => item.event === "crawl_congestion_cap").length, 1);

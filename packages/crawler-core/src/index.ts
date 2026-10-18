@@ -86,7 +86,7 @@ export function isHardPaywalledHost(hostname: string, hosts: readonly string[] =
   });
 }
 
-/** Jittered queue delay for domain/pool congestion. Short hints (for example 250ms) become 30–60s. */
+/** Jittered delay for browser transients. Congestion re-sends use congestionBackoffDelaySeconds instead. */
 export const BUSY_REQUEUE_MIN_SECONDS = 30;
 export const BUSY_REQUEUE_MAX_SECONDS = 60;
 export const BUSY_REQUEUE_CAP_SECONDS = 900;
