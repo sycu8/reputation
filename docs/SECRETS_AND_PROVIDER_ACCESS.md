@@ -20,7 +20,13 @@ Optional paid/search upgrade:
 
 Add providers behind source-adapter interfaces rather than hard-coding provider logic into the pipeline.
 
-Bootstrap a live collector workspace after deploy:
+Bootstrap a live collector workspace after deploy. Required environment variables, never committed:
+
+- `COLLECTOR_EMAIL`
+- `COLLECTOR_PASSWORD`
+
+The script exits if either is missing. Optional: `API_BASE`, `COLLECTOR_WORKSPACE`, `COLLECTOR_SCAN_INTERVAL_SEC`, `COLLECTOR_PRIORITY`.
+
 ```bash
 node scripts/bootstrap-production-collection.mjs
 ```

@@ -34,6 +34,9 @@ jobs:
       DEPLOY_ENV: ${{ github.event.inputs.environment || 'production' }}
       SKIP_ROUTES: ${{ github.event.inputs.skip_routes == 'true' && '1' || '' }}
       SUPER_ADMIN_EMAILS: ${{ secrets.SUPER_ADMIN_EMAILS }}
+      COLLECTOR_EMAIL: ${{ secrets.COLLECTOR_EMAIL }}
+      COLLECTOR_PASSWORD: ${{ secrets.COLLECTOR_PASSWORD }}
+      DEPLOY_SMOKE_PASSWORD: ${{ secrets.DEPLOY_SMOKE_PASSWORD }}
       BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       BILLING_WEBHOOK_SECRET: ${{ secrets.BILLING_WEBHOOK_SECRET }}
@@ -69,4 +72,3 @@ jobs:
       - name: Bootstrap live collector workspace
         if: ${{ (github.event.inputs.environment || 'production') == 'production' }}
         run: npm run bootstrap:collection
-        continue-on-error: true

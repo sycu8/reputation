@@ -202,13 +202,13 @@ test("SUPER_ADMIN_EMAILS promotes an existing account on /v1/me", async () => {
   assert.equal((await me.json()).user.globalRole, "super_admin");
 });
 
-test("deploy defaults SUPER_ADMIN_EMAILS to sycu.lee@gmail.com", async () => {
+test("deploy reads SUPER_ADMIN_EMAILS from the environment", async () => {
   const { readFileSync } = await import("node:fs");
   const deploy = readFileSync(new URL("../scripts/deploy-cloudspace.mjs", import.meta.url), "utf8");
-  assert.match(deploy, /sycu\.lee@gmail\.com/);
-  assert.match(deploy, /collector@pulsewatch\.orangecloud\.vn/);
-  assert.match(deploy, /SUPER_ADMIN_EMAILS/);
-  assert.match(deploy, /resolveSuperAdminEmails/);
+  assert.match(deploy, /resolveSuperAdminEmails\(process\.env\.SUPER_ADMIN_EMAILS\)/);
+  assert.match(deploy, /DEPLOY_SMOKE_PASSWORD/);
+  assert.doesNotMatch(deploy, /const required = \[/);
+  assert.doesNotMatch(deploy, /password:\s*["'][^"']+["']/);
 });
 
 test("A13/A15 billing checkout and admin gate", async () => {

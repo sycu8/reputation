@@ -13,7 +13,7 @@ The account ID is deployment metadata. Do not place it in application runtime so
 Preferred path once secrets are configured:
 
 1. Repository secret **`CLOUDFLARE_API_TOKEN`** (required) — Cloudspace token with Workers/KV/R2/Queues/DO/AI/Browser permissions. Add **Zone → DNS → Edit** (and Workers Routes) if the workflow should create `reputation.orangecloud.vn` DNS automatically.
-2. Optional secrets: `CLOUDFLARE_ACCOUNT_ID` (defaults to Cloudspace `4c15704ef706b9c8954cd6f9feb678d8`), `SUPER_ADMIN_EMAILS`, `BRAVE_SEARCH_API_KEY`, `TELEGRAM_BOT_TOKEN`, `BILLING_WEBHOOK_SECRET`.
+2. Required for deploy: `SUPER_ADMIN_EMAILS` (comma-separated operator allowlist; the deploy script fails if it is empty and does not embed a default). Required for the production collector bootstrap step: `COLLECTOR_EMAIL` and `COLLECTOR_PASSWORD`. Optional: `CLOUDFLARE_ACCOUNT_ID` (defaults to Cloudspace `4c15704ef706b9c8954cd6f9feb678d8`), `DEPLOY_SMOKE_PASSWORD` (signup smoke is skipped when unset), `BRAVE_SEARCH_API_KEY`, `TELEGRAM_BOT_TOKEN`, `BILLING_WEBHOOK_SECRET`.
 3. Run **Actions → Deploy Cloudspace → Run workflow** (`production` or `staging`), or push to `main` (auto-deploys).
 4. Workflow file: `.github/workflows/deploy-cloudspace.yml` → `npm run deploy:cloudspace`.
 
