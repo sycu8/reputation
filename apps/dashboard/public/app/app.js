@@ -5,8 +5,9 @@ function isLocalDashboardHost() {
   return location.port === "8788" || host === "localhost" || host === "127.0.0.1";
 }
 
-/** Production API on the custom host (`/api/*` → API Worker). */
-const PRODUCTION_API_BASE = "https://reputation.orangecloud.vn/api";
+/** Dedicated API worker — avoids custom-host `/api` Cloudflare challenges. */
+const PRODUCTION_API_BASE = "https://reputa-api-production.sycu-lee.workers.dev";
+const CUSTOM_HOST_API_BASE = "https://reputation.orangecloud.vn/api";
 
 function resolveDefaultApiBase() {
   if (isLocalDashboardHost()) {
@@ -21,14 +22,31 @@ function isUsableApiBase(value) {
     const url = new URL(value);
     if (location.protocol === "https:" && url.protocol === "http:") return false;
     if (!isLocalDashboardHost() && url.port === "8787") return false;
-    // Same-origin /api works after path-prefix strip on the custom host.
+    // Same-origin /api still works after path-prefix strip, but prefer dedicated API by default.
     if (url.hostname === location.hostname) {
       const path = url.pathname.replace(/\/$/, "");
       if (path !== "/api") return false;
     }
-    // Dedicated API worker remains a valid manual override.
+    // Never point at the dashboard or other non-API workers.dev scripts.
     if (url.hostname.endsWith(".workers.dev") && !url.hostname.startsWith("reputa-api-")) return false;
     return Boolean(url.origin);
+  } catch {
+    return false;
+  }
+}
+
+function isChallengedCustomApiBase(value) {
+  try {
+    const url = new URL(value);
+    const custom = new URL(CUSTOM_HOST_API_BASE);
+    if (
+      url.hostname === custom.hostname
+      && url.pathname.replace(/\/$/, "") === custom.pathname.replace(/\/$/, "")
+    ) {
+      return true;
+    }
+    if (url.pathname.replace(/\/$/, "") === "/api" && !url.hostname.endsWith(".workers.dev")) return true;
+    return false;
   } catch {
     return false;
   }
@@ -39,14 +57,13 @@ function defaultApiBase() {
   if (stored && isUsableApiBase(stored)) {
     try {
       const url = new URL(stored);
-      // Migrate older workers.dev defaults to the custom-host API base.
-      if (
-        !isLocalDashboardHost()
-        && url.hostname === "reputa-api-production.sycu-lee.workers.dev"
-      ) {
+      // Migrate custom-host /api bases to the dedicated API worker (CF challenge prone).
+      if (!isLocalDashboardHost() && isChallengedCustomApiBase(stored)) {
         localStorage.setItem("apiBase", PRODUCTION_API_BASE);
         return PRODUCTION_API_BASE;
       }
+      // Keep an explicit workers.dev override; ignore empty fallthrough.
+      void url;
     } catch {
       /* fall through */
     }
@@ -54,6 +71,32 @@ function defaultApiBase() {
   }
   if (stored) localStorage.removeItem("apiBase");
   return resolveDefaultApiBase();
+}
+
+function persistApiBase(next, { notifyUser = false } = {}) {
+  state.apiBase = next.replace(/\/$/, "");
+  localStorage.setItem("apiBase", state.apiBase);
+  const input = $("#apiForm")?.querySelector('[name="apiBase"]');
+  if (input) input.value = state.apiBase;
+  if (notifyUser) notify(`API base switched to ${state.apiBase}`);
+}
+
+function looksLikeCloudflareChallenge(raw) {
+  return /just a moment|cf-chl|challenge-platform|cloudflare/i.test(raw || "");
+}
+
+function requestMethod(options = {}) {
+  return String(options.method || "GET").toUpperCase();
+}
+
+function isSafeApiMethod(method) {
+  return method === "GET" || method === "HEAD";
+}
+
+function switchAwayFromChallengedApiBase() {
+  if (isLocalDashboardHost() || state.apiBase === PRODUCTION_API_BASE) return false;
+  persistApiBase(PRODUCTION_API_BASE, { notifyUser: true });
+  return true;
 }
 
 const FEEDBACK_ACTIONS = [
@@ -474,6 +517,9 @@ async function refreshWorkspaceDetails() {
 }
 
 const SESSION_TOKEN_KEY = "pulsewatch-session";
+const SESSION_EMAIL_KEY = "pulsewatch-session-email";
+const LAST_VIEW_KEY = "pulsewatch-last-view";
+const PROFILE_FIELDS = ["website", "facebook", "x", "linkedin", "youtube", "tiktok", "instagram", "reddit", "notes"];
 
 function getSessionToken() {
   try {
@@ -497,21 +543,56 @@ function setSessionToken(token) {
   }
 }
 
+function getSessionEmail() {
+  try {
+    return sessionStorage.getItem(SESSION_EMAIL_KEY) || localStorage.getItem(SESSION_EMAIL_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+function setSessionEmail(email) {
+  try {
+    if (email) {
+      sessionStorage.setItem(SESSION_EMAIL_KEY, email);
+      localStorage.setItem(SESSION_EMAIL_KEY, email);
+    } else {
+      sessionStorage.removeItem(SESSION_EMAIL_KEY);
+      localStorage.removeItem(SESSION_EMAIL_KEY);
+    }
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
 function rememberSession(data) {
   const token = data?.session?.token;
   if (typeof token === "string" && token.split(".").length >= 3) {
     setSessionToken(token);
+    if (data?.user?.email) setSessionEmail(data.user.email);
     return data;
   }
   throw new Error("missing_session_token");
 }
 
-async function api(path, options = {}) {
+/** Flip chrome off the auth form immediately — do not wait on workspace fetches. */
+function applySignedInChrome(email = "") {
+  const label = email || state.user?.email || "Signed in";
+  if (label && label !== "Signed in") setSessionEmail(label);
+  document.body.classList.remove("is-signed-out");
+  document.body.classList.add("is-entering-app");
+  $("#logoutBtn")?.classList.remove("hidden");
+  $("#sessionState").textContent = label;
+  updateRoleChrome();
+}
+
+async function api(path, options = {}, allowChallengeRetry = true) {
   const headers = { "content-type": "application/json", ...(options.headers || {}) };
   const token = getSessionToken();
   if (token && !headers.authorization && !headers.Authorization) {
     headers.authorization = `Bearer ${token}`;
   }
+  const method = requestMethod(options);
   let response;
   try {
     response = await fetch(`${state.apiBase}${path}`, {
@@ -520,6 +601,18 @@ async function api(path, options = {}) {
       headers
     });
   } catch {
+    if (
+      allowChallengeRetry
+      && isSafeApiMethod(method)
+      && !isLocalDashboardHost()
+      && isChallengedCustomApiBase(state.apiBase)
+      && switchAwayFromChallengedApiBase()
+    ) {
+      return api(path, options, false);
+    }
+    if (allowChallengeRetry && !isSafeApiMethod(method) && switchAwayFromChallengedApiBase()) {
+      throw new Error("API base switched after network failure. Retry the action once — mutating requests are not auto-replayed.");
+    }
     throw new Error(`Failed to reach API at ${state.apiBase}. Check Settings → API base URL.`);
   }
   const raw = await response.text();
@@ -527,8 +620,20 @@ async function api(path, options = {}) {
   try {
     data = raw ? JSON.parse(raw) : {};
   } catch {
-    if (/just a moment|cf-chl|challenge-platform|cloudflare/i.test(raw)) {
-      throw new Error("API blocked by Cloudflare challenge. Set API base to the workers.dev API in Settings, then retry.");
+    if (looksLikeCloudflareChallenge(raw)) {
+      if (
+        allowChallengeRetry
+        && isSafeApiMethod(method)
+        && switchAwayFromChallengedApiBase()
+      ) {
+        return api(path, options, false);
+      }
+      if (allowChallengeRetry && !isSafeApiMethod(method) && switchAwayFromChallengedApiBase()) {
+        throw new Error("Cloudflare challenged the API host. Switched to workers.dev — click Create again (POST is not auto-retried to avoid duplicates).");
+      }
+      throw new Error(
+        `API blocked by Cloudflare challenge. Using ${PRODUCTION_API_BASE} (Settings → API base URL), then retry.`
+      );
     }
     throw new Error(`HTTP ${response.status}`);
   }
@@ -560,11 +665,38 @@ function panelFor(view) {
   return $(map[view]);
 }
 
-function setView(view) {
-  if (view === "admin" && !isSuperAdmin()) {
-    view = "overview";
+function normalizeView(view) {
+  if (!view || !titles[view]) return "overview";
+  if (view === "admin" && !isSuperAdmin()) return "overview";
+  return view;
+}
+
+function readPersistedView() {
+  const fromHash = String(location.hash || "").replace(/^#/, "");
+  if (fromHash && fromHash !== "signup" && titles[fromHash]) return normalizeView(fromHash);
+  try {
+    const stored = sessionStorage.getItem(LAST_VIEW_KEY);
+    if (stored && titles[stored]) return normalizeView(stored);
+  } catch {
+    /* ignore */
   }
+  return "overview";
+}
+
+function persistView(view) {
+  const next = normalizeView(view);
+  try { sessionStorage.setItem(LAST_VIEW_KEY, next); } catch { /* ignore */ }
+  if (!state.user) return;
+  const hash = `#${next}`;
+  if (location.hash !== hash) {
+    history.replaceState(null, "", `${location.pathname}${location.search}${hash}`);
+  }
+}
+
+function setView(view) {
+  view = normalizeView(view);
   state.view = view;
+  persistView(view);
   document.querySelectorAll(".nav").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
   const [title, subtitle] = titles[view] || titles.overview;
   $("#pageTitle").textContent = title;
@@ -638,8 +770,78 @@ function fillMonitorSelects() {
 async function refreshMonitors() {
   if (!state.workspace) return;
   const data = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors`);
-  state.monitors = data.monitors || [];
+  const seen = new Set();
+  state.monitors = (data.monitors || []).filter((monitor) => {
+    const id = monitor.monitor_id || monitor.id;
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
   fillMonitorSelects();
+}
+
+function monitorIdOf(monitor) {
+  return monitor?.monitor_id || monitor?.id || "";
+}
+
+function findDuplicateMonitor(name, exceptId = "") {
+  const key = String(name || "").trim().toLowerCase();
+  if (!key) return null;
+  return state.monitors.find((item) => {
+    const id = monitorIdOf(item);
+    if (exceptId && id === exceptId) return false;
+    return String(item.name || "").trim().toLowerCase() === key;
+  }) || null;
+}
+
+function profileFromForm(form) {
+  const profile = {};
+  for (const key of PROFILE_FIELDS) profile[key] = form[key] || "";
+  return profile;
+}
+
+function openMonitorDialog(mode = "create", monitor = null) {
+  const form = $("#monitorForm");
+  if (!form) return;
+  form.reset();
+  form.dataset.mode = mode;
+  form.elements.monitorId.value = monitor ? monitorIdOf(monitor) : "";
+  const queryInput = form.elements.query;
+  const queryLabel = queryInput?.closest("label");
+  if (mode === "edit" && monitor) {
+    $("#monitorDialogEyebrow").textContent = "Edit monitor";
+    $("#monitorDialogTitle").textContent = "Update monitor";
+    $("#monitorSubmitBtn").textContent = "Save changes";
+    form.elements.name.value = monitor.name || "";
+    form.elements.type.value = monitor.type || "company";
+    if (queryLabel) queryLabel.classList.add("hidden");
+    if (queryInput) queryInput.required = false;
+    const profile = monitor.profile || {};
+    for (const key of PROFILE_FIELDS) {
+      if (form.elements[key]) form.elements[key].value = profile[key] || "";
+    }
+  } else {
+    $("#monitorDialogEyebrow").textContent = "New monitor";
+    $("#monitorDialogTitle").textContent = "Create monitor";
+    $("#monitorSubmitBtn").textContent = "Create";
+    if (queryLabel) queryLabel.classList.remove("hidden");
+    if (queryInput) queryInput.required = true;
+  }
+  dialog.showModal();
+}
+
+async function deleteMonitorById(monitorId) {
+  if (!state.workspace || !monitorId) return;
+  if (!canManageMonitors()) {
+    notify("forbidden");
+    return;
+  }
+  const label = state.monitors.find((item) => monitorIdOf(item) === monitorId)?.name || monitorId;
+  if (!window.confirm(`Delete monitor “${label}”? This cannot be undone.`)) return;
+  await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}`, { method: "DELETE" });
+  await refreshMonitors();
+  renderMonitors();
+  notify("Monitor deleted");
 }
 
 async function refreshSourceHealth() {
@@ -983,15 +1185,33 @@ function monitorProfileLinks(profile) {
 function renderMonitors() {
   const list = $("#monitorList");
   list.innerHTML = "";
+  const query = String($("#monitorSearch")?.value || "").trim().toLowerCase();
+  const visible = state.monitors.filter((monitor) => {
+    if (!query) return true;
+    const haystack = [
+      monitor.name,
+      monitor.type,
+      monitor.status,
+      monitor.priority,
+      monitor.profile?.notes,
+      ...monitorProfileLinks(monitor.profile).map((item) => `${item.label} ${item.url}`)
+    ].join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
   if (!state.monitors.length) {
     list.innerHTML = canManageMonitors()
       ? '<div class="empty">No monitors yet. Create one with keywords plus optional website / social pages.</div>'
       : '<div class="empty">No monitors in this workspace yet.</div>';
     return;
   }
-  for (const monitor of state.monitors) {
+  if (!visible.length) {
+    list.innerHTML = '<div class="empty">No monitors match this search.</div>';
+    return;
+  }
+  for (const monitor of visible) {
     const row = document.createElement("div");
     row.className = "monitor-row";
+    const monitorId = monitorIdOf(monitor);
     const links = monitorProfileLinks(monitor.profile);
     const linkHtml = links.length
       ? `<div class="monitor-profile-links">${links.map((item) =>
@@ -1001,6 +1221,13 @@ function renderMonitors() {
     const notes = typeof monitor.profile?.notes === "string" && monitor.profile.notes
       ? `<p class="monitor-notes">${escapeHtml(monitor.profile.notes)}</p>`
       : "";
+    const actions = canManageMonitors()
+      ? `<div class="monitor-row-actions">
+          <span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>
+          <button type="button" class="secondary" data-edit-monitor="${escapeHtml(monitorId)}">Edit</button>
+          <button type="button" class="ghost danger-btn" data-delete-monitor="${escapeHtml(monitorId)}">Delete</button>
+        </div>`
+      : `<span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>`;
     row.innerHTML = `
       <div>
         <strong>${escapeHtml(monitor.name || "Unnamed")}</strong>
@@ -1008,7 +1235,7 @@ function renderMonitors() {
         ${linkHtml}
         ${notes}
       </div>
-      <span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>
+      ${actions}
     `;
     list.appendChild(row);
   }
@@ -1279,7 +1506,9 @@ function renderSignedOut() {
   state.workspace = null;
   state.workspaces = [];
   setSessionToken(null);
+  setSessionEmail(null);
   document.body.classList.add("is-signed-out");
+  document.body.classList.remove("is-entering-app");
   updateRoleChrome();
   $("#logoutBtn").classList.add("hidden");
   $("#workspaceSwitchWrap").classList.add("hidden");
@@ -1289,9 +1518,7 @@ function renderSignedOut() {
 }
 
 async function renderSignedIn(preferredView = "overview") {
-  document.body.classList.remove("is-signed-out");
-  $("#logoutBtn")?.classList.remove("hidden");
-  $("#sessionState").textContent = state.user?.email || "Signed in";
+  applySignedInChrome(state.user?.email || "");
   $("#workspaceName").textContent = state.workspace?.workspaceName || "Workspace";
   $("#workspaceRole").textContent = state.workspace?.role || "—";
   updateRoleChrome();
@@ -1300,6 +1527,7 @@ async function renderSignedIn(preferredView = "overview") {
   const view = preferredView || "overview";
   setView(view);
   try {
+    await refreshMonitors();
     await refreshWorkspaceDetails();
     $("#workspaceName").textContent = state.workspace?.workspaceName || "Workspace";
     $("#workspaceRole").textContent = state.workspace?.role || "—";
@@ -1315,16 +1543,22 @@ async function renderSignedIn(preferredView = "overview") {
     if (view === "admin") await loadAdmin();
   } catch (error) {
     notify(error.message || "workspace_load_failed");
+  } finally {
+    document.body.classList.remove("is-entering-app");
   }
 }
 
 function clearAuthHash() {
-  if (!location.hash) return;
-  history.replaceState(null, "", `${location.pathname}${location.search}`);
+  if (location.hash !== "#signup") return;
+  history.replaceState(null, "", `${location.pathname}${location.search}#overview`);
 }
 
 async function enterAppAfterAuth(message) {
   clearAuthHash();
+  if (state.user) {
+    applySignedInChrome(state.user.email || "");
+    setView("overview");
+  }
   await goToView("overview");
   notify(message);
 }
@@ -1353,15 +1587,19 @@ function renderWorkspaceSwitcher() {
 
 async function bootstrap(options = {}) {
   const clearOnFailure = options.clearOnFailure !== false;
+  const preferredView = options.view || readPersistedView() || "overview";
   try {
     const me = await api("/v1/me");
     state.user = me.user;
+    if (me.user?.email) setSessionEmail(me.user.email);
+    // Enter the app shell before slower workspace/monitor fetches.
+    applySignedInChrome(me.user?.email || "");
+    setView(preferredView);
     const data = await api("/v1/workspaces");
     state.workspaces = data.memberships || [];
     state.workspace = pickDefaultWorkspace(state.workspaces);
     renderWorkspaceSwitcher();
-    await refreshMonitors();
-    await renderSignedIn(options.view || "overview");
+    await renderSignedIn(preferredView);
   } catch (error) {
     if (clearOnFailure) renderSignedOut();
     throw error;
@@ -1372,16 +1610,25 @@ $("#signupForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const submit = event.currentTarget.querySelector('button[type="submit"]');
-  if (submit) submit.disabled = true;
+  if (submit) {
+    submit.disabled = true;
+    submit.classList.add("is-busy");
+  }
   try {
-    rememberSession(await api("/v1/auth/signup", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
+    const session = rememberSession(await api("/v1/auth/signup", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
+    state.user = session?.user || { email: String(form.get("email") || "") };
+    applySignedInChrome(state.user?.email || form.get("email") || "");
+    setView("overview");
     await bootstrap({ clearOnFailure: false, view: "overview" });
     await enterAppAfterAuth("Account created");
   } catch (error) {
     if (!state.user) renderSignedOut();
     notify(error.message || "signup_failed");
   } finally {
-    if (submit) submit.disabled = false;
+    if (submit) {
+      submit.disabled = false;
+      submit.classList.remove("is-busy");
+    }
   }
 });
 
@@ -1389,17 +1636,26 @@ $("#loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget);
   const submit = event.currentTarget.querySelector('button[type="submit"]');
-  if (submit) submit.disabled = true;
+  if (submit) {
+    submit.disabled = true;
+    submit.classList.add("is-busy");
+  }
   try {
     const session = rememberSession(await api("/v1/auth/login", { method: "POST", body: JSON.stringify(Object.fromEntries(form)) }));
-    if (session?.user) state.user = session.user;
+    state.user = session?.user || { email: String(form.get("email") || "") };
+    // Redirect chrome immediately — do not wait for bootstrap/workspace loads.
+    applySignedInChrome(state.user?.email || form.get("email") || "");
+    setView("overview");
     await bootstrap({ clearOnFailure: false, view: "overview" });
     await enterAppAfterAuth("Signed in");
   } catch (error) {
     if (!state.user) renderSignedOut();
     notify(error.message || "login_failed");
   } finally {
-    if (submit) submit.disabled = false;
+    if (submit) {
+      submit.disabled = false;
+      submit.classList.remove("is-busy");
+    }
   }
 });
 
@@ -1413,9 +1669,10 @@ $("#newMonitorBtn").addEventListener("click", () => {
     notify("forbidden");
     return;
   }
-  dialog.showModal();
+  openMonitorDialog("create");
 });
 $("#cancelMonitor").addEventListener("click", () => dialog.close());
+$("#monitorSearch")?.addEventListener("input", () => renderMonitors());
 
 $("#monitorForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1428,23 +1685,41 @@ $("#monitorForm").addEventListener("submit", async (event) => {
     return;
   }
   const formEl = event.currentTarget;
+  const submit = formEl.querySelector('button[type="submit"]');
+  if (submit?.disabled) return;
   const form = Object.fromEntries(new FormData(formEl));
-  if (!String(form.name || "").trim() || !String(form.query || "").trim() || !String(form.type || "").trim()) {
+  const mode = formEl.dataset.mode || "create";
+  const editingId = String(form.monitorId || "").trim();
+  if (!String(form.name || "").trim() || !String(form.type || "").trim()) {
+    notify("Name and type are required");
+    return;
+  }
+  if (mode !== "edit" && !String(form.query || "").trim()) {
     notify("Name, type, and query are required");
     return;
   }
+  const duplicate = findDuplicateMonitor(form.name, editingId);
+  if (duplicate && !window.confirm(`A monitor named “${form.name}” already exists. Continue anyway?`)) {
+    return;
+  }
+  if (submit) {
+    submit.disabled = true;
+    submit.classList.add("is-busy");
+  }
   try {
-    const profile = {
-      website: form.website || "",
-      facebook: form.facebook || "",
-      x: form.x || "",
-      linkedin: form.linkedin || "",
-      youtube: form.youtube || "",
-      tiktok: form.tiktok || "",
-      instagram: form.instagram || "",
-      reddit: form.reddit || "",
-      notes: form.notes || ""
-    };
+    const profile = profileFromForm(form);
+    if (mode === "edit" && editingId) {
+      await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${editingId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: form.name, type: form.type, profile })
+      });
+      dialog.close();
+      formEl.reset();
+      await refreshMonitors();
+      renderMonitors();
+      notify("Monitor updated");
+      return;
+    }
     const created = await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors`, {
       method: "POST",
       body: JSON.stringify({ name: form.name, type: form.type, profile })
@@ -1458,10 +1733,34 @@ $("#monitorForm").addEventListener("submit", async (event) => {
     dialog.close();
     formEl.reset();
     await refreshMonitors();
-    await renderSignedIn();
+    renderMonitors();
     notify("Monitor created");
   } catch (error) {
-    notify(error.message || "monitor_create_failed");
+    notify(error.message || (mode === "edit" ? "monitor_update_failed" : "monitor_create_failed"));
+  } finally {
+    if (submit) {
+      submit.disabled = false;
+      submit.classList.remove("is-busy");
+    }
+  }
+});
+
+$("#monitorList")?.addEventListener("click", async (event) => {
+  const edit = event.target.closest("[data-edit-monitor]");
+  if (edit) {
+    event.preventDefault();
+    const monitor = state.monitors.find((item) => monitorIdOf(item) === edit.getAttribute("data-edit-monitor"));
+    if (!monitor) return;
+    openMonitorDialog("edit", monitor);
+    return;
+  }
+  const button = event.target.closest("[data-delete-monitor]");
+  if (!button) return;
+  event.preventDefault();
+  try {
+    await deleteMonitorById(button.getAttribute("data-delete-monitor"));
+  } catch (error) {
+    notify(error.message || "monitor_delete_failed");
   }
 });
 
@@ -1484,9 +1783,7 @@ $("#apiForm").addEventListener("submit", (event) => {
     notify("API base URL looks invalid for this page (use https production API, not :8787)");
     return;
   }
-  state.apiBase = next;
-  localStorage.setItem("apiBase", state.apiBase);
-  $("#apiForm").querySelector('[name="apiBase"]').value = state.apiBase;
+  persistApiBase(next);
   notify("API endpoint saved");
 });
 
@@ -1563,10 +1860,29 @@ document.addEventListener("click", (event) => {
 
 $("#apiForm").querySelector('[name="apiBase"]').value = state.apiBase;
 initTheme();
-bootstrap().catch(() => {
-  /* signed-out on first paint is normal */
+
+// If a session token already exists, leave the auth form immediately on refresh.
+const bootToken = getSessionToken();
+const bootView = readPersistedView();
+if (bootToken) {
+  const cachedEmail = getSessionEmail();
+  state.user = { email: cachedEmail || "Signed in" };
+  document.body.classList.add("is-booting");
+  applySignedInChrome(cachedEmail);
+  setView(bootView);
+}
+
+window.addEventListener("hashchange", () => {
+  const next = String(location.hash || "").replace(/^#/, "");
+  if (next === "signup" || !state.user || !titles[next] || next === state.view) return;
+  goToView(next);
+});
+
+bootstrap({ view: bootToken ? bootView : "overview" }).catch(() => {
+  /* signed-out on first paint is normal when no valid session */
 }).finally(() => {
-  if (location.hash === "#signup") {
+  document.body.classList.remove("is-booting");
+  if (!bootToken && location.hash === "#signup") {
     $("#signupForm")?.scrollIntoView({ behavior: "smooth", block: "center" });
     $("#signupForm")?.querySelector('input[name="email"]')?.focus();
   }

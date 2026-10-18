@@ -319,6 +319,11 @@
       </section>
 
       <section id="monitorsPanel" class="view-panel hidden">
+        <div class="toolbar" id="monitorToolbar">
+          <label class="inline">Search
+            <input id="monitorSearch" type="search" placeholder="Filter by name, type, or notes" autocomplete="off" />
+          </label>
+        </div>
         <div id="monitorList" class="monitor-list"></div>
       </section>
 
@@ -405,8 +410,8 @@
         <form id="apiForm" class="plain-section">
           <div class="eyebrow">API configuration</div>
           <h2>Development endpoint</h2>
-          <label>API base URL<input name="apiBase" placeholder="https://reputation.orangecloud.vn/api" /></label>
-          <p class="hint">Default production API is <code>https://reputation.orangecloud.vn/api</code> on <code>https://reputation.orangecloud.vn/</code>.</p>
+          <label>API base URL<input name="apiBase" placeholder="https://reputa-api-production.sycu-lee.workers.dev" /></label>
+          <p class="hint">Default production API is the dedicated worker <code>https://reputa-api-production.sycu-lee.workers.dev</code> (avoids Cloudflare challenges on <code>https://reputation.orangecloud.vn/api</code>).</p>
           <button class="secondary" type="submit">Save</button>
         </form>
         <form id="billingForm" class="plain-section hidden">
@@ -518,9 +523,10 @@
   </main>
 
   <dialog id="monitorDialog">
-    <form id="monitorForm">
-      <div class="eyebrow">New monitor</div>
-      <h2>Create monitor</h2>
+    <form id="monitorForm" data-mode="create">
+      <input type="hidden" name="monitorId" value="" />
+      <div class="eyebrow" id="monitorDialogEyebrow">New monitor</div>
+      <h2 id="monitorDialogTitle">Create monitor</h2>
       <label>Name<input name="name" required placeholder="Acme Company" autocomplete="off" /></label>
       <label>Type
         <select name="type" required>
@@ -547,7 +553,7 @@
       <p class="hint">Tip: create one monitor for your brand and others for rivals — Insights compares them side-by-side.</p>
       <div class="dialog-actions">
         <button type="button" id="cancelMonitor" class="ghost">Cancel</button>
-        <button type="submit" class="primary">Create</button>
+        <button type="submit" class="primary" id="monitorSubmitBtn">Create</button>
       </div>
     </form>
   </dialog>
