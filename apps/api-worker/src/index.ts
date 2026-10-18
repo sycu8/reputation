@@ -764,20 +764,72 @@ async function operatorSecretMatches(provided: string, expected: string): Promis
   return constantTimeEqual(base64url(new Uint8Array(left)), base64url(new Uint8Array(right)));
 }
 
-async function requireAccountOperator(request: Request, env: Env, targetEmail?: string): Promise<string> {
+function requestRay(request: Request): string {
+  const ray = request.headers.get("cf-ray")?.trim() ?? "";
+  return ray || "no-request-id";
+}
+
+type OperatorGate =
+  | { ok: true; actor: string }
+  | { ok: false; status: number; error: string; sessionActor?: string };
+
+async function optionalSessionActor(request: Request, env: Env, ray: string): Promise<string | undefined> {
+  const hasSession = Boolean(request.headers.get("cookie") || request.headers.get("authorization") || request.headers.get("Authorization"));
+  if (!hasSession) return undefined;
+  try {
+    const auth = await resolveAuth(request, env);
+    return `${auth.userId}:${ray}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Password reset and lock accept only X-Operator-Secret. A session alone is 403. */
+async function requireOperatorSecret(request: Request, env: Env): Promise<OperatorGate> {
+  const ray = requestRay(request);
+  const header = request.headers.get("x-operator-secret");
+  if (header === null) {
+    const sessionActor = await optionalSessionActor(request, env, ray);
+    if (!sessionActor) return { ok: false, status: 401, error: "authentication_required" };
+    return { ok: false, status: 403, error: "operator_secret_required", sessionActor };
+  }
+  const expected = env.OPERATOR_ACCOUNT_SECRET?.trim() ?? "";
+  if (!expected) {
+    const sessionActor = await optionalSessionActor(request, env, ray);
+    if (!sessionActor) return { ok: false, status: 503, error: "operator_secret_not_configured" };
+    return { ok: false, status: 503, error: "operator_secret_not_configured", sessionActor };
+  }
+  if (!(await operatorSecretMatches(header.trim(), expected))) {
+    const sessionActor = await optionalSessionActor(request, env, ray);
+    if (!sessionActor) return { ok: false, status: 401, error: "invalid_operator_secret" };
+    return { ok: false, status: 401, error: "invalid_operator_secret", sessionActor };
+  }
+  return { ok: true, actor: `operator_secret:${ray}` };
+}
+
+/** Read paths: operator secret, or a super_admin session. Mutations do not use this. */
+async function requireAccountReader(request: Request, env: Env): Promise<void> {
   const header = request.headers.get("x-operator-secret");
   if (header !== null) {
-    const expected = env.OPERATOR_ACCOUNT_SECRET?.trim() ?? "";
-    if (!expected) throw new HttpError(503, "operator_secret_not_configured");
-    if (!(await operatorSecretMatches(header.trim(), expected))) throw new HttpError(401, "invalid_operator_secret");
-    return "operator_secret";
+    const gate = await requireOperatorSecret(request, env);
+    if (!gate.ok) throw new HttpError(gate.status, gate.error);
+    return;
   }
   const auth = await resolveAuth(request, env);
   if (auth.globalRole !== "super_admin") throw new HttpError(403, "forbidden");
-  if (targetEmail && isSuperAdminEmail(targetEmail, env.SUPER_ADMIN_EMAILS)) {
-    throw new HttpError(403, "operator_secret_required");
+}
+
+async function auditDenial(env: Env, email: unknown, actor: string, action: "account.password_reset_denied" | "account.lock_denied"): Promise<void> {
+  if (typeof email !== "string" || !ACCOUNT_EMAIL_RE.test(email.trim().toLowerCase())) return;
+  const normalized = email.trim().toLowerCase();
+  try {
+    await doJson(userStub(env, await shardForEmail(normalized)), "/internal/account/audit-denied", {
+      method: "POST",
+      body: JSON.stringify({ email: normalized, actorUserId: actor, action })
+    });
+  } catch {
+    // Missing account or the per-account brake. The caller still returns its auth error.
   }
-  return auth.userId;
 }
 
 function accountEmail(value: unknown): string {
@@ -796,15 +848,19 @@ async function rememberAccount(env: Env, record: { email: string; userId: string
 }
 
 async function resetAccountPassword(request: Request, env: Env): Promise<Response> {
+  const gate = await requireOperatorSecret(request, env);
   const body = await readJson(request);
+  if (!gate.ok) {
+    if (gate.sessionActor) await auditDenial(env, body.email, gate.sessionActor, "account.password_reset_denied");
+    throw new HttpError(gate.status, gate.error);
+  }
   const email = accountEmail(body.email);
   const password = asString(body.password, "password");
   if (password.length < 10) throw new HttpError(400, "password_too_short");
-  const actorUserId = await requireAccountOperator(request, env, email);
   const result = await doJson<{ userId: string; email: string; status: string; sessionsRevoked: number }>(
     userStub(env, await shardForEmail(email)),
     "/internal/account/reset-password",
-    { method: "POST", body: JSON.stringify({ email, password, actorUserId }) }
+    { method: "POST", body: JSON.stringify({ email, password, actorUserId: gate.actor }) }
   );
   await rememberAccount(env, { email: result.email, userId: result.userId, status: result.status });
   return json({
@@ -817,15 +873,19 @@ async function resetAccountPassword(request: Request, env: Env): Promise<Respons
 }
 
 async function lockAccount(request: Request, env: Env): Promise<Response> {
+  const gate = await requireOperatorSecret(request, env);
   const body = await readJson(request);
+  if (!gate.ok) {
+    if (gate.sessionActor) await auditDenial(env, body.email, gate.sessionActor, "account.lock_denied");
+    throw new HttpError(gate.status, gate.error);
+  }
   const email = accountEmail(body.email);
   const status = typeof body.status === "string" && body.status.trim() ? body.status.trim() : "suspended";
   if (status !== "suspended" && status !== "deleted") throw new HttpError(400, "invalid_status");
-  const actorUserId = await requireAccountOperator(request, env, email);
   const result = await doJson<{ userId: string; email: string; status: string; sessionsRevoked: number }>(
     userStub(env, await shardForEmail(email)),
     "/internal/account/lock",
-    { method: "POST", body: JSON.stringify({ email, status, actorUserId }) }
+    { method: "POST", body: JSON.stringify({ email, status, actorUserId: gate.actor }) }
   );
   await rememberAccount(env, { email: result.email, userId: result.userId, status: result.status });
   return json({
@@ -839,13 +899,13 @@ async function lockAccount(request: Request, env: Env): Promise<Response> {
 
 async function listAccountAudit(request: Request, env: Env): Promise<Response> {
   const email = accountEmail(new URL(request.url).searchParams.get("email"));
-  await requireAccountOperator(request, env, email);
+  await requireAccountReader(request, env);
   const audit = await doJson(userStub(env, await shardForEmail(email)), "/internal/account/audit");
   return json(audit);
 }
 
 async function listAccountDirectory(request: Request, env: Env): Promise<Response> {
-  await requireAccountOperator(request, env);
+  await requireAccountReader(request, env);
   const listed = await env.CONFIG_KV.list({ prefix: "account:directory:" });
   const accounts = [];
   for (const key of listed.keys) {
@@ -869,8 +929,8 @@ async function listAccountDirectory(request: Request, env: Env): Promise<Respons
   });
 }
 
-async function listAdminTenants(auth: AuthContext, env: Env): Promise<Response> {
-  if (auth.globalRole !== "super_admin") throw new HttpError(403, "forbidden");
+async function listAdminTenants(request: Request, env: Env): Promise<Response> {
+  await requireAccountReader(request, env);
   const listed = await env.CONFIG_KV.list({ prefix: "tenant:registry:" });
   const tenants = [];
   for (const key of listed.keys) {
@@ -916,6 +976,8 @@ async function route(request: Request, env: Env, context: RouteContext): Promise
     throw new HttpError(405, "method_not_allowed");
   }
 
+  if (request.method === "GET" && pathname === "/v1/admin/tenants") return listAdminTenants(request, env);
+
   // Known public paths with wrong method used to fall through to resolveAuth →
   // misleading authentication_required (e.g. GET /v1/auth/login).
   if (
@@ -934,7 +996,6 @@ async function route(request: Request, env: Env, context: RouteContext): Promise
   if (request.method === "GET" && pathname === "/v1/me") return json({ user: { id: auth.userId, email: auth.email, globalRole: auth.globalRole } });
   if (request.method === "GET" && pathname === "/v1/workspaces") return listWorkspaces(auth, env);
   if (request.method === "POST" && pathname === "/v1/workspaces") return createWorkspace(request, auth, env);
-  if (request.method === "GET" && pathname === "/v1/admin/tenants") return listAdminTenants(auth, env);
   if (request.method === "GET" && pathname === "/v1/admin/source-health") {
     if (auth.globalRole !== "super_admin") throw new HttpError(403, "forbidden");
     return json(sourceHealthSnapshot());

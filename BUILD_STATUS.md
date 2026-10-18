@@ -58,7 +58,7 @@ Local (this agent):
 
 Auto-bootstrapped after each production deploy (`npm run bootstrap:collection`).
 
-Collector email and password were removed from this file. Bootstrap requires `COLLECTOR_EMAIL` and `COLLECTOR_PASSWORD` and exits if either is missing. The production super-admin allowlist is only the Worker secret `SUPER_ADMIN_EMAILS`, written from that environment variable at deploy time. Git history still has the previous collector password. `scripts/operator-account.mjs` resets that hash, revokes every session, and can lock an account. The ordered steps are in `docs/SRE_RUNBOOK.md`. Unit tests cover the routes; production reset has not been run.
+Collector email and password were removed from this file. Bootstrap requires `COLLECTOR_EMAIL` and `COLLECTOR_PASSWORD` and exits if either is missing. The production super-admin allowlist is only the Worker secret `SUPER_ADMIN_EMAILS`, written from that environment variable at deploy time. Git history still has the previous collector password. `scripts/operator-account.mjs` resets that hash and revokes every session only when `X-Operator-Secret` is present. A `super_admin` session alone receives 403 on reset and on lock. The ordered steps are in `docs/SRE_RUNBOOK.md`. Unit tests cover the routes; production reset has not been run.
 
 | Field | Value |
 |---|---|

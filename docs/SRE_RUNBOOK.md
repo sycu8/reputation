@@ -140,7 +140,7 @@ Use this after a collector or smoke-account password has been committed. Do not 
 
 The product stores the hash on the user Durable Object for that email. `scripts/operator-account.mjs reset-password` replaces the hash and sets `revoked_at` on every session row for that account. `lock` sets the account to `suspended` (or `deleted` when `ACCOUNT_LOCK_STATUS=deleted`) and revokes every session. Login and session checks reject any status other than `active`.
 
-A `super_admin` session cannot reset or lock an address that is on `SUPER_ADMIN_EMAILS`. Those targets require `OPERATOR_ACCOUNT_SECRET`. Generate that secret outside the repo.
+Reset and lock both require `X-Operator-Secret` for every target. A session alone, including `super_admin`, receives `403 operator_secret_required`. Generate `OPERATOR_ACCOUNT_SECRET` outside the repo. The user Durable Object also returns `429 rate_limited` after 8 audited admin attempts on that account within 60 seconds. A Workers Rate Limiting binding is not configured, because that binding needs a Cloudflare config change.
 
 Ordered steps:
 
@@ -157,16 +157,17 @@ node scripts/operator-account.mjs reset-password
 ```
 
 4. Read `sessionsRevoked` in that command's output. The reset is the revocation: every session for that account has `revoked_at` set. Run the same command again if a new session appears before you finish. Do not log in with the previous password.
-5. Disable smoke accounts whose addresses you can recover. Previous deploys created `deploy-smoke-<unix-ms>@example.com` and `deploy-api-prefix-<unix-ms>@example.com`. The timestamps were not stored. Search Workers logs for signup bodies if they were retained. For each recovered address:
+5. Disable smoke accounts from the tenant registry, not from signup logs. Signup bodies were never logged. Deploy created a workspace named exactly `Deploy Smoke` (`deploy-smoke-<unix-ms>@example.com`) or `API Prefix Smoke` (`deploy-api-prefix-<unix-ms>@example.com`). The registry row stores `name` and `createdAt`, not the email. `createdAt` is server time after signup, so the email's `Date.now()` is near `createdAt` and usually earlier. Take `SMOKE_RUN_START_MS` and `SMOKE_RUN_END_MS` from that GitHub Actions run (start through completion, in unix milliseconds). The script keeps registry rows with those names inside the run window, then tries addresses from 2 seconds after `createdAt` back to 15 seconds before it, and stops at the first account that exists. The total span is capped at 60 seconds. A miss creates an empty user Durable Object, so narrow the run window before probing. This command does not lock the collector.
 
 ```text
 API_BASE=https://reputa-api-production.sycu-lee.workers.dev \
 OPERATOR_ACCOUNT_SECRET="$OPERATOR_ACCOUNT_SECRET" \
-TARGET_EMAILS="first@example.com,second@example.com" \
-node scripts/operator-account.mjs lock
+SMOKE_RUN_START_MS="$SMOKE_RUN_START_MS" \
+SMOKE_RUN_END_MS="$SMOKE_RUN_END_MS" \
+node scripts/operator-account.mjs recover-smoke
 ```
 
-`GET /v1/admin/accounts` lists only accounts created, reset, or locked after the directory was added. It does not enumerate older smoke accounts. An address that cannot be recovered cannot be locked, because each user Durable Object is sharded by email hash.
+`GET /v1/admin/accounts` lists only accounts created, reset, or locked after the directory was added. It does not enumerate older smoke accounts. An address that cannot be reconstructed cannot be locked, because each user Durable Object is sharded by the SHA-256 of the email. Do not widen the probe into a multi-minute sweep.
 
 6. Set the GitHub secret `COLLECTOR_PASSWORD` to the same new password used in step 3. Then run `npm run bootstrap:collection` with `COLLECTOR_EMAIL` and `COLLECTOR_PASSWORD` set. Bootstrap logs in with that password, so the stored hash from step 3 must already match.
 
