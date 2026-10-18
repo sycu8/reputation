@@ -108,6 +108,27 @@ test("transient errors keep retrying after the cap so the queue can dead-letter 
   }
   assert.equal(browserFailureAction("upstream_http_503", { random: () => 0 }).action, "retry");
   assert.equal(browserFailureAction("browser_http_500:0:too many sessions", { random: () => 0 }).action, "requeue");
+  for (const message of ["Rate limit exceeded", "RATE LIMITED", "rate-limited", "Too many requests", "browser_http_503:0:Rate limit exceeded"]) {
+    const decision = browserFailureAction(message, { random: () => 0 });
+    assert.equal(decision.action, "requeue", message);
+    assert.equal(decision.waitMs, 0, message);
+    assert.equal(countsTowardUrlCap(message, "browser"), false, message);
+  }
+  for (const message of ["generate limited", "Corporate Limited", "upstream_http_503: rate limited"]) {
+    assert.equal(browserFailureAction(message, { random: () => 0 }).action, "retry", message);
+    assert.equal(countsTowardUrlCap(message, "fetch"), true, message);
+    assert.equal(countsTowardUrlCap(message), true, message);
+  }
+  assert.equal(browserFailureAction("browser_http_422:0:rate limited").action, "ack");
+  assert.equal(browserFailureAction("browser_http_404:0:Too many requests").action, "ack");
+  assert.deepEqual(
+    crawlFailureLog("browser", "browser_http_422:0:rate limited", { action: "ack" }),
+    { level: "warn", event: "crawl_browser_skipped" }
+  );
+  assert.deepEqual(
+    crawlFailureLog("fetch", "upstream_http_503: rate limited", { action: "retry" }),
+    { level: "error", event: "crawl_fetch_failed" }
+  );
   assert.equal(browserFailureAction("browser_extraction_too_small").action, "ack");
   for (const status of [401, 402, 404, 422]) {
     assert.equal(browserFailureAction(`browser_http_${status}`).action, "ack");

@@ -101,12 +101,18 @@ export function crawlSkipTtlSeconds(message: string): number | null {
 }
 
 /**
- * Browser Run signals that the account is out of sessions or over its request rate.
- * quickAction returns HTTP 429. The binding can also throw these phrases with no status prefix.
+ * Browser Run account limits. Word boundaries are required: "generate limited" and
+ * "Corporate Limited" contain "rate limited" but are not a rate limit.
+ * "Too many requests" is the published Quick Actions 429 text. A response with status 429
+ * is already re-sent. The same sentence thrown with no status line is the same limit,
+ * so it is re-sent too. message.retry() would dead-letter it after three attempts.
+ * Permanent 4xx and fetch/upstream errors are not session congestion.
  */
-const BROWSER_SESSION_CONGESTION = /too many sessions|too many browsers|browser instance limit|unable to create new browser|rate limit exceeded|rate[\s-]+limited/i;
+const BROWSER_SESSION_CONGESTION = /\b(?:too many sessions|too many browsers|browser instance limit|unable to create new browser|too many requests|rate limit exceeded|rate[\s-]+limited)\b/i;
 
 export function isBrowserSessionCongestion(message: string): boolean {
+  if (isTerminalCrawlFailure(message)) return false;
+  if (message.startsWith("upstream_")) return false;
   if (/^browser_http_429(?:$|:)/.test(message)) return true;
   return BROWSER_SESSION_CONGESTION.test(message);
 }
@@ -151,10 +157,14 @@ export function browserRunFailureMessage(status: number, retryAfterHeader: strin
   return detail ? `${prefix}:${detail}` : prefix;
 }
 
-/** Domain, pool, and Browser Run session limits are our own congestion. They must not burn the per-URL failure cap. */
-export function countsTowardUrlCap(message: string): boolean {
+/**
+ * Domain, pool, and Browser Run session limits are our own congestion. They must not burn the per-URL failure cap.
+ * A fetch error keeps the cap even when its text contains a rate-limit phrase.
+ */
+export function countsTowardUrlCap(message: string, worker?: "fetch" | "browser"): boolean {
   if (isTerminalCrawlFailure(message)) return false;
   if (message.startsWith("domain_busy:") || message.startsWith("browser_pool_busy:")) return false;
+  if (worker === "fetch") return true;
   if (isBrowserSessionCongestion(message)) return false;
   return true;
 }
@@ -240,15 +250,16 @@ export function browserFailureAction(message: string, input: CrawlFailureContext
 export function crawlFailureLog(worker: "fetch" | "browser", message: string, decision: CrawlFailureDecision): { level: "info" | "warn" | "error"; event: string } {
   if (message.startsWith("domain_busy:")) return { level: "info", event: "crawl_domain_busy" };
   if (message.startsWith("browser_pool_busy:")) return { level: "info", event: "crawl_browser_pool_busy" };
-  if (isBrowserSessionCongestion(message)) return { level: "info", event: "crawl_browser_session_busy" };
   if (message === "hard_paywall_host") return { level: "info", event: "crawl_paywall_skipped" };
   if (message === "url_retry_cap") return { level: "info", event: "crawl_retry_capped" };
   const failed = worker === "fetch" ? "crawl_fetch_failed" : "crawl_browser_failed";
   const skipped = worker === "fetch" ? "crawl_fetch_skipped" : "crawl_browser_skipped";
-  if (decision.action === "ack") return { level: "warn", event: skipped };
+  // Permanent acks win over the session phrase. A 4xx body that quotes "rate limited" is not session_busy.
+  if (decision.action === "ack" || isTerminalCrawlFailure(message)) return { level: "warn", event: skipped };
   if (decision.action === "retry" && decision.delaySeconds != null && message.startsWith("upstream_backoff_429:")) {
     return { level: "warn", event: skipped };
   }
+  if (worker === "browser" && isBrowserSessionCongestion(message)) return { level: "info", event: "crawl_browser_session_busy" };
   return { level: "error", event: failed };
 }
 
@@ -299,9 +310,10 @@ export async function noteQueuedUrlFailure(
   cache: CrawlAttemptCache,
   body: unknown,
   errorMessage: string,
-  hashUrl: (url: string) => Promise<string | null>
+  hashUrl: (url: string) => Promise<string | null>,
+  worker?: "fetch" | "browser"
 ): Promise<number> {
-  if (!countsTowardUrlCap(errorMessage)) return 0;
+  if (!countsTowardUrlCap(errorMessage, worker)) return 0;
   const parsed = readCrawlQueueBody(body);
   if (!parsed) return 0;
   const urlHash = await hashUrl(parsed.url);
@@ -585,7 +597,7 @@ async function settleCrawlFailure<Body extends object, MessageType extends Crawl
   }
 
   let urlFailures = 0;
-  if (countsTowardUrlCap(errorMessage)) {
+  if (countsTowardUrlCap(errorMessage, deps.worker)) {
     try {
       urlFailures = await deps.noteUrlFailure(message.body, errorMessage);
     } catch {

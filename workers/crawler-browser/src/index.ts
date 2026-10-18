@@ -324,7 +324,7 @@ function queueDeps(env: Env) {
     worker: "browser" as const,
     process: (message: Message<JobEnvelope<CrawlPayload>>) => processMessage(message, env),
     failureAction: (errorMessage: string, attempts: number, urlFailures: number) => browserFailureAction(errorMessage, { attempts, urlFailures, random: Math.random }),
-    noteUrlFailure: (body: JobEnvelope<CrawlPayload>, errorMessage: string) => noteQueuedUrlFailure(env.CRAWL_CACHE, body, errorMessage, urlHashForPayload),
+    noteUrlFailure: (body: JobEnvelope<CrawlPayload>, errorMessage: string) => noteQueuedUrlFailure(env.CRAWL_CACHE, body, errorMessage, urlHashForPayload, "browser"),
     rememberSkip: (body: JobEnvelope<CrawlPayload>, errorMessage: string, ttlSeconds: number) => rememberQueuedSkip(env.CRAWL_CACHE, body, errorMessage, ttlSeconds, urlHashForPayload),
     requeue: async (body: JobEnvelope<CrawlPayload>, delaySeconds: number, hops: number) => {
       await env.CRAWL_BROWSER.send({ ...body, congestionHops: hops }, { delaySeconds });

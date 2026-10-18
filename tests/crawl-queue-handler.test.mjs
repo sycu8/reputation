@@ -178,6 +178,48 @@ test("browser session limits re-send with hop backoff instead of retry()", async
   assert.equal(events.some((item) => item.event === "crawl_browser_failed"), true);
 });
 
+test("Browser Run rate-limit text is re-sent and lookalike phrases are not", async () => {
+  const tooMany = fake(job("https://render.example/rate"));
+  const limited = fake(job("https://render.example/rate"));
+  const company = fake(job("https://render.example/rate"));
+  const sent = [];
+  const browserAction = (errorMessage, attempts, urlFailures) => browserFailureAction(errorMessage, { attempts, urlFailures, random: () => 0 });
+  await handleCrawlQueueBatch([tooMany], {
+    worker: "browser",
+    async process() { throw new Error("Too many requests"); },
+    failureAction: browserAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(_body, delaySeconds, hops) { sent.push({ delaySeconds, hops, kind: "too-many" }); },
+    log() {}
+  });
+  await handleCrawlQueueBatch([limited], {
+    worker: "browser",
+    async process() { throw new Error("Rate limit exceeded"); },
+    failureAction: browserAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(_body, delaySeconds, hops) { sent.push({ delaySeconds, hops, kind: "rate" }); },
+    log() {}
+  });
+  await handleCrawlQueueBatch([company], {
+    worker: "browser",
+    async process() { throw new Error("Corporate Limited"); },
+    failureAction: browserAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue() { sent.push({ kind: "company" }); },
+    log() {}
+  });
+  assert.deepEqual(sent, [
+    { delaySeconds: 30, hops: 1, kind: "too-many" },
+    { delaySeconds: 30, hops: 1, kind: "rate" }
+  ]);
+  assert.deepEqual(tooMany.ops, [{ op: "ack" }]);
+  assert.deepEqual(limited.ops, [{ op: "ack" }]);
+  assert.equal(company.ops[0].op, "retry");
+});
+
 test("congestion re-send stops at the hop cap and acks", async () => {
   const under = fake(job("https://busy.example/a", CONGESTION_HOP_CAP - 1));
   const capped = fake(job("https://busy.example/a", CONGESTION_HOP_CAP));
