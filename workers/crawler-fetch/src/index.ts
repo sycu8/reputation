@@ -316,7 +316,10 @@ export default {
       requeue: async (body, delaySeconds, hops) => {
         await env.CRAWL_STATIC.send({ ...body, congestionHops: hops }, { delaySeconds });
       },
-      log: logCrawlQueue
+      log: logCrawlQueue,
+      count(event) {
+        env.ANALYTICS?.writeDataPoint({ indexes: [event], blobs: [event, "fetch"], doubles: [1] });
+      }
     });
   }
 };

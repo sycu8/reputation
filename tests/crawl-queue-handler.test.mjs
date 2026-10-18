@@ -179,6 +179,7 @@ test("congestion re-send stops at the hop cap and acks", async () => {
   const capped = fake(job("https://busy.example/a", CONGESTION_HOP_CAP));
   const sent = [];
   const events = [];
+  const counts = [];
   await handleCrawlQueueBatch([under, capped], {
     worker: "browser",
     process,
@@ -188,13 +189,48 @@ test("congestion re-send stops at the hop cap and acks", async () => {
     async requeue(body, delaySeconds, hops) {
       sent.push({ hops, delaySeconds, previous: body.congestionHops });
     },
-    log(_level, event, fields) { events.push({ event, hops: fields.hops, error: fields.error }); }
+    log(level, event, fields) { events.push({ level, event, hops: fields.hops, error: fields.error }); },
+    count(event) { counts.push(event); }
   });
   assert.deepEqual(sent, [{ hops: CONGESTION_HOP_CAP, delaySeconds: 900, previous: CONGESTION_HOP_CAP - 1 }]);
   assert.deepEqual(under.ops, [{ op: "ack" }]);
   assert.deepEqual(capped.ops, [{ op: "ack" }]);
-  assert.equal(events.filter((item) => item.event === "crawl_congestion_cap").length, 1);
+  assert.deepEqual(events.filter((item) => item.event === "crawl_congestion_cap"), [
+    { level: "warn", event: "crawl_congestion_cap", hops: CONGESTION_HOP_CAP, error: "domain_busy:250" }
+  ]);
+  assert.deepEqual(counts, ["crawl_congestion_cap"]);
   assert.equal(events.filter((item) => item.event === "crawl_domain_busy").length, 1);
+});
+
+test("browser rate-limit text without a 429 prefix is re-sent", async () => {
+  const message = fake(job("https://render.example/rate"));
+  const sent = [];
+  await handleCrawlQueueBatch([message], {
+    worker: "browser",
+    async process() { throw new Error("Rate limit exceeded"); },
+    failureAction: (errorMessage, attempts, urlFailures) => browserFailureAction(errorMessage, { attempts, urlFailures, random: () => 0 }),
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(_body, delaySeconds, hops) { sent.push({ delaySeconds, hops }); },
+    log() {}
+  });
+  assert.deepEqual(message.ops, [{ op: "ack" }]);
+  assert.deepEqual(sent, [{ delaySeconds: 30, hops: 1 }]);
+});
+
+test("a thrown count does not stop the cap ack", async () => {
+  const capped = fake(job("https://busy.example/a", CONGESTION_HOP_CAP));
+  await handleCrawlQueueBatch([capped], {
+    worker: "fetch",
+    process,
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue() { throw new Error("should not requeue"); },
+    log() {},
+    count() { throw new Error("analytics_down"); }
+  });
+  assert.deepEqual(capped.ops, [{ op: "ack" }]);
 });
 
 test("real transients keep retry() through attempt 4 so max_retries 3 can dead-letter them", async () => {

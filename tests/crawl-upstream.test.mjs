@@ -100,6 +100,13 @@ test("transient errors keep retrying after the cap so the queue can dead-letter 
   const sessions = browserFailureAction("Unable to create new browser: too many sessions", { random: () => 0 });
   assert.equal(sessions.action, "requeue");
   assert.equal(sessions.waitMs, 0);
+  for (const message of ["Rate limit exceeded", "RATE LIMITED", "rate-limited", "browser_http_503:0:Rate limit exceeded"]) {
+    const decision = browserFailureAction(message, { random: () => 0 });
+    assert.equal(decision.action, "requeue", message);
+    assert.equal(decision.waitMs, 0, message);
+    assert.equal(countsTowardUrlCap(message), false, message);
+  }
+  assert.equal(browserFailureAction("upstream_http_503", { random: () => 0 }).action, "retry");
   assert.equal(browserFailureAction("browser_http_500:0:too many sessions", { random: () => 0 }).action, "requeue");
   assert.equal(browserFailureAction("browser_extraction_too_small").action, "ack");
   for (const status of [401, 402, 404, 422]) {
