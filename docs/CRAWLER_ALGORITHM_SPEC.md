@@ -287,7 +287,10 @@ fbclid
 gclid
 mc_cid
 mc_eid
+syn-*
 ```
+
+Hard-paywall hosts (`ft.com`, `nytimes.com`, and their subdomains) are dropped at discovery and again before fetch or browser. They are not retried.
 
 Source adapters may define additional safe canonicalization rules.
 
@@ -618,7 +621,11 @@ malformed URL
 body too large
 ```
 
-403 and 419 are blocks, not permanent failures: route them to the browser crawler instead of retrying the static fetch. 429 records per-domain backoff (honor `Retry-After`, grow while the domain stays hot) and retries after that delay.
+403 and 419 are blocks, not permanent failures: route them to the browser crawler once instead of retrying the static fetch. The browser crawler acks permanent `401`, `402`, `403`, `404`, `410`, and `422` (`browser_http_*`) instead of retrying them. 429 records per-domain backoff (honor `Retry-After`, grow while the domain stays hot) and retries after that delay.
+
+`domain_busy` and `browser_pool_busy` are throttles. Requeue with the queue `delaySeconds`: honor a coordinator hint that is already at least 30 seconds (cap 15 minutes); when the hint is shorter (including the 250ms lease floor), wait 30–60 seconds plus up to 15 seconds of jitter. Log that throttle at info (`crawl_domain_throttled` / `crawl_pool_throttled`), not as `crawl_fetch_failed` or `crawl_browser_failed`.
+
+Cap failed deliveries per canonical URL (KV `crawl-guard:<url-hash>`, not Durable Object storage). A thin browser extraction (`browser_extraction_too_small`) is terminal for the guard window.
 
 Use exponential backoff + jitter. Honor `Retry-After`.
 

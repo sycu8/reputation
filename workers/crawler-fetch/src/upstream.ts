@@ -1,3 +1,5 @@
+import { classifyCrawlQueueFailure } from "../../../packages/crawler-core/src/retry-policy.ts";
+
 export type UpstreamAction = "permanent" | "browser" | "backoff" | "retry";
 
 const BACKOFF_CAP_MS = 15 * 60_000;
@@ -45,22 +47,17 @@ export function nextDomainBackoffMs(input: {
   return domainBackoffDelayMs(recent, input.retryAfterMs);
 }
 
-export function fetchFailureAction(message: string): { action: "ack" } | { action: "retry"; delaySeconds?: number } {
-  if (
-    message === "ssrf_blocked_host"
-    || message === "unsupported_protocol"
-    || message === "unsupported_content_type"
-    || message === "body_too_large"
-    || message === "too_many_redirects"
-    || message === "redirect_without_location"
-    || message.startsWith("upstream_http_permanent:")
-  ) {
-    return { action: "ack" };
-  }
-  const backoff = message.match(/^(?:upstream_backoff_429|domain_busy):(\d+(?:\.\d+)?)$/);
-  if (backoff?.[1]) {
-    const seconds = Math.max(1, Math.min(900, Math.ceil(Number(backoff[1]) / 1000)));
-    return { action: "retry", delaySeconds: seconds };
-  }
+export function fetchFailureAction(
+  message: string,
+  options?: { attempts?: number; random?: () => number }
+): { action: "ack" } | { action: "retry"; delaySeconds?: number } {
+  const decision = classifyCrawlQueueFailure({
+    message,
+    attempts: options?.attempts ?? 0,
+    failureEvent: "crawl_fetch_failed",
+    ...(options?.random ? { random: options.random } : {})
+  });
+  if (decision.action === "ack") return { action: "ack" };
+  if (decision.delaySeconds != null) return { action: "retry", delaySeconds: decision.delaySeconds };
   return { action: "retry" };
 }

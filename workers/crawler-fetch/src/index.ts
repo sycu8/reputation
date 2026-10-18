@@ -1,7 +1,21 @@
-import { assertPublicHttpUrl, createJob, normalizeUrl, sha256Hex, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
+import {
+  assertPublicHttpUrl,
+  classifyCrawlQueueFailure,
+  clearUrlCrawlGuard,
+  createJob,
+  isHardPaywallHost,
+  loadUrlCrawlGuard,
+  MAX_URL_CRAWL_ATTEMPTS,
+  normalizeUrl,
+  readUrlCrawlGuard,
+  recordUrlCrawlOutcome,
+  sha256Hex,
+  type CrawlQueueDecision,
+  type JobEnvelope
+} from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
-import { classifyUpstreamStatus, fetchFailureAction, nextDomainBackoffMs, parseRetryAfterMs } from "./upstream.ts";
+import { classifyUpstreamStatus, nextDomainBackoffMs, parseRetryAfterMs } from "./upstream.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -148,11 +162,35 @@ async function recordDomainBackoff(env: Env, domain: string, retryAfterMs: numbe
   });
 }
 
+async function canonicalHash(rawUrl: string): Promise<{ normalized: string; urlHash: string } | null> {
+  try {
+    const normalized = normalizeUrl(assertPublicHttpUrl(rawUrl).toString());
+    return { normalized, urlHash: await sha256Hex(normalized) };
+  } catch {
+    return null;
+  }
+}
+
+async function noteOutcome(env: Env, rawUrl: string, decision: CrawlQueueDecision): Promise<void> {
+  if (!decision.countAttempt && decision.terminal == null) return;
+  const canonical = await canonicalHash(rawUrl);
+  if (!canonical) return;
+  try {
+    await recordUrlCrawlOutcome(env.CRAWL_CACHE, canonical.urlHash, decision);
+  } catch {
+    // The queue ack/retry still applies when the attempt counter cannot be saved.
+  }
+}
+
 async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
   const job = message.body;
   const payload = job.payload;
-  const normalized = normalizeUrl(assertPublicHttpUrl(payload.url).toString());
+  const parsed = assertPublicHttpUrl(payload.url);
+  if (isHardPaywallHost(parsed.hostname)) throw new Error("hard_paywall_host");
+  const normalized = normalizeUrl(parsed.toString());
   const urlHash = await sha256Hex(normalized);
+  const guard = await loadUrlCrawlGuard(env.CRAWL_CACHE, urlHash);
+  if (guard.terminal) throw new Error(`crawl_terminal:${guard.terminal}`);
   const cacheKey = `crawl:${urlHash}`;
   const cached = await env.CRAWL_CACHE.get(cacheKey);
   if (cached) {
@@ -173,12 +211,17 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
     env.ANALYTICS?.writeDataPoint({ indexes: [urlHash], blobs: ["crawl_cache_hit", payload.source], doubles: [1] });
     return;
   }
+  if (guard.attempts >= MAX_URL_CRAWL_ATTEMPTS) throw new Error("crawl_retry_capped");
 
   const domain = new URL(normalized).hostname.toLowerCase();
   const blocked = await domainBlockMs(env, domain);
   if (blocked.waitMs > 0) throw new Error(`domain_busy:${Math.ceil(blocked.waitMs)}`);
 
   const { response, finalUrl } = await safeFetch(normalized);
+  if (isHardPaywallHost(new URL(finalUrl).hostname)) {
+    try { await response.body?.cancel(); } catch { /* already consumed */ }
+    throw new Error("hard_paywall_host");
+  }
   if (!response.ok) {
     const action = classifyUpstreamStatus(response.status);
     try { await response.body?.cancel(); } catch { /* already consumed */ }
@@ -243,6 +286,7 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
   };
   await env.RAW_CONTENT.put(rawR2Key, JSON.stringify(record));
   await env.CRAWL_CACHE.put(cacheKey, JSON.stringify({ contentId, rawR2Key, fetchedAt, canonicalUrl }), { expirationTtl: CACHE_TTL_SECONDS });
+  await clearUrlCrawlGuard(env.CRAWL_CACHE, urlHash);
   await env.PROCESS_CONTENT.send(createJob<ProcessPayload>({
     source: payload.source,
     canonicalUrl,
@@ -274,13 +318,33 @@ export default {
         message.ack();
       } catch (error) {
         const messageText = error instanceof Error ? error.message : "unknown";
-        const decision = fetchFailureAction(messageText);
-        const retryableFailure = decision.action === "retry" && decision.delaySeconds == null;
-        structuredLog(retryableFailure ? "error" : "warn", retryableFailure ? "crawl_fetch_failed" : "crawl_fetch_skipped", {
+        const rawUrl = message.body.payload.url;
+        let attempts = 0;
+        const canonical = await canonicalHash(rawUrl);
+        if (canonical) {
+          try {
+            attempts = (await readUrlCrawlGuard(env.CRAWL_CACHE, canonical.urlHash)).attempts;
+          } catch {
+            attempts = 0;
+          }
+        }
+        const decision = classifyCrawlQueueFailure({
+          message: messageText,
+          attempts,
+          failureEvent: "crawl_fetch_failed"
+        });
+        structuredLog(decision.level, decision.event, {
           requestId: message.body.traceId,
           tenantId: message.body.tenantId,
           monitorId: message.body.monitorId
-        }, { jobId: message.body.jobId, url: message.body.payload.url, error: messageText });
+        }, {
+          jobId: message.body.jobId,
+          url: rawUrl,
+          error: messageText,
+          attempts,
+          delaySeconds: decision.delaySeconds ?? null
+        });
+        await noteOutcome(env, rawUrl, decision);
         if (decision.action === "ack") message.ack();
         else if (decision.delaySeconds != null) message.retry({ delaySeconds: decision.delaySeconds });
         else message.retry();

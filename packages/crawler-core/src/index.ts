@@ -35,13 +35,44 @@ export async function idempotencyKey(parts: Array<string | number | undefined>):
   return sha256Hex(parts.map((part) => String(part ?? "")).join("\u001f"));
 }
 
+/** Query keys that identify the same page across trackers and syndication copies. */
+export function isTrackingParam(key: string): boolean {
+  const lower = key.toLowerCase();
+  if (lower.startsWith("utm_") || lower.startsWith("syn-")) return true;
+  return lower === "fbclid" || lower === "gclid" || lower === "mc_cid" || lower === "mc_eid";
+}
+
+/**
+ * Hosts that serve a hard paywall to anonymous crawlers.
+ * Checked before fetch/browser so they never enter the retry loop.
+ */
+export const HARD_PAYWALL_HOSTS = ["ft.com", "nytimes.com"] as const;
+
+export function isHardPaywallHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.+$/, "");
+  return HARD_PAYWALL_HOSTS.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+/**
+ * Canonical crawl URL for dedupe. Returns null for hard-paywall hosts.
+ * Unparseable or non-public URLs are returned unchanged so the crawler can apply its own rejection.
+ */
+export function prepareDiscoveredUrl(input: string): string | null {
+  let url: URL;
+  try {
+    url = assertPublicHttpUrl(input);
+  } catch {
+    return input;
+  }
+  if (isHardPaywallHost(url.hostname)) return null;
+  return normalizeUrl(url.toString());
+}
+
 export function normalizeUrl(input: string): string {
   const url = new URL(input);
   url.hash = "";
-  const removable = new Set(["fbclid", "gclid", "mc_cid", "mc_eid"]);
   for (const key of [...url.searchParams.keys()]) {
-    const lower = key.toLowerCase();
-    if (lower.startsWith("utm_") || removable.has(lower)) url.searchParams.delete(key);
+    if (isTrackingParam(key)) url.searchParams.delete(key);
   }
   url.hostname = url.hostname.toLowerCase();
   if ((url.protocol === "https:" && url.port === "443") || (url.protocol === "http:" && url.port === "80")) url.port = "";
@@ -219,6 +250,26 @@ export function readableContentText(raw: string): string {
     .trim();
   return text;
 }
+
+export {
+  DOMAIN_BUSY_COOLDOWN_MIN_SECONDS,
+  DOMAIN_BUSY_JITTER_SECONDS,
+  MAX_URL_CRAWL_ATTEMPTS,
+  URL_ATTEMPT_TTL_SECONDS,
+  URL_TERMINAL_TTL_SECONDS,
+  assertUrlCrawlAllowed,
+  classifyCrawlQueueFailure,
+  loadUrlCrawlGuard,
+  clearUrlCrawlGuard,
+  domainBusyDelaySeconds,
+  parseUrlCrawlGuard,
+  readUrlCrawlGuard,
+  recordUrlCrawlOutcome,
+  urlGuardKey,
+  type CrawlQueueDecision,
+  type UrlCrawlGuard,
+  type UrlGuardStore
+} from "./retry-policy.ts";
 
 export function excerptForStorage(raw: string, maxLen = 600): string {
   const text = readableContentText(raw).replace(/\s+/g, " ").trim();

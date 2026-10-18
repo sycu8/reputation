@@ -1,4 +1,21 @@
-import { assertPublicHttpUrl, BROWSER_RUN_ACCOUNT_CONCURRENCY, createJob, htmlToPlainText, normalizeUrl, sha256Hex, unwrapBrowserRunPayload, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
+import {
+  assertPublicHttpUrl,
+  BROWSER_RUN_ACCOUNT_CONCURRENCY,
+  classifyCrawlQueueFailure,
+  clearUrlCrawlGuard,
+  createJob,
+  htmlToPlainText,
+  isHardPaywallHost,
+  loadUrlCrawlGuard,
+  MAX_URL_CRAWL_ATTEMPTS,
+  normalizeUrl,
+  readUrlCrawlGuard,
+  recordUrlCrawlOutcome,
+  sha256Hex,
+  unwrapBrowserRunPayload,
+  type CrawlQueueDecision,
+  type JobEnvelope
+} from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 
@@ -59,10 +76,54 @@ async function releaseQuietly(
   }
 }
 
+async function canonicalHash(rawUrl: string): Promise<{ normalized: string; urlHash: string } | null> {
+  try {
+    const normalized = normalizeUrl(assertPublicHttpUrl(rawUrl).toString());
+    return { normalized, urlHash: await sha256Hex(normalized) };
+  } catch {
+    return null;
+  }
+}
+
+async function noteOutcome(env: Env, rawUrl: string, decision: CrawlQueueDecision): Promise<void> {
+  if (!decision.countAttempt && decision.terminal == null) return;
+  const canonical = await canonicalHash(rawUrl);
+  if (!canonical) return;
+  try {
+    await recordUrlCrawlOutcome(env.CRAWL_CACHE, canonical.urlHash, decision);
+  } catch {
+    // The queue ack/retry still applies when the attempt counter cannot be saved.
+  }
+}
+
 async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
   const job = message.body;
   const target = assertPublicHttpUrl(job.payload.url);
+  if (isHardPaywallHost(target.hostname)) throw new Error("hard_paywall_host");
   const canonicalUrl = normalizeUrl(target.toString());
+  const urlHash = await sha256Hex(canonicalUrl);
+  const guard = await loadUrlCrawlGuard(env.CRAWL_CACHE, urlHash);
+  if (guard.terminal) throw new Error(`crawl_terminal:${guard.terminal}`);
+  const cached = await env.CRAWL_CACHE.get(`crawl:${urlHash}`);
+  if (cached) {
+    const record = JSON.parse(cached) as { contentId: string; rawR2Key: string; fetchedAt: string; canonicalUrl: string };
+    await env.PROCESS_CONTENT.send(createJob<ProcessPayload>({
+      ...record,
+      source: job.payload.source,
+      discoveryTitle: job.payload.title,
+      discoverySnippet: job.payload.snippet,
+      publishedAt: job.payload.publishedAt,
+      acquisition: "browser"
+    }, {
+      traceId: job.traceId,
+      tenantId: job.tenantId,
+      monitorId: job.monitorId,
+      priority: job.priority
+    }));
+    env.ANALYTICS?.writeDataPoint({ indexes: [urlHash], blobs: ["browser_cache_hit", job.payload.source], doubles: [1] });
+    return;
+  }
+  if (guard.attempts >= MAX_URL_CRAWL_ATTEMPTS) throw new Error("crawl_retry_capped");
   const domain = target.hostname.toLowerCase();
   const domainStub = env.DOMAIN_DO.get(env.DOMAIN_DO.idFromName(domain));
   const poolStub = env.BROWSER_POOL_DO.get(env.BROWSER_POOL_DO.idFromName("global"));
@@ -104,7 +165,6 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
     const pageTitle = unwrapped.title ?? extracted.title ?? job.payload.title ?? null;
     if (extracted.text.length < 100) throw new Error("browser_extraction_too_small");
 
-    const urlHash = await sha256Hex(canonicalUrl);
     const bodyHash = await sha256Hex(html);
     const contentId = await sha256Hex(`${job.payload.source}\u001f${canonicalUrl}\u001f${bodyHash}`);
     const fetchedAt = new Date().toISOString();
@@ -123,6 +183,7 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
       browserMs
     }));
     await env.CRAWL_CACHE.put(`crawl:${urlHash}`, JSON.stringify({ contentId, rawR2Key, fetchedAt, canonicalUrl }), { expirationTtl: 600 });
+    await clearUrlCrawlGuard(env.CRAWL_CACHE, urlHash);
     await env.PROCESS_CONTENT.send(createJob<ProcessPayload>({
       source: job.payload.source,
       canonicalUrl,
@@ -164,12 +225,6 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
   }
 }
 
-function retryDelayFromError(error: unknown): number | undefined {
-  const message = error instanceof Error ? error.message : "";
-  const match = message.match(/(?:browser_pool_busy|domain_busy):(\d+)/);
-  return match ? Math.max(1, Math.ceil(Number(match[1]) / 1000)) : undefined;
-}
-
 export default {
   async fetch(): Promise<Response> {
     return workerHealthResponse("crawler-browser");
@@ -181,17 +236,36 @@ export default {
         await processMessage(message, env);
         message.ack();
       } catch (error) {
-        structuredLog("error", "crawl_browser_failed", {
+        const messageText = error instanceof Error ? error.message : "unknown";
+        const rawUrl = message.body.payload.url;
+        let attempts = 0;
+        const canonical = await canonicalHash(rawUrl);
+        if (canonical) {
+          try {
+            attempts = (await readUrlCrawlGuard(env.CRAWL_CACHE, canonical.urlHash)).attempts;
+          } catch {
+            attempts = 0;
+          }
+        }
+        const decision = classifyCrawlQueueFailure({
+          message: messageText,
+          attempts,
+          failureEvent: "crawl_browser_failed"
+        });
+        structuredLog(decision.level, decision.event, {
           requestId: message.body.traceId,
           tenantId: message.body.tenantId,
           monitorId: message.body.monitorId
         }, {
           jobId: message.body.jobId,
-          url: message.body.payload.url,
-          error: error instanceof Error ? error.message : "unknown"
+          url: rawUrl,
+          error: messageText,
+          attempts,
+          delaySeconds: decision.delaySeconds ?? null
         });
-        const delaySeconds = retryDelayFromError(error);
-        if (delaySeconds) message.retry({ delaySeconds });
+        await noteOutcome(env, rawUrl, decision);
+        if (decision.action === "ack") message.ack();
+        else if (decision.delaySeconds != null) message.retry({ delaySeconds: decision.delaySeconds });
         else message.retry();
       }
     }

@@ -92,6 +92,14 @@ Verified locally on 2026-10-18 with `npm run typecheck`, `npm run lint`, and `np
 - Discovery: RSS/Atom title and snippet are capped, crawl messages are fitted under 120 KB, sends are batched, one candidate failure does not fail the job, and a discovery job stops after 90s instead of running to the 15-minute queue limit. Static RSS/sitemap catalogs are fetched once per job.
 - Static crawler: permanent 4xx responses are acked, 403/419 are sent to the browser crawler, and 429 records per-domain backoff on `DomainCoordinatorDO`.
 
+### Crawler retry storm (2026-10-18, code, not deployed)
+
+Verified with `npm run validate` (typecheck, lint, `npm test`: 98 passed) and `npm run wrangler:types:state`, `wrangler:types:api`, and `wrangler:types:browser`. `wrangler deploy` was not run. Durable Object storage schema was not changed.
+
+- `domain_busy` / `browser_pool_busy` hints shorter than 30s (including the 250ms lease floor) requeue with queue `delaySeconds` of 30–60s plus up to 15s jitter. Longer hints are honored up to 15 minutes. Those throttles log at info as `crawl_domain_throttled` / `crawl_pool_throttled`.
+- Each canonical URL stops after 6 failed deliveries in an hour (`crawl-guard:*` in crawl KV). Permanent `401`, `402`, `403`, `404`, `410`, and `422`, plus `browser_extraction_too_small`, are acked and remembered for 6 hours.
+- `syn-*`, `utm_*`, and `fbclid` are stripped before dedupe. `ft.com` and `nytimes.com` (and subdomains) are skipped in discovery and again before fetch or browser.
+
 ## Remaining gaps (honest)
 
 1. Brave / YouTube / X / Reddit OAuth still need operator-supplied secrets.
