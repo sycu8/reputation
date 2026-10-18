@@ -58,10 +58,10 @@
     <h1>PulseWatch API</h1>
     <p class="lede">Session-authenticated multi-tenant API for monitors, Boolean queries, mentions, alerts, and billing — built for Cloudflare Workers.</p>
     <div class="hero-actions">
-      <button type="button" class="primary" id="copyBaseBtn" data-copy="https://reputation.orangecloud.vn/api">Copy production base URL</button>
+      <button type="button" class="primary" id="copyBaseBtn" data-copy="https://reputa-api-production.sycu-lee.workers.dev">Copy production base URL</button>
       <a class="secondary" href="#quickstart">Quick start</a>
     </div>
-    <p class="hero-meta"><code id="baseUrlDisplay">https://reputation.orangecloud.vn/api</code> · cookie sessions · JSON</p>
+    <p class="hero-meta"><code id="baseUrlDisplay">https://reputa-api-production.sycu-lee.workers.dev</code> · cookie sessions · JSON</p>
   </section>
 
   <div class="docs-shell">
@@ -101,7 +101,7 @@
 
 curl -sS -b cookies.txt "$API/v1/workspaces"
 curl -sS -b cookies.txt "$API/v1/me"</code></pre>
-        <p>Production dashboard calls the same origin path prefix <code>/api</code>. Local QA defaults to <code>http://&lt;host&gt;:8787</code>.</p>
+        <p>The production dashboard defaults to the dedicated workers.dev API <code>https://reputa-api-production.sycu-lee.workers.dev</code>. <code>https://reputation.orangecloud.vn/api</code> is an alternate custom-host base for the same API (paths keep an <code>/api</code> prefix) and can be challenged by Cloudflare. Local QA defaults to <code>http://&lt;host&gt;:8787</code>.</p>
       </section>
 
       <section id="base-urls">
@@ -113,14 +113,14 @@ curl -sS -b cookies.txt "$API/v1/me"</code></pre>
             </thead>
             <tbody>
               <tr>
-                <td>Production (custom host)</td>
-                <td><code>https://reputation.orangecloud.vn/api</code></td>
-                <td>Workers route <code>/api/*</code> → API Worker</td>
-              </tr>
-              <tr>
                 <td>Production (workers.dev)</td>
                 <td><code>https://reputa-api-production.sycu-lee.workers.dev</code></td>
-                <td>No <code>/api</code> prefix; paths start at <code>/health</code>, <code>/v1/…</code></td>
+                <td>Default for the production dashboard. No <code>/api</code> prefix; paths start at <code>/health</code>, <code>/v1/…</code></td>
+              </tr>
+              <tr>
+                <td>Production (custom host)</td>
+                <td><code>https://reputation.orangecloud.vn/api</code></td>
+                <td>Alternate. Workers route <code>/api/*</code> → API Worker. Cloudflare may challenge this host.</td>
               </tr>
               <tr>
                 <td>Local QA</td>
