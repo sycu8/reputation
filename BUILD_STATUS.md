@@ -83,6 +83,15 @@ Verified locally with `wrangler dev` on `http://127.0.0.1:8788` (2026-10-17):
 
 DNS-AID SVCB/HTTPS records are created by `scripts/deploy-cloudspace.mjs` when the deploy token can edit zone DNS. This environment had no `CLOUDFLARE_API_TOKEN`, so live DNS was not changed and DNSSEC was not enabled.
 
+## Production incident fixes (code, not deployed)
+
+Verified locally on 2026-10-18 with `npm run typecheck`, `npm run lint`, and `npm test` (93 passed). Not deployed. `wrangler deploy` was not run.
+
+- Browser pool: `BrowserPoolDO` now uses expiring leases swept by a Durable Object alarm. The legacy counter that was stuck at 100 is no longer the cap. Default cap is 200 (Workers Paid Browser Run concurrent browsers, overridable with `BROWSER_POOL_MAX`). Reset procedure is in `docs/SRE_RUNBOOK.md`.
+- Alerts: `no_channels_configured` is alert state `needs_setup`, logged at warn, and acked. The dashboard shows "Needs notification setup".
+- Discovery: RSS/Atom title and snippet are capped, crawl messages are fitted under 120 KB, sends are batched, one candidate failure does not fail the job, and a discovery job stops after 90s instead of running to the 15-minute queue limit. Static RSS/sitemap catalogs are fetched once per job.
+- Static crawler: permanent 4xx responses are acked, 403/419 are sent to the browser crawler, and 429 records per-domain backoff on `DomainCoordinatorDO`.
+
 ## Remaining gaps (honest)
 
 1. Brave / YouTube / X / Reddit OAuth still need operator-supplied secrets.
