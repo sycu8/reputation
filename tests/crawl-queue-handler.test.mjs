@@ -6,7 +6,7 @@ import {
   congestionBackoffDelaySeconds,
   CRAWL_QUEUE_MAX_RETRIES,
   CONGESTION_HOP_CAP,
-  domainWakeDelaySeconds,
+  domainBusyWakeDelaySeconds,
   drainDomainWake,
   fetchFailureAction,
   handleCrawlQueueBatch
@@ -246,6 +246,7 @@ test("congestion re-send stops at the hop cap and acks", async () => {
   ]);
   assert.deepEqual(counts, ["crawl_congestion_cap"]);
   assert.equal(events.filter((item) => item.event === "crawl_domain_busy").length, 1);
+  assert.deepEqual(counts, ["crawl_congestion_cap"]);
 });
 
 test("browser rate-limit text without a 429 prefix is re-sent", async () => {
@@ -364,7 +365,9 @@ function parkDeps(coordinator, sent, events, process) {
           urlKey: input.urlKey,
           bodyJson: JSON.stringify(input.body),
           delaySeconds: input.delaySeconds,
-          hops: input.hops
+          hops: input.hops,
+          tenantId: input.tenantId ?? "",
+          monitorId: input.monitorId ?? ""
         })
       }));
       assert.equal(response.status, 200);
@@ -433,8 +436,8 @@ test("a domain wake that is still busy is re-sent once", async () => {
   };
   await handleCrawlQueueBatch([wake], deps);
   assert.equal(parked, 0);
-  assert.deepEqual(sent, [{ wake: "hot.example", url: "https://hot.example/p0", delaySeconds: domainWakeDelaySeconds(800, 3, () => 0), hops: 4 }]);
-  assert.equal(sent[0].delaySeconds, 240);
+  assert.deepEqual(sent, [{ wake: "hot.example", url: "https://hot.example/p0", delaySeconds: domainBusyWakeDelaySeconds(800, 3, () => 0), hops: 4 }]);
+  assert.equal(sent[0].delaySeconds, 30);
   assert.deepEqual(wake.ops, [{ op: "ack" }]);
 
   const more = fake(job("https://hot.example/later"));
@@ -458,34 +461,254 @@ test("a wake with parked jobs left uses a short delay and does not climb hops", 
     random: () => 0,
     log() {}
   });
-  assert.deepEqual(sent, [{ wake: "hot.example", delaySeconds: 1, hops: 4 }]);
+  assert.deepEqual(sent, [{ wake: "hot.example", delaySeconds: 1, hops: 0 }]);
   assert.deepEqual(message.ops, [{ op: "ack" }]);
 });
 
-test("drainDomainWake runs a free batch and reschedules only the wake when the domain is busy", async () => {
-  await assert.rejects(
-    () => drainDomainWake({
-      async take() { return { jobs: [], waiting: 4, retryAfterMs: 250 }; },
-      async run() { throw new Error("should not run"); },
-      async releaseWake() { throw new Error("should not release"); }
-    }),
-    /domain_busy:250/
+function drainHarness(take, run, releaseWake, hooks = {}) {
+  const completed = [];
+  const released = [];
+  return {
+    completed,
+    released,
+    drain: () => drainDomainWake({
+      take,
+      run,
+      async complete(urlKey) {
+        completed.push(urlKey);
+        if (hooks.complete) await hooks.complete(urlKey);
+      },
+      async releaseClaim(urlKey) { released.push(urlKey); },
+      releaseWake
+    })
+  };
+}
+
+test("drainDomainWake claims one job at a time and deletes it only after a successful run", async () => {
+  const busy = drainHarness(
+    async () => ({ jobs: [], waiting: 4, retryAfterMs: 250 }),
+    async () => { throw new Error("should not run"); },
+    async () => { throw new Error("should not release"); }
   );
+  await assert.rejects(() => busy.drain(), /domain_busy:250/);
+  assert.deepEqual(busy.completed, []);
 
   const ran = [];
-  await drainDomainWake({
-    async take() { return { jobs: ["a", "b"], waiting: 0, retryAfterMs: 0 }; },
-    async run(body) { ran.push(body); },
-    async releaseWake() { return { waiting: 0, retryAfterMs: 0 }; }
-  });
-  assert.deepEqual(ran, ["a", "b"]);
-
-  await assert.rejects(
-    () => drainDomainWake({
-      async take() { return { jobs: ["a"], waiting: 3, retryAfterMs: 0 }; },
-      async run() {},
-      async releaseWake() { return { waiting: 3, retryAfterMs: 0 }; }
-    }),
-    /domain_wake:1000/
+  let calls = 0;
+  const freed = drainHarness(
+    async () => {
+      calls += 1;
+      if (calls === 1) return { jobs: [{ body: "a", urlKey: "ka" }], waiting: 1, retryAfterMs: 0 };
+      if (calls === 2) return { jobs: [{ body: "b", urlKey: "kb" }], waiting: 0, retryAfterMs: 0 };
+      return { jobs: [], waiting: 0, retryAfterMs: 0 };
+    },
+    async (body) => { ran.push(body); },
+    async () => ({ waiting: 0, retryAfterMs: 0 })
   );
+  await freed.drain();
+  assert.deepEqual(ran, ["a", "b"]);
+  assert.deepEqual(freed.completed, ["ka", "kb"]);
+
+  let takes = 0;
+  const paced = drainHarness(
+    async () => {
+      takes += 1;
+      if (takes === 1) return { jobs: [{ body: "a", urlKey: "ka" }], waiting: 3, retryAfterMs: 0 };
+      return { jobs: [], waiting: 3, retryAfterMs: 0 };
+    },
+    async () => {},
+    async () => { throw new Error("release should not run after domain_wake"); }
+  );
+  await assert.rejects(() => paced.drain(), /domain_wake:1000/);
+  assert.deepEqual(paced.completed, ["ka"]);
+
+  const crashed = drainHarness(
+    async () => ({ jobs: [{ body: "a", urlKey: "ka" }], waiting: 1, retryAfterMs: 0 }),
+    async () => { throw new Error("upstream_http_503"); },
+    async () => { throw new Error("should not release"); }
+  );
+  await assert.rejects(() => crashed.drain(), /upstream_http_503/);
+  assert.deepEqual(crashed.completed, []);
+  assert.deepEqual(crashed.released, ["ka"]);
+
+  let drained = false;
+  const stale = drainHarness(
+    async () => ({ jobs: [], waiting: 4, retryAfterMs: 0, stale: true }),
+    async () => { drained = true; },
+    async () => { throw new Error("should not release"); }
+  );
+  await stale.drain();
+  assert.equal(drained, false);
+});
+
+test("a thrown congestion counter still acks the hop cap", async () => {
+  const capped = fake(job("https://busy.example/a", CONGESTION_HOP_CAP));
+  await handleCrawlQueueBatch([capped], {
+    worker: "browser",
+    process,
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue() { throw new Error("should not requeue"); },
+    count() { throw new Error("analytics_down"); },
+    log() {}
+  });
+  assert.deepEqual(capped.ops, [{ op: "ack" }]);
+});
+
+test("a fetch rate-limit error counts toward the URL cap and a browser one does not", async () => {
+  const noted = [];
+  const fetched = fake(job("https://fetch.example/rate"));
+  await handleCrawlQueueBatch([fetched], {
+    worker: "fetch",
+    async process() { throw new Error("Rate limit exceeded"); },
+    failureAction: (errorMessage, attempts, urlFailures) => fetchFailureAction(errorMessage, { attempts, urlFailures, random: () => 0 }),
+    async noteUrlFailure(_body, errorMessage) {
+      noted.push(errorMessage);
+      return 1;
+    },
+    async rememberSkip() {},
+    async requeue() {},
+    log() {}
+  });
+  assert.deepEqual(noted, ["Rate limit exceeded"]);
+  assert.equal(fetched.ops[0].op, "retry");
+
+  const browserNoted = [];
+  const rendered = fake(job("https://render.example/rate"));
+  await handleCrawlQueueBatch([rendered], {
+    worker: "browser",
+    async process() { throw new Error("Rate limit exceeded"); },
+    failureAction: (errorMessage, attempts, urlFailures) => browserFailureAction(errorMessage, { attempts, urlFailures, random: () => 0 }),
+    async noteUrlFailure(_body, errorMessage) {
+      browserNoted.push(errorMessage);
+      return 1;
+    },
+    async rememberSkip() {},
+    async requeue() {},
+    log() {}
+  });
+  assert.deepEqual(browserNoted, []);
+  assert.deepEqual(rendered.ops, [{ op: "ack" }]);
+});
+
+test("rate_limited, ratelimited, and rate limiting are re-sent as session congestion", async () => {
+  const sent = [];
+  const browserAction = (errorMessage, attempts, urlFailures) => browserFailureAction(errorMessage, { attempts, urlFailures, random: () => 0 });
+  for (const phrase of ["rate_limited", "ratelimited", "rate limiting"]) {
+    const message = fake(job("https://render.example/rate"));
+    await handleCrawlQueueBatch([message], {
+      worker: "browser",
+      async process() { throw new Error(phrase); },
+      failureAction: browserAction,
+      async noteUrlFailure() { throw new Error("url cap must ignore session congestion"); },
+      async rememberSkip() {},
+      async requeue(_body, delaySeconds, hops) { sent.push({ phrase, delaySeconds, hops }); },
+      log() {}
+    });
+    assert.deepEqual(message.ops, [{ op: "ack" }]);
+  }
+  assert.deepEqual(sent, [
+    { phrase: "rate_limited", delaySeconds: 30, hops: 1 },
+    { phrase: "ratelimited", delaySeconds: 30, hops: 1 },
+    { phrase: "rate limiting", delaySeconds: 30, hops: 1 }
+  ]);
+});
+
+test("a wake failure does not charge the carrier tenant URL cap", async () => {
+  const noted = [];
+  const wake = fake({
+    ...job("https://carrier.example/secret"),
+    congestionWake: "hot.example",
+    tenantId: "carrier-tenant",
+    monitorId: "carrier-monitor"
+  });
+  await handleCrawlQueueBatch([wake], {
+    worker: "browser",
+    async process() { throw new Error("domain_park_unavailable"); },
+    failureAction,
+    async noteUrlFailure() {
+      noted.push("counted");
+      return 1;
+    },
+    async rememberSkip() {},
+    async requeue() {},
+    log() {}
+  });
+  assert.deepEqual(noted, []);
+  assert.equal(wake.ops[0].op, "retry");
+});
+
+test("a second monitor on the same URL is parked instead of acked as a duplicate", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  const first = fake(job("https://hot.example/same"));
+  const secondBody = job("https://hot.example/same");
+  secondBody.monitorId = "monitor-b";
+  secondBody.jobId = "job-b";
+  const second = fake(secondBody);
+  const sent = [];
+  const events = [];
+  await handleCrawlQueueBatch([first, second], parkDeps(coordinator, sent, events, hotProcess));
+  assert.equal(sent.filter((item) => item.wake === "hot.example").length, 1);
+  assert.deepEqual(first.ops, [{ op: "ack" }]);
+  assert.deepEqual(second.ops, [{ op: "ack" }]);
+  assert.equal(events.filter((item) => item.event === "crawl_domain_park_duplicate").length, 0);
+  const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(state.waiting, 2);
+
+  const again = fake(job("https://hot.example/same"));
+  const dupEvents = [];
+  const dupSent = [];
+  await handleCrawlQueueBatch([again], parkDeps(coordinator, dupSent, dupEvents, hotProcess));
+  assert.deepEqual(dupSent, []);
+  assert.deepEqual(again.ops, [{ op: "ack" }]);
+  assert.equal(dupEvents.filter((item) => item.event === "crawl_domain_park_duplicate").length, 1);
+});
+
+test("a hop-capped wake sweeps each parked job and counts once", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  const sent = [];
+  const events = [];
+  await handleCrawlQueueBatch(
+    [fake(job("https://hot.example/a")), fake(job("https://hot.example/b"))],
+    parkDeps(coordinator, sent, events, hotProcess)
+  );
+  const wakeSend = sent.find((item) => item.wake === "hot.example");
+  assert.ok(wakeSend);
+  const stateBefore = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  const token = stateBefore.wake.find((item) => item.key === "browser").token;
+  const capped = fake({
+    schemaVersion: 1,
+    jobId: "wake:hot.example",
+    traceId: "wake:hot.example",
+    priority: "normal",
+    createdAt: "2026-10-18T00:00:00.000Z",
+    attempt: 0,
+    congestionHops: CONGESTION_HOP_CAP,
+    congestionWake: "hot.example",
+    congestionWakeToken: token,
+    payload: { source: "web", url: "https://hot.example/", discoveryKey: "wake" }
+  });
+  const replayed = [];
+  const counts = [];
+  const capEvents = [];
+  await handleCrawlQueueBatch([capped], {
+    ...parkDeps(coordinator, replayed, capEvents, async () => { throw new Error("domain_busy:60000"); }),
+    async sweepDomain(domain) {
+      const response = await coordinator.fetch(new Request("https://do.internal/internal/sweep", {
+        method: "POST",
+        body: JSON.stringify({ lane: "browser", domain })
+      }));
+      const swept = await response.json();
+      return (swept.jobs ?? []).map((job) => JSON.parse(job.bodyJson));
+    },
+    count(event) { counts.push(event); }
+  });
+  assert.deepEqual(capped.ops, [{ op: "ack" }]);
+  assert.deepEqual(counts, ["crawl_congestion_cap"]);
+  assert.equal(capEvents.filter((item) => item.event === "crawl_domain_park_expired").length, 2);
+  assert.equal(replayed.length, 2);
+  assert.deepEqual(replayed.map((item) => item.hops), [0, 0]);
+  const stateAfter = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(stateAfter.waiting, 0);
 });

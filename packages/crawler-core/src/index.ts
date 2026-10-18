@@ -16,6 +16,8 @@ export interface JobEnvelope<T> {
    * A wake is not fetched.
    */
   congestionWake?: string | undefined;
+  /** Matches DomainCoordinatorDO's in-flight wake. A stale token is acked and does not drain. */
+  congestionWakeToken?: string | undefined;
   payload: T;
 }
 

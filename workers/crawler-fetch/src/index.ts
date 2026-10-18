@@ -163,15 +163,25 @@ async function postDomain<T>(env: Env, domain: string, path: string, body: Recor
 
 async function parkFetchDomain(
   env: Env,
-  input: { domain: string; urlKey: string; body: JobEnvelope<CrawlPayload>; delaySeconds: number; hops: number }
+  input: {
+    domain: string;
+    urlKey: string;
+    body: JobEnvelope<CrawlPayload>;
+    delaySeconds: number;
+    hops: number;
+    tenantId: string | undefined;
+    monitorId: string | undefined;
+  }
 ): Promise<DomainParkResult | null> {
   try {
     return await postDomain<DomainParkResult>(env, input.domain, "/internal/park", {
       lane: "fetch",
-      urlKey: input.urlKey,
+      urlKey: input.urlKey || domainBusyParkKey(input.body.tenantId, input.body.payload.url, input.body.monitorId || input.body.jobId),
       bodyJson: JSON.stringify(input.body),
       delaySeconds: input.delaySeconds,
-      hops: input.hops
+      hops: input.hops,
+      tenantId: input.tenantId ?? input.body.tenantId ?? "",
+      monitorId: input.monitorId ?? input.body.monitorId ?? ""
     });
   } catch {
     return null;
@@ -180,6 +190,21 @@ async function parkFetchDomain(
 
 async function noteFetchWake(env: Env, domain: string, delaySeconds: number, hops: number): Promise<void> {
   await postDomain(env, domain, "/internal/note-wake", { lane: "fetch", delaySeconds, hops });
+}
+
+async function sweepFetchDomain(env: Env, domain: string): Promise<Array<JobEnvelope<CrawlPayload>>> {
+  const swept = await postDomain<{ jobs?: Array<{ bodyJson?: unknown }> }>(env, domain, "/internal/sweep", { lane: "fetch" });
+  if (!swept) throw new Error("domain_park_unavailable");
+  const jobs: Array<JobEnvelope<CrawlPayload>> = [];
+  for (const job of swept.jobs ?? []) {
+    if (typeof job.bodyJson !== "string") continue;
+    try {
+      jobs.push(JSON.parse(job.bodyJson) as JobEnvelope<CrawlPayload>);
+    } catch {
+      logCrawlQueue("warn", "crawl_domain_park_bad_body", { requestId: "", domain });
+    }
+  }
+  return jobs;
 }
 
 function replayFetch(env: Env, body: JobEnvelope<CrawlPayload>): { message: Message<JobEnvelope<CrawlPayload>>; pending: Array<Promise<unknown>> } {
@@ -196,34 +221,49 @@ function replayFetch(env: Env, body: JobEnvelope<CrawlPayload>): { message: Mess
   return { message, pending };
 }
 
-async function drainFetchWake(env: Env, domain: string): Promise<void> {
+async function drainFetchWake(env: Env, domain: string, token: string): Promise<void> {
   await drainDomainWake({
     async take() {
-      const taken = await postDomain<{ jobs?: Array<{ bodyJson?: unknown }>; waiting?: number; retryAfterMs?: number }>(
-        env,
-        domain,
-        "/internal/take",
-        { lane: "fetch", limit: 2 }
-      );
+      const taken = await postDomain<{
+        stale?: boolean;
+        jobs?: Array<{ bodyJson?: unknown; urlKey?: unknown }>;
+        waiting?: number;
+        retryAfterMs?: number;
+      }>(env, domain, "/internal/take", { lane: "fetch", limit: 1, token });
       if (!taken) throw new Error("domain_park_unavailable");
-      const jobs: Array<JobEnvelope<CrawlPayload>> = [];
+      if (taken.stale) return { jobs: [], waiting: Number(taken.waiting ?? 0), retryAfterMs: 0, stale: true };
+      const jobs: Array<{ body: JobEnvelope<CrawlPayload>; urlKey: string }> = [];
       for (const job of taken.jobs ?? []) {
-        if (typeof job.bodyJson !== "string") continue;
+        if (typeof job.bodyJson !== "string" || typeof job.urlKey !== "string") continue;
         try {
-          jobs.push(JSON.parse(job.bodyJson) as JobEnvelope<CrawlPayload>);
+          jobs.push({ body: JSON.parse(job.bodyJson) as JobEnvelope<CrawlPayload>, urlKey: job.urlKey });
         } catch {
           logCrawlQueue("warn", "crawl_domain_park_bad_body", { requestId: "", domain });
+          await postDomain(env, domain, "/internal/complete", { lane: "fetch", urlKey: job.urlKey });
         }
       }
       return { jobs, waiting: Number(taken.waiting ?? 0), retryAfterMs: Number(taken.retryAfterMs ?? 0) };
     },
     async run(body) {
       const replay = replayFetch(env, body);
-      await handleCrawlQueueBatch([replay.message], {
-        ...queueDeps(env),
-        process: (message) => crawlMessage(message, env)
-      });
-      await Promise.all(replay.pending);
+      try {
+        await crawlMessage(replay.message, env);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown";
+        if (message.startsWith("domain_busy:")) throw error;
+        await handleCrawlQueueBatch([replay.message], {
+          ...queueDeps(env),
+          process: async () => { throw error; }
+        });
+        await Promise.all(replay.pending);
+      }
+    },
+    async complete(urlKey) {
+      const done = await postDomain(env, domain, "/internal/complete", { lane: "fetch", urlKey });
+      if (!done) throw new Error("domain_park_unavailable");
+    },
+    async releaseClaim(urlKey) {
+      await postDomain(env, domain, "/internal/release-claim", { lane: "fetch", urlKey });
     },
     async releaseWake() {
       const left = await postDomain<{ waiting?: number; retryAfterMs?: number }>(env, domain, "/internal/release-wake", { lane: "fetch" });
@@ -236,7 +276,8 @@ async function drainFetchWake(env: Env, domain: string): Promise<void> {
 async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
   const wake = message.body.congestionWake;
   if (typeof wake === "string" && wake.length > 0) {
-    await drainFetchWake(env, wake);
+    const token = message.body.congestionWakeToken;
+    await drainFetchWake(env, wake, typeof token === "string" ? token : "");
     return;
   }
   await crawlMessage(message, env);
@@ -401,16 +442,22 @@ function queueDeps(env: Env) {
     requeue: async (body: JobEnvelope<CrawlPayload>, delaySeconds: number, hops: number) => {
       await env.CRAWL_STATIC.send({ ...body, congestionHops: hops }, { delaySeconds });
     },
-    parkDomain: (input: { domain: string; urlKey: string; body: JobEnvelope<CrawlPayload>; delaySeconds: number; hops: number }) => parkFetchDomain(env, {
-      ...input,
-      urlKey: input.urlKey || domainBusyParkKey(input.body.tenantId, input.body.payload.url)
-    }),
+    parkDomain: (input: {
+      domain: string;
+      urlKey: string;
+      body: JobEnvelope<CrawlPayload>;
+      delaySeconds: number;
+      hops: number;
+      tenantId: string | undefined;
+      monitorId: string | undefined;
+    }) => parkFetchDomain(env, input),
     noteWake: (domain: string, delaySeconds: number, hops: number) => noteFetchWake(env, domain, delaySeconds, hops),
-    random: Math.random,
-    log: logCrawlQueue,
+    sweepDomain: (domain: string) => sweepFetchDomain(env, domain),
     count(event: string) {
       env.ANALYTICS?.writeDataPoint({ indexes: [event], blobs: [event, "fetch"], doubles: [1] });
-    }
+    },
+    random: Math.random,
+    log: logCrawlQueue
   };
 }
 
