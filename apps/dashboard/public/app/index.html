@@ -18,6 +18,12 @@
       } catch (error) {
         document.documentElement.dataset.theme = "light";
       }
+      try {
+        var sessionToken = sessionStorage.getItem("pulsewatch-session") || localStorage.getItem("pulsewatch-session");
+        if (sessionToken) document.documentElement.classList.add("is-booting");
+      } catch (bootError) {
+        /* storage unavailable — leave the signed-out shell */
+      }
     })();
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />

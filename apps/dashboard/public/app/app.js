@@ -95,6 +95,8 @@ function isSafeApiMethod(method) {
 
 function switchAwayFromChallengedApiBase() {
   if (isLocalDashboardHost() || state.apiBase === PRODUCTION_API_BASE) return false;
+  // Only the challenge-prone custom host is migrated. Explicit staging or other overrides stay put.
+  if (!isChallengedCustomApiBase(state.apiBase)) return false;
   persistApiBase(PRODUCTION_API_BASE, { notifyUser: true });
   return true;
 }
@@ -357,9 +359,19 @@ function renderChannelSentimentGrid(target, channelSentiment, emptyLabel = "No c
   }
 }
 
-function canManageMonitors() {
+function canDeleteMonitors() {
   const role = state.workspace?.role;
   return role === "owner" || role === "admin" || state.user?.globalRole === "super_admin";
+}
+
+/** Analysts may create and update monitors; only owner/admin/super-admin may delete. */
+function canWriteMonitors() {
+  const role = state.workspace?.role;
+  return canDeleteMonitors() || role === "analyst";
+}
+
+function canManageMonitors() {
+  return canDeleteMonitors();
 }
 
 function canManageBilling() {
@@ -371,7 +383,7 @@ function isSuperAdmin() {
 }
 
 function updateRoleChrome() {
-  const showNew = Boolean(state.user && state.workspace && canManageMonitors());
+  const showNew = Boolean(state.user && state.workspace && canWriteMonitors());
   $("#newMonitorBtn").classList.toggle("hidden", !showNew);
   $("#billingForm")?.classList.toggle("hidden", !(state.user && state.workspace && canManageBilling()));
   $("#adminNavBtn")?.classList.toggle("hidden", !isSuperAdmin());
@@ -629,7 +641,7 @@ async function api(path, options = {}, allowChallengeRetry = true) {
         return api(path, options, false);
       }
       if (allowChallengeRetry && !isSafeApiMethod(method) && switchAwayFromChallengedApiBase()) {
-        throw new Error("Cloudflare challenged the API host. Switched to workers.dev — click Create again (POST is not auto-retried to avoid duplicates).");
+        throw new Error("Cloudflare challenged the API host. Switched to workers.dev — retry the action. Mutating requests are not auto-replayed.");
       }
       throw new Error(
         `API blocked by Cloudflare challenge. Using ${PRODUCTION_API_BASE} (Settings → API base URL), then retry.`
@@ -671,16 +683,20 @@ function normalizeView(view) {
   return view;
 }
 
-function readPersistedView() {
+function readRequestedView() {
   const fromHash = String(location.hash || "").replace(/^#/, "");
-  if (fromHash && fromHash !== "signup" && titles[fromHash]) return normalizeView(fromHash);
+  if (fromHash && fromHash !== "signup" && titles[fromHash]) return fromHash;
   try {
     const stored = sessionStorage.getItem(LAST_VIEW_KEY);
-    if (stored && titles[stored]) return normalizeView(stored);
+    if (stored && titles[stored]) return stored;
   } catch {
     /* ignore */
   }
   return "overview";
+}
+
+function readPersistedView() {
+  return normalizeView(readRequestedView());
 }
 
 function persistView(view) {
@@ -693,10 +709,11 @@ function persistView(view) {
   }
 }
 
-function setView(view) {
+function setView(view, options = {}) {
+  const persist = options.persist !== false;
   view = normalizeView(view);
   state.view = view;
-  persistView(view);
+  if (persist) persistView(view);
   document.querySelectorAll(".nav").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
   const [title, subtitle] = titles[view] || titles.overview;
   $("#pageTitle").textContent = title;
@@ -830,9 +847,19 @@ function openMonitorDialog(mode = "create", monitor = null) {
   dialog.showModal();
 }
 
+async function rollbackCreatedMonitor(monitorId) {
+  if (!state.workspace || !monitorId) return false;
+  try {
+    await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}`, { method: "DELETE" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function deleteMonitorById(monitorId) {
   if (!state.workspace || !monitorId) return;
-  if (!canManageMonitors()) {
+  if (!canDeleteMonitors()) {
     notify("forbidden");
     return;
   }
@@ -1199,7 +1226,7 @@ function renderMonitors() {
     return haystack.includes(query);
   });
   if (!state.monitors.length) {
-    list.innerHTML = canManageMonitors()
+    list.innerHTML = canWriteMonitors()
       ? '<div class="empty">No monitors yet. Create one with keywords plus optional website / social pages.</div>'
       : '<div class="empty">No monitors in this workspace yet.</div>';
     return;
@@ -1221,11 +1248,17 @@ function renderMonitors() {
     const notes = typeof monitor.profile?.notes === "string" && monitor.profile.notes
       ? `<p class="monitor-notes">${escapeHtml(monitor.profile.notes)}</p>`
       : "";
-    const actions = canManageMonitors()
+    const editButton = canWriteMonitors()
+      ? `<button type="button" class="secondary" data-edit-monitor="${escapeHtml(monitorId)}">Edit</button>`
+      : "";
+    const deleteButton = canDeleteMonitors()
+      ? `<button type="button" class="ghost danger-btn" data-delete-monitor="${escapeHtml(monitorId)}">Delete</button>`
+      : "";
+    const actions = editButton || deleteButton
       ? `<div class="monitor-row-actions">
           <span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>
-          <button type="button" class="secondary" data-edit-monitor="${escapeHtml(monitorId)}">Edit</button>
-          <button type="button" class="ghost danger-btn" data-delete-monitor="${escapeHtml(monitorId)}">Delete</button>
+          ${editButton}
+          ${deleteButton}
         </div>`
       : `<span class="status-chip">${escapeHtml(monitor.priority || "normal")}</span>`;
     row.innerHTML = `
@@ -1587,11 +1620,14 @@ function renderWorkspaceSwitcher() {
 
 async function bootstrap(options = {}) {
   const clearOnFailure = options.clearOnFailure !== false;
-  const preferredView = options.view || readPersistedView() || "overview";
+  // Keep the raw hash/storage view until /v1/me fills globalRole. Normalizing
+  // #admin while state.user is still null would force overview and drop the hash.
+  const requestedView = options.view || readRequestedView() || "overview";
   try {
     const me = await api("/v1/me");
     state.user = me.user;
     if (me.user?.email) setSessionEmail(me.user.email);
+    const preferredView = normalizeView(requestedView);
     // Enter the app shell before slower workspace/monitor fetches.
     applySignedInChrome(me.user?.email || "");
     setView(preferredView);
@@ -1619,7 +1655,7 @@ $("#signupForm").addEventListener("submit", async (event) => {
     state.user = session?.user || { email: String(form.get("email") || "") };
     applySignedInChrome(state.user?.email || form.get("email") || "");
     setView("overview");
-    await bootstrap({ clearOnFailure: false, view: "overview" });
+    await bootstrap({ view: "overview" });
     await enterAppAfterAuth("Account created");
   } catch (error) {
     if (!state.user) renderSignedOut();
@@ -1646,7 +1682,7 @@ $("#loginForm").addEventListener("submit", async (event) => {
     // Redirect chrome immediately — do not wait for bootstrap/workspace loads.
     applySignedInChrome(state.user?.email || form.get("email") || "");
     setView("overview");
-    await bootstrap({ clearOnFailure: false, view: "overview" });
+    await bootstrap({ view: "overview" });
     await enterAppAfterAuth("Signed in");
   } catch (error) {
     if (!state.user) renderSignedOut();
@@ -1665,7 +1701,7 @@ $("#logoutBtn").addEventListener("click", async () => {
 });
 
 $("#newMonitorBtn").addEventListener("click", () => {
-  if (!canManageMonitors()) {
+  if (!canWriteMonitors()) {
     notify("forbidden");
     return;
   }
@@ -1680,7 +1716,7 @@ $("#monitorForm").addEventListener("submit", async (event) => {
     notify("Select a workspace first");
     return;
   }
-  if (!canManageMonitors()) {
+  if (!canWriteMonitors()) {
     notify("forbidden");
     return;
   }
@@ -1726,10 +1762,27 @@ $("#monitorForm").addEventListener("submit", async (event) => {
     });
     const monitorId = created.monitor?.id;
     if (!monitorId) throw new Error("monitor_create_incomplete");
-    await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}/queries`, {
-      method: "POST",
-      body: JSON.stringify({ rawQuery: form.query })
-    });
+    try {
+      await api(`/v1/workspaces/${state.workspace.workspaceId}/monitors/${monitorId}/queries`, {
+        method: "POST",
+        body: JSON.stringify({ rawQuery: form.query })
+      });
+    } catch {
+      // The monitor POST can succeed before the follow-up query POST is challenged.
+      // Roll it back so a retry does not create a second monitor.
+      const rolledBack = await rollbackCreatedMonitor(monitorId);
+      if (rolledBack) {
+        throw new Error("Monitor creation was rolled back because the listening query could not be saved. Retry the action — nothing was left in the list. Mutating requests are not auto-replayed.");
+      }
+      try {
+        await refreshMonitors();
+        renderMonitors();
+      } catch {
+        /* the created monitor may still appear after a manual refresh */
+      }
+      dialog.close();
+      throw new Error("A monitor was created, but its listening query was not saved. Open the monitor list and edit that monitor instead of creating another.");
+    }
     dialog.close();
     formEl.reset();
     await refreshMonitors();
@@ -1749,6 +1802,10 @@ $("#monitorList")?.addEventListener("click", async (event) => {
   const edit = event.target.closest("[data-edit-monitor]");
   if (edit) {
     event.preventDefault();
+    if (!canWriteMonitors()) {
+      notify("forbidden");
+      return;
+    }
     const monitor = state.monitors.find((item) => monitorIdOf(item) === edit.getAttribute("data-edit-monitor"));
     if (!monitor) return;
     openMonitorDialog("edit", monitor);
@@ -1862,14 +1919,19 @@ $("#apiForm").querySelector('[name="apiBase"]').value = state.apiBase;
 initTheme();
 
 // If a session token already exists, leave the auth form immediately on refresh.
+// The head script may already have set html.is-booting before this module loads.
 const bootToken = getSessionToken();
-const bootView = readPersistedView();
+const bootView = readRequestedView();
 if (bootToken) {
   const cachedEmail = getSessionEmail();
   state.user = { email: cachedEmail || "Signed in" };
+  document.documentElement.classList.add("is-booting");
   document.body.classList.add("is-booting");
   applySignedInChrome(cachedEmail);
-  setView(bootView);
+  // #admin depends on globalRole from /v1/me. Painting it now would normalize to
+  // overview and replace the hash before the role check can run.
+  if (bootView === "admin") setView("overview", { persist: false });
+  else setView(bootView);
 }
 
 window.addEventListener("hashchange", () => {
@@ -1881,6 +1943,7 @@ window.addEventListener("hashchange", () => {
 bootstrap({ view: bootToken ? bootView : "overview" }).catch(() => {
   /* signed-out on first paint is normal when no valid session */
 }).finally(() => {
+  document.documentElement.classList.remove("is-booting");
   document.body.classList.remove("is-booting");
   if (!bootToken && location.hash === "#signup") {
     $("#signupForm")?.scrollIntoView({ behavior: "smooth", block: "center" });

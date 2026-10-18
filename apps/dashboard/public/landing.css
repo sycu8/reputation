@@ -567,8 +567,24 @@ body.auth-chrome-ready .hero-cta {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .reveal, .btn, .profile-chip, .dash-frame, .spark { transition: none !important; animation: none !important; }
+  .reveal,
+  .btn,
+  .profile-chip,
+  .dash-frame,
+  .spark,
+  .nav-actions,
+  .hero-cta,
+  .cta-band {
+    transition: none !important;
+    animation: none !important;
+  }
   .reveal { opacity: 1; transform: none; }
+  .btn:hover,
+  .btn:active,
+  .btn.is-pressed,
+  .profile-chip:hover {
+    transform: none;
+  }
 }
 
 @media (max-width: 980px) {
