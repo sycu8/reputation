@@ -1312,6 +1312,16 @@ const ALARM_REARM_FLOOR_MS = 60_000;
 const PARK_EVENT_TTL_MS = 24 * 60 * 60 * 1000;
 /** One sweep invocation. Matches crawler-core SWEEP_CHUNK without importing that module. */
 const DOMAIN_SWEEP_LIMIT = 32;
+/** A browser slot that is not released still expires, so active_requests cannot stick. */
+const DOMAIN_LEASE_TTL_MS = 60_000;
+const DOMAIN_LEASE_BASE = 2;
+const DOMAIN_LEASE_CAP = 8;
+
+/** Hot domains with a deep park get more than two slots. The cap stays at 8. */
+function domainLeaseBudget(waiting: number): number {
+  const extra = Math.floor(Math.max(0, waiting) / 32);
+  return Math.max(DOMAIN_LEASE_BASE, Math.min(DOMAIN_LEASE_CAP, DOMAIN_LEASE_BASE + extra));
+}
 
 function parkLane(value: unknown): "fetch" | "browser" {
   if (value === "fetch" || value === "browser") return value;
@@ -1358,11 +1368,18 @@ export class DomainCoordinatorDO extends SqliteObject {
       monitor_id TEXT NOT NULL DEFAULT '',
       expired_at INTEGER NOT NULL
     )`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS domain_leases (
+      lease_id TEXT PRIMARY KEY,
+      expires_at INTEGER NOT NULL,
+      acquired_at INTEGER NOT NULL
+    )`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_domain_leases_expires ON domain_leases(expires_at)`);
   }
 
   async alarm(): Promise<void> {
     const now = this.clock();
     await this.state.storage.transaction(async () => {
+      this.expireLeases(now);
       this.sql.exec(`DELETE FROM domain_park_events WHERE expired_at < ?`, now - PARK_EVENT_TTL_MS);
       const wakes = rows<{ key: string; wake_at: number }>(this.sql.exec(
         `SELECT key, wake_at FROM domain_wake`
@@ -1406,58 +1423,9 @@ export class DomainCoordinatorDO extends SqliteObject {
     if (request.method === "POST" && url.pathname === "/internal/release-wake") return this.releaseWake(request);
     if (request.method === "POST" && url.pathname === "/internal/note-wake") return this.noteWake(request);
     if (request.method === "POST" && url.pathname === "/internal/sweep") return this.sweep(request);
-    if (request.method === "POST" && url.pathname === "/internal/acquire") {
-      const body = await readJson(request);
-      const domain = asString(body.domain, "domain").toLowerCase();
-      const maxConcurrency = typeof body.maxConcurrency === "number" ? Math.max(1, Math.min(8, Math.floor(body.maxConcurrency))) : 2;
-      const minDelayMs = typeof body.minDelayMs === "number" ? Math.max(0, Math.min(60_000, Math.floor(body.minDelayMs))) : 500;
-      const currentTime = Date.now();
-      return this.state.storage.transaction(async () => {
-        const row = rows(this.sql.exec<{ active_requests: number; next_allowed_at: number; backoff_until: number }>(
-          `SELECT active_requests,next_allowed_at,backoff_until FROM domain_state WHERE key='self' LIMIT 1`
-        ))[0];
-        if (!row) {
-          this.sql.exec(
-            `INSERT INTO domain_state(key,domain,next_allowed_at,active_requests,updated_at) VALUES('self',?,?,1,?)`,
-            domain, currentTime + minDelayMs, nowIso()
-          );
-          return json({ granted: true, leaseId: crypto.randomUUID(), retryAfterMs: 0 });
-        }
-        const blockedUntil = Math.max(row.next_allowed_at, row.backoff_until);
-        if (row.active_requests >= maxConcurrency || blockedUntil > currentTime) {
-          return json({ granted: false, retryAfterMs: Math.max(250, blockedUntil - currentTime) }, 429);
-        }
-        this.sql.exec(
-          `UPDATE domain_state SET active_requests=active_requests+1,next_allowed_at=?,updated_at=? WHERE key='self'`,
-          currentTime + minDelayMs, nowIso()
-        );
-        return json({ granted: true, leaseId: crypto.randomUUID(), retryAfterMs: 0 });
-      });
-    }
-    if (request.method === "POST" && url.pathname === "/internal/release") {
-      const body = await readJson(request);
-      const status = typeof body.status === "number" ? body.status : 200;
-      const retryAfterMs = typeof body.retryAfterMs === "number" ? Math.max(0, Math.floor(body.retryAfterMs)) : 0;
-      const domain = typeof body.domain === "string" && body.domain.trim() ? body.domain.trim().toLowerCase() : "unknown";
-      const now = Date.now();
-      // Upsert so a 429 can record backoff even when this worker never acquired a slot.
-      this.sql.exec(
-        `INSERT OR IGNORE INTO domain_state(key,domain,next_allowed_at,active_requests,consecutive_errors,recent_429,recent_403,backoff_until,updated_at)
-         VALUES('self',?,0,0,0,0,0,0,?)`,
-        domain, nowIso()
-      );
-      this.sql.exec(
-        `UPDATE domain_state SET
-          active_requests=MAX(active_requests-1,0),
-          consecutive_errors=CASE WHEN ? >= 500 THEN consecutive_errors+1 ELSE 0 END,
-          recent_429=CASE WHEN ? = 429 THEN recent_429+1 ELSE recent_429 END,
-          recent_403=CASE WHEN ? = 403 THEN recent_403+1 ELSE recent_403 END,
-          backoff_until=CASE WHEN ? IN (429,403) THEN MAX(backoff_until, ?) ELSE backoff_until END,
-          updated_at=? WHERE key='self'`,
-        status, status, status, status, now + retryAfterMs, nowIso()
-      );
-      return json({ ok: true });
-    }
+    if (request.method === "POST" && url.pathname === "/internal/revise-park") return this.revisePark(request);
+    if (request.method === "POST" && url.pathname === "/internal/acquire") return this.acquire(request);
+    if (request.method === "POST" && url.pathname === "/internal/release") return this.release(request);
     if (request.method === "GET" && url.pathname === "/internal/state") {
       const waitingRow = rows(this.sql.exec<{ waiting: number }>(`SELECT COUNT(*) AS waiting FROM domain_waiters`))[0];
       return json({
@@ -1465,6 +1433,7 @@ export class DomainCoordinatorDO extends SqliteObject {
         waiting: Number(waitingRow?.waiting ?? 0),
         wake: rows(this.sql.exec<Record<string, unknown>>(`SELECT key, wake_at, hops, token, last_tenant FROM domain_wake`)),
         expired: Number(rows(this.sql.exec<{ expired: number }>(`SELECT COUNT(*) AS expired FROM domain_park_events`))[0]?.expired ?? 0),
+        leases: this.liveLeases(),
         parkEvents: rows(this.sql.exec<Record<string, unknown>>(
           `SELECT lane, tenant_id, monitor_id, expired_at FROM domain_park_events ORDER BY id ASC LIMIT 50`
         ))
@@ -1570,6 +1539,10 @@ export class DomainCoordinatorDO extends SqliteObject {
       times.push(Number(basis.basis) + WAKE_STRANDED_GRACE_MS);
     }
     if (orphan?.wake_at != null && Number(orphan.wake_at) > 0) times.push(Number(orphan.wake_at) + WAKE_STRANDED_GRACE_MS);
+    const lease = rows<{ expires_at: number | null }>(this.sql.exec(
+      `SELECT MIN(expires_at) AS expires_at FROM domain_leases`
+    ))[0];
+    if (lease?.expires_at != null && Number(lease.expires_at) > 0) times.push(Number(lease.expires_at));
     if (times.length === 0) {
       await this.state.storage.deleteAlarm();
       return;
@@ -1579,6 +1552,7 @@ export class DomainCoordinatorDO extends SqliteObject {
   }
 
   private retryAfterMs(now: number, lane: "fetch" | "browser"): number {
+    this.expireLeases(now);
     const row = rows(this.sql.exec<{ active_requests: number; next_allowed_at: number; backoff_until: number }>(
       `SELECT active_requests, next_allowed_at, backoff_until FROM domain_state WHERE key='self' LIMIT 1`
     ))[0];
@@ -1586,10 +1560,127 @@ export class DomainCoordinatorDO extends SqliteObject {
     const backoffUntil = Number(row.backoff_until);
     if (lane === "fetch") return backoffUntil > now ? Math.max(250, backoffUntil - now) : 0;
     const blockedUntil = Math.max(Number(row.next_allowed_at), backoffUntil);
-    if (Number(row.active_requests) >= 2 || blockedUntil > now) {
+    const budget = domainLeaseBudget(this.totalWaiting());
+    if (this.liveLeases() >= budget || blockedUntil > now) {
       return Math.max(250, blockedUntil > now ? blockedUntil - now : 250);
     }
     return 0;
+  }
+
+  /** Drop expired slot leases and mirror the live count so a missed release cannot pin the domain. */
+  private expireLeases(now: number): number {
+    this.sql.exec(`DELETE FROM domain_leases WHERE expires_at <= ?`, now);
+    const active = this.liveLeases();
+    this.sql.exec(`UPDATE domain_state SET active_requests=? WHERE key='self'`, active);
+    return active;
+  }
+
+  private liveLeases(): number {
+    const row = rows(this.sql.exec<{ active: number }>(`SELECT COUNT(*) AS active FROM domain_leases`))[0];
+    return Number(row?.active ?? 0);
+  }
+
+  private totalWaiting(): number {
+    const row = rows(this.sql.exec<{ waiting: number }>(`SELECT COUNT(*) AS waiting FROM domain_waiters`))[0];
+    return Number(row?.waiting ?? 0);
+  }
+
+  private async acquire(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const domain = asString(body.domain, "domain").toLowerCase();
+    const requested = typeof body.maxConcurrency === "number"
+      ? Math.max(1, Math.min(DOMAIN_LEASE_CAP, Math.floor(body.maxConcurrency)))
+      : DOMAIN_LEASE_BASE;
+    const minDelayMs = typeof body.minDelayMs === "number" ? Math.max(0, Math.min(60_000, Math.floor(body.minDelayMs))) : 500;
+    const now = this.clock();
+    const outcome = await this.state.storage.transaction(async () => {
+      const active = this.expireLeases(now);
+      const effective = Math.min(DOMAIN_LEASE_CAP, Math.max(requested, domainLeaseBudget(this.totalWaiting())));
+      const row = rows(this.sql.exec<{ next_allowed_at: number; backoff_until: number }>(
+        `SELECT next_allowed_at, backoff_until FROM domain_state WHERE key='self' LIMIT 1`
+      ))[0];
+      const blockedUntil = row ? Math.max(Number(row.next_allowed_at), Number(row.backoff_until)) : 0;
+      if (row && (active >= effective || blockedUntil > now)) {
+        return { granted: false as const, leaseId: "", retryAfterMs: Math.max(250, blockedUntil > now ? blockedUntil - now : 250) };
+      }
+      const leaseId = crypto.randomUUID();
+      this.sql.exec(
+        `INSERT INTO domain_leases(lease_id, expires_at, acquired_at) VALUES(?,?,?)`,
+        leaseId, now + DOMAIN_LEASE_TTL_MS, now
+      );
+      const live = this.liveLeases();
+      if (!row) {
+        this.sql.exec(
+          `INSERT INTO domain_state(key,domain,next_allowed_at,active_requests,updated_at) VALUES('self',?,?,?,?)`,
+          domain, now + minDelayMs, live, nowIso()
+        );
+      } else {
+        this.sql.exec(
+          `UPDATE domain_state SET active_requests=?, next_allowed_at=?, updated_at=? WHERE key='self'`,
+          live, now + minDelayMs, nowIso()
+        );
+      }
+      return { granted: true as const, leaseId, retryAfterMs: 0 };
+    });
+    await this.syncAlarm();
+    if (!outcome.granted) return json({ granted: false, retryAfterMs: outcome.retryAfterMs }, 429);
+    return json({ granted: true, leaseId: outcome.leaseId, retryAfterMs: 0 });
+  }
+
+  private async release(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const status = typeof body.status === "number" ? body.status : 200;
+    const retryAfterMs = typeof body.retryAfterMs === "number" ? Math.max(0, Math.floor(body.retryAfterMs)) : 0;
+    const domain = typeof body.domain === "string" && body.domain.trim() ? body.domain.trim().toLowerCase() : "unknown";
+    const leaseId = typeof body.leaseId === "string" ? body.leaseId.trim() : "";
+    const now = this.clock();
+    await this.state.storage.transaction(async () => {
+      this.expireLeases(now);
+      if (leaseId) this.sql.exec(`DELETE FROM domain_leases WHERE lease_id=?`, leaseId);
+      const active = this.liveLeases();
+      // Upsert so a 429 can record backoff even when this worker never acquired a slot.
+      this.sql.exec(
+        `INSERT OR IGNORE INTO domain_state(key,domain,next_allowed_at,active_requests,consecutive_errors,recent_429,recent_403,backoff_until,updated_at)
+         VALUES('self',?,0,0,0,0,0,0,?)`,
+        domain, nowIso()
+      );
+      this.sql.exec(
+        `UPDATE domain_state SET
+          active_requests=?,
+          consecutive_errors=CASE WHEN ? >= 500 THEN consecutive_errors+1 ELSE 0 END,
+          recent_429=CASE WHEN ? = 429 THEN recent_429+1 ELSE recent_429 END,
+          recent_403=CASE WHEN ? = 403 THEN recent_403+1 ELSE recent_403 END,
+          backoff_until=CASE WHEN ? IN (429,403) THEN MAX(backoff_until, ?) ELSE backoff_until END,
+          updated_at=? WHERE key='self'`,
+        active, status, status, status, status, now + retryAfterMs, nowIso()
+      );
+    });
+    await this.syncAlarm();
+    return json({ ok: true });
+  }
+
+  private async revisePark(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const lane = parkLane(body.lane);
+    const urlKey = asString(body.urlKey, "url_key");
+    const bodyJson = asString(body.bodyJson, "body_json");
+    if (bodyJson.length > DOMAIN_PARK_BODY_MAX) return json({ ok: false, error: "body_too_large" }, 400);
+    const now = this.clock();
+    const updated = await this.state.storage.transaction(async () => {
+      const existing = rows(this.sql.exec<{ url_key: string }>(
+        `SELECT url_key FROM domain_waiters WHERE url_key=? AND lane=? LIMIT 1`,
+        urlKey, lane
+      ))[0];
+      if (!existing) return false;
+      this.sql.exec(
+        `UPDATE domain_waiters SET body_json=?, parked_at=?, claimed_at=0 WHERE url_key=? AND lane=?`,
+        bodyJson, now, urlKey, lane
+      );
+      return true;
+    });
+    await this.syncAlarm();
+    if (!updated) return json({ ok: false }, 404);
+    return json({ ok: true });
   }
 
   private async park(request: Request): Promise<Response> {

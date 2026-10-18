@@ -7,6 +7,7 @@ import {
   CRAWL_QUEUE_MAX_RETRIES,
   CONGESTION_HOP_CAP,
   domainBusyWakeDelaySeconds,
+  domainContinueDelaySeconds,
   drainDomainWake,
   fetchFailureAction,
   handleCrawlQueueBatch
@@ -436,14 +437,55 @@ test("a domain wake that is still busy is re-sent once", async () => {
   };
   await handleCrawlQueueBatch([wake], deps);
   assert.equal(parked, 0);
-  assert.deepEqual(sent, [{ wake: "hot.example", url: "https://hot.example/p0", delaySeconds: domainBusyWakeDelaySeconds(800, 3, () => 0), hops: 4 }]);
-  assert.equal(sent[0].delaySeconds, 30);
+  assert.deepEqual(sent, [{ wake: "hot.example", url: "https://hot.example/p0", delaySeconds: domainContinueDelaySeconds(800, () => 0), hops: 3 }]);
+  assert.equal(sent[0].delaySeconds, 1);
   assert.deepEqual(wake.ops, [{ op: "ack" }]);
 
   const more = fake(job("https://hot.example/later"));
   const follow = [];
   await handleCrawlQueueBatch([more], parkDeps(coordinator, follow, [], hotProcess));
   assert.deepEqual(follow, []);
+});
+
+test("a domain wake with a long backoff still climbs hops", async () => {
+  const message = fake({ ...job("https://hot.example/p0", 3), congestionWake: "hot.example" });
+  const sent = [];
+  await handleCrawlQueueBatch([message], {
+    worker: "fetch",
+    async process() { throw new Error("domain_busy:120000"); },
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(_body, delaySeconds, hops) { sent.push({ delaySeconds, hops }); },
+    async noteWake() {},
+    random: () => 0,
+    log() {}
+  });
+  assert.deepEqual(sent, [{ delaySeconds: domainBusyWakeDelaySeconds(120000, 3, () => 0), hops: 4 }]);
+  assert.equal(sent[0].delaySeconds, 30);
+  assert.deepEqual(message.ops, [{ op: "ack" }]);
+});
+
+test("a hop-capped slot wait does not sweep", async () => {
+  const message = fake({
+    ...job("https://hot.example/", CONGESTION_HOP_CAP),
+    congestionWake: "hot.example"
+  });
+  const sent = [];
+  await handleCrawlQueueBatch([message], {
+    worker: "browser",
+    async process() { throw new Error("domain_busy:800"); },
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(_body, delaySeconds, hops) { sent.push({ delaySeconds, hops }); },
+    async noteWake() {},
+    async sweepDomain() { throw new Error("sweep must not run for a slot wait"); },
+    random: () => 0,
+    log() {}
+  });
+  assert.deepEqual(sent, [{ delaySeconds: 1, hops: CONGESTION_HOP_CAP }]);
+  assert.deepEqual(message.ops, [{ op: "ack" }]);
 });
 
 test("a wake with parked jobs left uses a short delay and does not climb hops", async () => {
@@ -722,7 +764,7 @@ test("a hop-capped wake sweeps each parked job and counts once", async () => {
   const capEvents = [];
   let waitingAtRequeue = null;
   await handleCrawlQueueBatch([capped], {
-    ...parkDeps(coordinator, replayed, capEvents, async () => { throw new Error("domain_busy:60000"); }),
+    ...parkDeps(coordinator, replayed, capEvents, async () => { throw new Error("domain_busy:120000"); }),
     async requeue(body, delaySeconds, hops) {
       const during = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
       waitingAtRequeue = during.waiting;
@@ -765,7 +807,7 @@ test("a hop-capped wake sweeps each parked job and counts once", async () => {
   assert.equal(stateAfter.waiting, 0);
 });
 
-test("a swept job past the lifetime cap is deleted instead of requeued", async () => {
+test("a swept job past the lifetime cap is dead-lettered and not deleted first", async () => {
   const message = fake({
     ...job("https://hot.example/", CONGESTION_HOP_CAP),
     congestionWake: "hot.example",
@@ -775,10 +817,11 @@ test("a swept job past the lifetime cap is deleted instead of requeued", async (
   const completed = [];
   const counts = [];
   const events = [];
+  const dead = [];
   const parkedBody = { ...job("https://hot.example/old"), congestionLifetime: CONGESTION_HOP_CAP };
   await handleCrawlQueueBatch([message], {
     worker: "browser",
-    async process() { throw new Error("domain_busy:60000"); },
+    async process() { throw new Error("domain_busy:120000"); },
     failureAction,
     async noteUrlFailure() { return 0; },
     async rememberSkip() {},
@@ -790,13 +833,111 @@ test("a swept job past the lifetime cap is deleted instead of requeued", async (
       return { jobs: [{ body: parkedBody, urlKey: "k1" }], remaining: 0 };
     },
     async completeParked(_domain, urlKey) { completed.push(urlKey); },
-    count(event) { counts.push(event); },
-    log(_level, event) { events.push(event); }
+    async deadLetter(body, reason, domain) {
+      dead.push({
+        reason,
+        domain,
+        lifetime: body.congestionLifetime,
+        url: body.payload.url
+      });
+    },
+    count(event, domain) { counts.push(domain ? `${event}:${domain}` : event); },
+    log(_level, event, fields) { events.push({ event, domain: fields.domain, count: fields.count, lifetime: fields.lifetime }); }
   });
   assert.deepEqual(sent, []);
+  assert.deepEqual(dead, [{
+    reason: "crawl_domain_park_lifetime",
+    domain: "hot.example",
+    lifetime: CONGESTION_HOP_CAP + 1,
+    url: "https://hot.example/old"
+  }]);
   assert.deepEqual(completed, ["k1"]);
   assert.equal(counts.includes("crawl_congestion_cap"), false);
-  assert.deepEqual(counts, ["crawl_domain_park_expired"]);
-  assert.ok(events.includes("crawl_domain_park_expired"));
+  assert.deepEqual(counts, ["crawl_domain_park_lifetime:hot.example"]);
+  const lifetimeEvent = events.find((item) => item.event === "crawl_domain_park_lifetime");
+  assert.equal(lifetimeEvent.domain, "hot.example");
+  assert.equal(lifetimeEvent.count, 1);
+  assert.deepEqual(message.ops, [{ op: "ack" }]);
+});
+
+test("a lifetime dead-letter failure leaves the parked row", async () => {
+  const message = fake({
+    ...job("https://hot.example/", CONGESTION_HOP_CAP),
+    congestionWake: "hot.example",
+    congestionSweep: true
+  });
+  const sent = [];
+  const completed = [];
+  await handleCrawlQueueBatch([message], {
+    worker: "browser",
+    async process() { throw new Error("domain_busy:120000"); },
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(body, _delaySeconds, hops) {
+      sent.push({ sweep: body.congestionSweep ?? null, hops });
+    },
+    async noteWake() {},
+    async sweepDomain() {
+      return {
+        jobs: [{ body: { ...job("https://hot.example/old"), congestionLifetime: CONGESTION_HOP_CAP }, urlKey: "k1" }],
+        remaining: 0
+      };
+    },
+    async completeParked(_domain, urlKey) { completed.push(urlKey); },
+    async deadLetter() { throw new Error("dlq down"); },
+    log() {}
+  });
+  assert.deepEqual(completed, []);
+  assert.deepEqual(sent, [{ sweep: true, hops: CONGESTION_HOP_CAP }]);
+  assert.deepEqual(message.ops, [{ op: "ack" }]);
+});
+
+test("a swept job under the lifetime cap stays parked and the wake resets", async () => {
+  const message = fake({
+    ...job("https://hot.example/", CONGESTION_HOP_CAP),
+    congestionWake: "hot.example",
+    congestionWakeToken: "tok",
+    congestionSweep: true
+  });
+  const noted = [];
+  const wakes = [];
+  const completed = [];
+  const sent = [];
+  const counts = [];
+  await handleCrawlQueueBatch([message], {
+    worker: "browser",
+    async process() { throw new Error("domain_busy:120000"); },
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(body, delaySeconds, hops) {
+      sent.push({
+        wake: body.congestionWake ?? null,
+        delaySeconds,
+        hops,
+        sweep: body.congestionSweep ?? null
+      });
+    },
+    async noteWake(_domain, delaySeconds, hops) { wakes.push({ delaySeconds, hops }); },
+    async sweepDomain() {
+      return {
+        jobs: [{ body: { ...job("https://hot.example/old"), congestionLifetime: 2 }, urlKey: "k1" }],
+        remaining: 0
+      };
+    },
+    async noteParked(_domain, urlKey, body) {
+      noted.push({ urlKey, lifetime: body.congestionLifetime, hops: body.congestionHops, wake: body.congestionWake ?? null });
+    },
+    async completeParked(_domain, urlKey) { completed.push(urlKey); },
+    async deadLetter() { throw new Error("must not dlq"); },
+    count(event, domain) { counts.push(domain ? `${event}:${domain}` : event); },
+    log() {}
+  });
+  assert.deepEqual(completed, []);
+  assert.deepEqual(noted, [{ urlKey: "k1", lifetime: 3, hops: 0, wake: null }]);
+  assert.deepEqual(wakes, [{ delaySeconds: 1, hops: 0 }]);
+  assert.deepEqual(sent, [{ wake: "hot.example", delaySeconds: 1, hops: 0, sweep: null }]);
+  assert.deepEqual(counts, ["crawl_domain_park_expired:hot.example"]);
   assert.deepEqual(message.ops, [{ op: "ack" }]);
 });

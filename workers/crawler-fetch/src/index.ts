@@ -30,6 +30,8 @@ interface Env {
   CRAWL_CACHE: KVNamespace;
   CRAWL_BROWSER: Queue<JobEnvelope<CrawlPayload>>;
   CRAWL_STATIC: Queue<JobEnvelope<CrawlPayload>>;
+  /** Producer for parked jobs that passed the lifetime cap. The queue has no consumer. */
+  CRAWL_DLQ?: Queue<JobEnvelope<CrawlPayload>>;
   PROCESS_CONTENT: Queue<JobEnvelope<ProcessPayload>>;
   DOMAIN_DO?: DurableObjectNamespace;
   ANALYTICS?: AnalyticsEngineDataset;
@@ -195,6 +197,26 @@ async function noteFetchWake(env: Env, domain: string, delaySeconds: number, hop
 async function completeFetchParked(env: Env, domain: string, urlKey: string): Promise<void> {
   const done = await postDomain<{ ok?: boolean }>(env, domain, "/internal/complete", { lane: "fetch", urlKey });
   if (!done) throw new Error("domain_park_unavailable");
+}
+
+async function noteFetchParked(env: Env, domain: string, urlKey: string, body: JobEnvelope<CrawlPayload>): Promise<void> {
+  const done = await postDomain<{ ok?: boolean }>(env, domain, "/internal/revise-park", {
+    lane: "fetch",
+    urlKey,
+    bodyJson: JSON.stringify(body)
+  });
+  if (!done?.ok) throw new Error("domain_park_unavailable");
+}
+
+async function deadLetterFetch(env: Env, body: JobEnvelope<CrawlPayload>, reason: string, domain: string): Promise<void> {
+  const queue = env.CRAWL_DLQ;
+  if (!queue) throw new Error("crawl_dlq_unbound");
+  await queue.send({
+    ...body,
+    parkExpiredReason: reason,
+    parkExpiredDomain: domain,
+    parkExpiredAt: new Date().toISOString()
+  });
 }
 
 async function sweepFetchDomain(env: Env, domain: string): Promise<DomainSweepResult<JobEnvelope<CrawlPayload>>> {
@@ -466,8 +488,11 @@ function queueDeps(env: Env) {
     noteWake: (domain: string, delaySeconds: number, hops: number) => noteFetchWake(env, domain, delaySeconds, hops),
     sweepDomain: (domain: string) => sweepFetchDomain(env, domain),
     completeParked: (domain: string, urlKey: string) => completeFetchParked(env, domain, urlKey),
-    count(event: string) {
-      env.ANALYTICS?.writeDataPoint({ indexes: [event], blobs: [event, "fetch"], doubles: [1] });
+    noteParked: (domain: string, urlKey: string, body: JobEnvelope<CrawlPayload>) => noteFetchParked(env, domain, urlKey, body),
+    deadLetter: (body: JobEnvelope<CrawlPayload>, reason: string, domain: string) => deadLetterFetch(env, body, reason, domain),
+    count(event: string, domain?: string) {
+      const blobs = domain ? [event, "fetch", domain] : [event, "fetch"];
+      env.ANALYTICS?.writeDataPoint({ indexes: [event], blobs, doubles: [1] });
     },
     random: Math.random,
     log: logCrawlQueue

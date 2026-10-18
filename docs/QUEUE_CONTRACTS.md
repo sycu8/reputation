@@ -151,6 +151,8 @@ DLQ record must preserve:
 - first failure time
 - last failure time
 
+A park-lifetime message is produced by the crawl workers onto `reputa-crawl-dlq-production` (dev: `reputa-crawl-dlq-dev`). It keeps the original envelope and adds `parkExpiredReason` (`crawl_domain_park_lifetime`), `parkExpiredDomain`, `parkExpiredAt`, and `congestionLifetime`. Attempts stay the queue delivery count. This change does not add a DLQ consumer.
+
 Admin tooling must support:
 - inspect
 - replay

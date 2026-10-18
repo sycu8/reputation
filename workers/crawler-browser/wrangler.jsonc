@@ -33,7 +33,8 @@
     ],
     "producers": [
       { "binding": "CRAWL_BROWSER", "queue": "reputa-crawl-browser-dev" },
-      { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-dev" }
+      { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-dev" },
+      { "binding": "CRAWL_DLQ", "queue": "reputa-crawl-dlq-dev" }
     ]
   },
   "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_crawl_browser_dev" }],
@@ -61,7 +62,8 @@
         ],
         "producers": [
           { "binding": "CRAWL_BROWSER", "queue": "reputa-crawl-browser-production" },
-          { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-production" }
+          { "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-production" },
+          { "binding": "CRAWL_DLQ", "queue": "reputa-crawl-dlq-production" }
         ]
       },
       "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_crawl_browser_production" }]

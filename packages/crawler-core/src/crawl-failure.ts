@@ -194,8 +194,9 @@ function unitRandom(random: () => number): number {
 
 /**
  * Delay before the same wake is sent again when the domain lease is still busy and nothing ran.
- * Bounded at 30s so the wake does not climb to 900s. Hops still increase, so twelve busy wakes
- * reach the hop cap. A wake that crawled something resets hops instead of using this delay.
+ * Bounded at 30s so the wake does not climb to 900s. Used when the wait is longer than one
+ * lease hold. A slot wait uses domainContinueDelaySeconds and does not increment hops.
+ * A wake that crawled something resets hops instead of using this delay.
  */
 export function domainBusyWakeDelaySeconds(waitMs: number, hop: number, random: () => number = Math.random): number {
   const safeHop = Number.isFinite(hop) && hop > 0 ? Math.min(3, Math.floor(hop)) : 0;
@@ -380,6 +381,13 @@ export interface ParkedDrainJob<Body> {
 /** One sweep invocation returns at most this many jobs. The rest stay parked until the next wake. */
 export const SWEEP_CHUNK = 32;
 
+/**
+ * A domain_busy wait inside one lease hold (DomainCoordinatorDO lease TTL).
+ * The wake is sent again without incrementing hops, so a hot domain waiting for a
+ * slot does not reach the hop cap and recycle the parked jobs.
+ */
+const DOMAIN_SLOT_WAIT_MS = 60_000;
+
 export interface DomainSweepResult<Body> {
   jobs: Array<ParkedDrainJob<Body>>;
   remaining: number;
@@ -409,20 +417,32 @@ export interface CrawlQueueDeps<Body, MessageType extends CrawlQueueMessage<Body
   noteWake?(domain: string, delaySeconds: number, hops: number): Promise<void>;
   /** Return one chunk of parked jobs without deleting them. */
   sweepDomain?(domain: string): Promise<DomainSweepResult<Body>>;
-  /** Delete one parked row after its re-send has been accepted. */
+  /** Delete one parked row after its re-send or DLQ send has been accepted. */
   completeParked?(domain: string, urlKey: string): Promise<void>;
-  /** Analytics Engine counter. A throw must not skip the ack. */
-  count?(event: string): void;
+  /**
+   * Keep a swept job parked and store the lifetime-stamped body.
+   * The coordinator moves parked_at to now so the next chunk is the next oldest row.
+   */
+  noteParked?(domain: string, urlKey: string, body: Body): Promise<void>;
+  /**
+   * Produce a lifetime-expired parked job onto the crawl DLQ.
+   * Throw when the send is not accepted. The parked row is deleted only after this resolves.
+   */
+  deadLetter?(body: Body, reason: string, domain: string): Promise<void>;
+  /** Analytics Engine counter. A throw must not skip the ack. Pass the domain for a per-host event. */
+  count?(event: string, domain?: string): void;
   random?: () => number;
   log(level: "info" | "warn" | "error", event: string, fields: Record<string, unknown>): void;
 }
 
 function recordCrawlCount<Body extends object, MessageType extends CrawlQueueMessage<Body>>(
   deps: CrawlQueueDeps<Body, MessageType>,
-  event: string
+  event: string,
+  domain?: string
 ): void {
   try {
-    deps.count?.(event);
+    if (domain) deps.count?.(event, domain);
+    else deps.count?.(event);
   } catch {
     /* a metric failure must not skip the ack */
   }
@@ -658,6 +678,80 @@ async function parkDomainBusy<Body extends object, MessageType extends CrawlQueu
   return true;
 }
 
+type ParkSweepOutcome = "kept" | "sent" | "failed";
+
+/**
+ * A swept job under the lifetime cap stays parked when noteParked is available.
+ * Past the cap it is produced onto the DLQ. "failed" means the row must stay:
+ * the caller does not delete it.
+ */
+async function settleSweptPark<Body extends object, MessageType extends CrawlQueueMessage<Body>>(
+  message: MessageType,
+  deps: CrawlQueueDeps<Body, MessageType>,
+  parsed: ParsedCrawlBody,
+  errorMessage: string,
+  domain: string,
+  job: ParkedDrainJob<Body>,
+  lifetime: number
+): Promise<ParkSweepOutcome> {
+  const jobParsed = readCrawlQueueBody(job.body);
+  const fields = failureFields(jobParsed, message.attempts, {
+    domain,
+    error: errorMessage,
+    lifetime,
+    count: 1
+  });
+  if (jobParsed != null && lifetime <= CONGESTION_HOP_CAP) {
+    deps.log("warn", "crawl_domain_park_expired", fields);
+    recordCrawlCount(deps, "crawl_domain_park_expired", domain);
+    const stamped = withParkLifetime(job.body, lifetime);
+    if (deps.noteParked) {
+      try {
+        await deps.noteParked(domain, job.urlKey, stamped);
+        return "kept";
+      } catch {
+        return "failed";
+      }
+    }
+    const sent = await sendRequeue(message, deps, jobParsed, errorMessage, stamped, BUSY_REQUEUE_CAP_SECONDS, 0);
+    if (!sent) return "failed";
+    if (deps.completeParked) {
+      try {
+        await deps.completeParked(domain, job.urlKey);
+      } catch {
+        return "failed";
+      }
+    }
+    return "sent";
+  }
+  deps.log("warn", "crawl_domain_park_lifetime", {
+    ...fields,
+    reason: "crawl_domain_park_lifetime"
+  });
+  recordCrawlCount(deps, "crawl_domain_park_lifetime", domain);
+  if (!deps.deadLetter) return "failed";
+  try {
+    await deps.deadLetter(withParkLifetime(job.body, lifetime), "crawl_domain_park_lifetime", domain);
+  } catch {
+    return "failed";
+  }
+  if (deps.completeParked) {
+    try {
+      await deps.completeParked(domain, job.urlKey);
+    } catch {
+      return "failed";
+    }
+  }
+  return "sent";
+}
+
+function sweepWake<Body extends object>(body: Body, hops: number, sweep: boolean): Body {
+  const copy = { ...body, congestionHops: hops } as Body & { congestionSweep?: boolean };
+  if (sweep) copy.congestionSweep = true;
+  else delete copy.congestionSweep;
+  return copy;
+}
+
 async function settleCrawlFailure<Body extends object, MessageType extends CrawlQueueMessage<Body>>(
   message: MessageType,
   errorMessage: string,
@@ -698,6 +792,23 @@ async function settleCrawlFailure<Body extends object, MessageType extends Crawl
   const decision = deps.failureAction(errorMessage, message.attempts, urlFailures);
   if (decision.action === "requeue") {
     const nextHops = parsed.hops + 1;
+    const random = deps.random ?? Math.random;
+    if (parsed.congestionWake && errorMessage.startsWith("domain_busy:")) {
+      const slotWaitMs = prefixedWaitMs(errorMessage, "domain_busy:");
+      if (slotWaitMs > 0 && slotWaitMs <= DOMAIN_SLOT_WAIT_MS) {
+        const delaySeconds = domainContinueDelaySeconds(slotWaitMs, random);
+        await rememberWake(deps, parsed, message.attempts, parsed.congestionWake, delaySeconds, parsed.hops);
+        deps.log("info", "crawl_domain_wake", failureFields(parsed, message.attempts, {
+          domain: parsed.congestionWake,
+          error: errorMessage,
+          hops: parsed.hops,
+          delaySeconds
+        }));
+        const sent = await sendRequeue(message, deps, parsed, errorMessage, message.body, delaySeconds, parsed.hops);
+        if (sent) message.ack();
+        return;
+      }
+    }
     if (nextHops > CONGESTION_HOP_CAP) {
       if (!parsed.congestionSweep) {
         deps.log("warn", "crawl_congestion_cap", failureFields(parsed, message.attempts, {
@@ -708,66 +819,47 @@ async function settleCrawlFailure<Body extends object, MessageType extends Crawl
         recordCrawlCount(deps, "crawl_congestion_cap");
       }
       if (parsed.congestionWake && deps.sweepDomain) {
+        const domain = parsed.congestionWake;
         let swept: DomainSweepResult<Body> = { jobs: [], remaining: 0 };
         try {
-          swept = await deps.sweepDomain(parsed.congestionWake);
+          swept = await deps.sweepDomain(domain);
         } catch (error) {
           const detail = error instanceof Error ? error.message : "unknown";
           deps.log("warn", "crawl_domain_park_sweep_failed", failureFields(parsed, message.attempts, {
-            domain: parsed.congestionWake,
+            domain,
             detail
           }));
         }
         let stillParked = swept.remaining;
+        let kept = 0;
         for (const job of swept.jobs) {
           const jobParsed = readCrawlQueueBody(job.body);
-          const lifetime = (jobParsed?.lifetime ?? 0) + 1;
-          deps.log("warn", "crawl_domain_park_expired", failureFields(jobParsed, message.attempts, {
-            domain: parsed.congestionWake,
-            error: errorMessage,
-            lifetime,
-            count: 1
-          }));
-          recordCrawlCount(deps, "crawl_domain_park_expired");
-          const recycle = jobParsed != null && lifetime <= CONGESTION_HOP_CAP;
-          if (recycle) {
-            const sent = await sendRequeue(
-              message,
-              deps,
-              jobParsed,
-              errorMessage,
-              withParkLifetime(job.body, lifetime),
-              BUSY_REQUEUE_CAP_SECONDS,
-              0
-            );
-            if (!sent) {
-              stillParked += 1;
-              continue;
-            }
-          }
-          if (deps.completeParked) {
-            try {
-              await deps.completeParked(parsed.congestionWake, job.urlKey);
-            } catch {
-              stillParked += 1;
-            }
-          }
+          const lifetime = jobParsed == null ? CONGESTION_HOP_CAP + 1 : jobParsed.lifetime + 1;
+          const outcome = await settleSweptPark(message, deps, parsed, errorMessage, domain, job, lifetime);
+          if (outcome === "kept") kept += 1;
+          else if (outcome === "failed") stillParked += 1;
         }
         if (stillParked > 0) {
-          const again = { ...message.body, congestionSweep: true, congestionHops: CONGESTION_HOP_CAP } as Body;
-          await rememberWake(deps, parsed, message.attempts, parsed.congestionWake, 1, CONGESTION_HOP_CAP);
+          const again = sweepWake(message.body, CONGESTION_HOP_CAP, true);
+          await rememberWake(deps, parsed, message.attempts, domain, 1, CONGESTION_HOP_CAP);
           const sent = await sendRequeue(message, deps, parsed, errorMessage, again, 1, CONGESTION_HOP_CAP);
           if (sent) message.ack();
           return;
         }
-        await rememberWake(deps, parsed, message.attempts, parsed.congestionWake, 0, parsed.hops);
+        if (kept > 0) {
+          const again = sweepWake(message.body, 0, false);
+          await rememberWake(deps, parsed, message.attempts, domain, 1, 0);
+          const sent = await sendRequeue(message, deps, parsed, errorMessage, again, 1, 0);
+          if (sent) message.ack();
+          return;
+        }
+        await rememberWake(deps, parsed, message.attempts, domain, 0, parsed.hops);
       } else if (parsed.congestionWake) {
         await rememberWake(deps, parsed, message.attempts, parsed.congestionWake, 0, parsed.hops);
       }
       message.ack();
       return;
     }
-    const random = deps.random ?? Math.random;
     if (parsed.congestionWake && errorMessage.startsWith("domain_busy:")) {
       const delaySeconds = domainBusyWakeDelaySeconds(decision.waitMs, parsed.hops, random);
       await rememberWake(deps, parsed, message.attempts, parsed.congestionWake, delaySeconds, nextHops);

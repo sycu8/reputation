@@ -559,3 +559,118 @@ test("sweep returns a chunk and deletes a row only after complete", async () => 
   const after = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
   assert.equal(after.waiting, 1);
 });
+
+test("revise-park stores the lifetime and a missing row is not created", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  await park(coordinator, "browser", "tenant\u001fhttps://hot.example/a", {
+    payload: { url: "https://hot.example/a" },
+    congestionLifetime: 1
+  }, "tenant-a");
+  const swept = await postLane(coordinator, "/internal/sweep", { lane: "browser", limit: 1 });
+  const revised = await postLane(coordinator, "/internal/revise-park", {
+    lane: "browser",
+    urlKey: swept.jobs[0].urlKey,
+    bodyJson: JSON.stringify({ payload: { url: "https://hot.example/a" }, congestionLifetime: 4 })
+  });
+  assert.equal(revised.ok, true);
+  const again = await postLane(coordinator, "/internal/sweep", { lane: "browser", limit: 1 });
+  assert.equal(JSON.parse(again.jobs[0].bodyJson).congestionLifetime, 4);
+  const missing = await coordinator.fetch(new Request("https://do.internal/internal/revise-park", {
+    method: "POST",
+    body: JSON.stringify({ lane: "browser", urlKey: "missing", bodyJson: "{}" })
+  }));
+  assert.equal(missing.status, 404);
+  const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(state.waiting, 1);
+});
+
+test("a deep park raises the browser lease budget and a release without a lease id keeps the slot", async () => {
+  let now = 1_700_000_000_000;
+  const coordinator = new DomainCoordinatorDO(new FakeState(), { nowMs: () => now });
+  for (let index = 0; index < 64; index += 1) {
+    await park(coordinator, "browser", `tenant\u001fhttps://hot.example/${index}`, {
+      payload: { url: `https://hot.example/${index}` }
+    }, "tenant-a");
+  }
+  const ids = [];
+  for (let slot = 0; slot < 4; slot += 1) {
+    const acquired = await coordinator.fetch(new Request("https://do.internal/internal/acquire", {
+      method: "POST",
+      body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
+    }));
+    assert.equal(acquired.status, 200, `slot ${slot}`);
+    ids.push((await acquired.json()).leaseId);
+  }
+  const denied = await coordinator.fetch(new Request("https://do.internal/internal/acquire", {
+    method: "POST",
+    body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
+  }));
+  assert.equal(denied.status, 429);
+  const held = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(held.leases, 4);
+  assert.equal(held.state.active_requests, 4);
+
+  const bare = await coordinator.fetch(new Request("https://do.internal/internal/release", {
+    method: "POST",
+    body: JSON.stringify({ domain: "hot.example", status: 200, retryAfterMs: 0 })
+  }));
+  assert.equal(bare.status, 200);
+  const afterBare = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(afterBare.leases, 4);
+  const stillDenied = await coordinator.fetch(new Request("https://do.internal/internal/acquire", {
+    method: "POST",
+    body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
+  }));
+  assert.equal(stillDenied.status, 429);
+
+  const released = await coordinator.fetch(new Request("https://do.internal/internal/release", {
+    method: "POST",
+    body: JSON.stringify({ domain: "hot.example", status: 200, leaseId: ids[0] })
+  }));
+  assert.equal(released.status, 200);
+  const granted = await coordinator.fetch(new Request("https://do.internal/internal/acquire", {
+    method: "POST",
+    body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
+  }));
+  assert.equal(granted.status, 200);
+  const after = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(after.leases, 4);
+});
+
+test("a domain lease alarm stays in the future and then frees the slot", async () => {
+  const alarms = [];
+  const fake = new FakeState();
+  fake.storage.setAlarm = async (at) => { alarms.push(at); };
+  fake.storage.deleteAlarm = async () => { alarms.push("cleared"); };
+  let now = 1_700_000_000_000;
+  const coordinator = new DomainCoordinatorDO(fake, { nowMs: () => now });
+  const acquired = await coordinator.fetch(new Request("https://do.internal/internal/acquire", {
+    method: "POST",
+    body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
+  }));
+  assert.equal(acquired.status, 200);
+  alarms.length = 0;
+  let rearms = 0;
+  for (let step = 0; step < 100; step += 1) {
+    await coordinator.alarm();
+    const scheduled = alarms[alarms.length - 1];
+    if (typeof scheduled === "number" && scheduled <= now) rearms += 1;
+  }
+  assert.equal(rearms, 0);
+  const numeric = alarms.filter((item) => typeof item === "number");
+  assert.ok(numeric.length > 0);
+  assert.ok(numeric.every((item) => item >= now + 60_000));
+  const held = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(held.leases, 1);
+  now += 60_001;
+  await coordinator.alarm();
+  const cleared = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(cleared.leases, 0);
+  assert.equal(cleared.state.active_requests, 0);
+  assert.ok(alarms.includes("cleared"));
+  const next = await coordinator.fetch(new Request("https://do.internal/internal/acquire", {
+    method: "POST",
+    body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
+  }));
+  assert.equal(next.status, 200);
+});
