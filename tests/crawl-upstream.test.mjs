@@ -460,3 +460,102 @@ test("a wake token stays one chain across the delivery lag and the alarm expires
   assert.equal(state.parkEvents.length, 3);
   assert.ok(alarms.includes("cleared"));
 });
+
+test("a fresh wake with a stale park does not re-arm the alarm for now", async () => {
+  const alarms = [];
+  const fake = new FakeState();
+  fake.storage.setAlarm = async (at) => { alarms.push(at); };
+  fake.storage.deleteAlarm = async () => { alarms.push("cleared"); };
+  let now = 1_700_000_000_000;
+  const coordinator = new DomainCoordinatorDO(fake, { nowMs: () => now });
+  await park(coordinator, "browser", "tenant\u001fhttps://hot.example/stale", { payload: { url: "https://hot.example/stale" }, tenantId: "tenant-a" }, "tenant-a", "mon-a");
+  now += 20 * 60 * 1000;
+  await postLane(coordinator, "/internal/note-wake", { lane: "browser", delaySeconds: 30, hops: 1 });
+  alarms.length = 0;
+  let rearms = 0;
+  for (let step = 0; step < 100; step += 1) {
+    await coordinator.alarm();
+    const scheduled = alarms[alarms.length - 1];
+    if (typeof scheduled === "number" && scheduled <= now) rearms += 1;
+  }
+  assert.equal(rearms, 0);
+  const numeric = alarms.filter((item) => typeof item === "number");
+  assert.ok(numeric.length > 0);
+  assert.ok(numeric.every((item) => item >= now + 60_000));
+  const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(state.waiting, 1);
+  assert.equal(state.expired, 0);
+});
+
+test("an expired park logs and counts each job", async () => {
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (line) => { warnings.push(String(line)); };
+  try {
+    let now = 1_700_000_000_000;
+    const coordinator = new DomainCoordinatorDO(new FakeState(), { nowMs: () => now });
+    await park(coordinator, "browser", "expiry-probe\u001fhttps://hot.example/a", {
+      jobId: "job-a",
+      tenantId: "expiry-probe",
+      payload: { url: "https://hot.example/a" }
+    }, "expiry-probe", "mon-a");
+    await park(coordinator, "browser", "expiry-probe\u001fhttps://hot.example/b", {
+      jobId: "job-b",
+      tenantId: "expiry-probe",
+      payload: { url: "https://hot.example/b" }
+    }, "expiry-probe", "mon-a");
+    now += 60 * 60 * 1000;
+    await coordinator.alarm();
+    const expired = warnings.map((line) => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter((item) => item && item.message === "crawl_domain_park_expired" && item.tenantId === "expiry-probe");
+    assert.equal(expired.length, 2);
+    assert.ok(expired.every((item) => item.count === 1));
+    const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+    assert.equal(state.waiting, 0);
+    assert.equal(state.expired, 2);
+  } finally {
+    console.warn = original;
+  }
+});
+
+test("take rotates across tenants and stays oldest-first inside one tenant", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  let token = "";
+  for (const url of ["h1", "h2", "h3"]) {
+    const parked = await park(coordinator, "browser", `heavy\u001f${url}`, {
+      tenantId: "heavy",
+      payload: { url: `https://hot.example/${url}` }
+    }, "heavy");
+    if (!token) token = parked.token;
+  }
+  await park(coordinator, "browser", "light\u001flight", {
+    tenantId: "light",
+    payload: { url: "https://hot.example/light" }
+  }, "light");
+  const order = [];
+  for (let step = 0; step < 4; step += 1) {
+    const taken = await postLane(coordinator, "/internal/take", { lane: "browser", limit: 1, token });
+    assert.equal(taken.jobs.length, 1);
+    order.push(JSON.parse(taken.jobs[0].bodyJson).tenantId);
+    await postLane(coordinator, "/internal/complete", { lane: "browser", urlKey: taken.jobs[0].urlKey });
+  }
+  assert.deepEqual(order, ["heavy", "light", "heavy", "heavy"]);
+});
+
+test("sweep returns a chunk and deletes a row only after complete", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  for (const url of ["a", "b", "c"]) {
+    await park(coordinator, "browser", `tenant\u001fhttps://hot.example/${url}`, {
+      payload: { url: `https://hot.example/${url}` }
+    }, "tenant-a");
+  }
+  const swept = await postLane(coordinator, "/internal/sweep", { lane: "browser", limit: 2 });
+  assert.equal(swept.jobs.length, 2);
+  assert.equal(swept.remaining, 1);
+  const during = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(during.waiting, 3);
+  for (const job of swept.jobs) await postLane(coordinator, "/internal/complete", { lane: "browser", urlKey: job.urlKey });
+  const after = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(after.waiting, 1);
+});

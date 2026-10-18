@@ -284,6 +284,8 @@ export interface ParsedCrawlBody {
   url: string;
   hops: number;
   congestionWake: string | undefined;
+  congestionSweep: boolean;
+  lifetime: number;
   jobId: string | undefined;
   traceId: string | undefined;
   tenantId: string | undefined;
@@ -299,6 +301,8 @@ export function readCrawlQueueBody(body: unknown): ParsedCrawlBody | null {
   if (typeof url !== "string" || url.length === 0) return null;
   const hopsRaw = record.congestionHops;
   const hops = typeof hopsRaw === "number" && Number.isFinite(hopsRaw) && hopsRaw > 0 ? Math.floor(hopsRaw) : 0;
+  const lifeRaw = record.congestionLifetime;
+  const lifetime = typeof lifeRaw === "number" && Number.isFinite(lifeRaw) && lifeRaw > 0 ? Math.floor(lifeRaw) : 0;
   const text = (key: string): string | undefined => {
     const value = record[key];
     return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -307,6 +311,8 @@ export function readCrawlQueueBody(body: unknown): ParsedCrawlBody | null {
     url,
     hops,
     congestionWake: text("congestionWake"),
+    congestionSweep: record.congestionSweep === true,
+    lifetime,
     jobId: text("jobId"),
     traceId: text("traceId"),
     tenantId: text("tenantId"),
@@ -371,6 +377,14 @@ export interface ParkedDrainJob<Body> {
   urlKey: string;
 }
 
+/** One sweep invocation returns at most this many jobs. The rest stay parked until the next wake. */
+export const SWEEP_CHUNK = 32;
+
+export interface DomainSweepResult<Body> {
+  jobs: Array<ParkedDrainJob<Body>>;
+  remaining: number;
+}
+
 export interface CrawlQueueDeps<Body, MessageType extends CrawlQueueMessage<Body>> {
   worker: "fetch" | "browser";
   process(message: MessageType): Promise<void>;
@@ -393,8 +407,10 @@ export interface CrawlQueueDeps<Body, MessageType extends CrawlQueueMessage<Body
   }): Promise<DomainParkResult | null>;
   /** Move or clear the domain wake so a second queue send is not scheduled. delaySeconds 0 clears it. */
   noteWake?(domain: string, delaySeconds: number, hops: number): Promise<void>;
-  /** Return parked jobs and delete them. Used when a wake hits the hop cap. */
-  sweepDomain?(domain: string): Promise<Body[]>;
+  /** Return one chunk of parked jobs without deleting them. */
+  sweepDomain?(domain: string): Promise<DomainSweepResult<Body>>;
+  /** Delete one parked row after its re-send has been accepted. */
+  completeParked?(domain: string, urlKey: string): Promise<void>;
   /** Analytics Engine counter. A throw must not skip the ack. */
   count?(event: string): void;
   random?: () => number;
@@ -489,6 +505,10 @@ function withoutCongestionWake<Body extends object>(body: Body): Body {
   delete copy.congestionWake;
   delete copy.congestionWakeToken;
   return copy;
+}
+
+function withParkLifetime<Body extends object>(body: Body, lifetime: number): Body {
+  return { ...withoutCongestionWake(body), congestionHops: 0, congestionLifetime: lifetime } as Body;
 }
 
 /** A wake carries the domain and token only. The carrier job's tenant is not charged or logged. */
@@ -679,36 +699,70 @@ async function settleCrawlFailure<Body extends object, MessageType extends Crawl
   if (decision.action === "requeue") {
     const nextHops = parsed.hops + 1;
     if (nextHops > CONGESTION_HOP_CAP) {
-      deps.log("warn", "crawl_congestion_cap", failureFields(parsed, message.attempts, {
-        error: errorMessage,
-        hops: parsed.hops,
-        domain: parsed.congestionWake
-      }));
-      recordCrawlCount(deps, "crawl_congestion_cap");
-      if (parsed.congestionWake) {
-        let swept: Body[] = [];
-        if (deps.sweepDomain) {
-          try {
-            swept = await deps.sweepDomain(parsed.congestionWake);
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : "unknown";
-            deps.log("warn", "crawl_domain_park_sweep_failed", failureFields(parsed, message.attempts, {
-              domain: parsed.congestionWake,
-              detail
-            }));
-          }
-        } else {
-          await rememberWake(deps, parsed, message.attempts, parsed.congestionWake, 0, parsed.hops);
+      if (!parsed.congestionSweep) {
+        deps.log("warn", "crawl_congestion_cap", failureFields(parsed, message.attempts, {
+          error: errorMessage,
+          hops: parsed.hops,
+          domain: parsed.congestionWake
+        }));
+        recordCrawlCount(deps, "crawl_congestion_cap");
+      }
+      if (parsed.congestionWake && deps.sweepDomain) {
+        let swept: DomainSweepResult<Body> = { jobs: [], remaining: 0 };
+        try {
+          swept = await deps.sweepDomain(parsed.congestionWake);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : "unknown";
+          deps.log("warn", "crawl_domain_park_sweep_failed", failureFields(parsed, message.attempts, {
+            domain: parsed.congestionWake,
+            detail
+          }));
         }
-        for (const job of swept) {
-          const jobParsed = readCrawlQueueBody(job);
+        let stillParked = swept.remaining;
+        for (const job of swept.jobs) {
+          const jobParsed = readCrawlQueueBody(job.body);
+          const lifetime = (jobParsed?.lifetime ?? 0) + 1;
           deps.log("warn", "crawl_domain_park_expired", failureFields(jobParsed, message.attempts, {
             domain: parsed.congestionWake,
-            error: errorMessage
+            error: errorMessage,
+            lifetime,
+            count: 1
           }));
-          if (!jobParsed) continue;
-          await sendRequeue(message, deps, jobParsed, errorMessage, withoutCongestionWake(job), BUSY_REQUEUE_CAP_SECONDS, 0);
+          recordCrawlCount(deps, "crawl_domain_park_expired");
+          const recycle = jobParsed != null && lifetime <= CONGESTION_HOP_CAP;
+          if (recycle) {
+            const sent = await sendRequeue(
+              message,
+              deps,
+              jobParsed,
+              errorMessage,
+              withParkLifetime(job.body, lifetime),
+              BUSY_REQUEUE_CAP_SECONDS,
+              0
+            );
+            if (!sent) {
+              stillParked += 1;
+              continue;
+            }
+          }
+          if (deps.completeParked) {
+            try {
+              await deps.completeParked(parsed.congestionWake, job.urlKey);
+            } catch {
+              stillParked += 1;
+            }
+          }
         }
+        if (stillParked > 0) {
+          const again = { ...message.body, congestionSweep: true, congestionHops: CONGESTION_HOP_CAP } as Body;
+          await rememberWake(deps, parsed, message.attempts, parsed.congestionWake, 1, CONGESTION_HOP_CAP);
+          const sent = await sendRequeue(message, deps, parsed, errorMessage, again, 1, CONGESTION_HOP_CAP);
+          if (sent) message.ack();
+          return;
+        }
+        await rememberWake(deps, parsed, message.attempts, parsed.congestionWake, 0, parsed.hops);
+      } else if (parsed.congestionWake) {
+        await rememberWake(deps, parsed, message.attempts, parsed.congestionWake, 0, parsed.hops);
       }
       message.ack();
       return;

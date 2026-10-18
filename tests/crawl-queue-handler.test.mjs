@@ -449,6 +449,7 @@ test("a domain wake that is still busy is re-sent once", async () => {
 test("a wake with parked jobs left uses a short delay and does not climb hops", async () => {
   const message = fake({ ...job("https://hot.example/p0", 4), congestionWake: "hot.example" });
   const sent = [];
+  const noted = [];
   await handleCrawlQueueBatch([message], {
     worker: "fetch",
     async process() { throw new Error("domain_wake:1000"); },
@@ -458,10 +459,37 @@ test("a wake with parked jobs left uses a short delay and does not climb hops", 
     async requeue(body, delaySeconds, hops) {
       sent.push({ wake: body.congestionWake, delaySeconds, hops });
     },
+    async noteWake(_domain, delaySeconds, hops) {
+      noted.push({ delaySeconds, hops });
+    },
     random: () => 0,
     log() {}
   });
   assert.deepEqual(sent, [{ wake: "hot.example", delaySeconds: 1, hops: 0 }]);
+  assert.deepEqual(noted, [{ delaySeconds: 1, hops: 0 }]);
+  assert.deepEqual(message.ops, [{ op: "ack" }]);
+});
+
+test("overflow with fallback false still re-sends the original job", async () => {
+  const message = fake(job("https://hot.example/overflow"));
+  const sent = [];
+  await handleCrawlQueueBatch([message], {
+    worker: "browser",
+    async process() { throw new Error("domain_busy:250"); },
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(body, delaySeconds, hops) {
+      sent.push({ url: body.payload.url, wake: body.congestionWake ?? null, delaySeconds, hops });
+    },
+    async parkDomain() {
+      return { overflow: true, fallback: false, scheduleWake: false, duplicate: false, token: "" };
+    },
+    log() {}
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, "https://hot.example/overflow");
+  assert.equal(sent[0].wake, null);
   assert.deepEqual(message.ops, [{ op: "ack" }]);
 });
 
@@ -692,23 +720,83 @@ test("a hop-capped wake sweeps each parked job and counts once", async () => {
   const replayed = [];
   const counts = [];
   const capEvents = [];
+  let waitingAtRequeue = null;
   await handleCrawlQueueBatch([capped], {
     ...parkDeps(coordinator, replayed, capEvents, async () => { throw new Error("domain_busy:60000"); }),
-    async sweepDomain(domain) {
+    async requeue(body, delaySeconds, hops) {
+      const during = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+      waitingAtRequeue = during.waiting;
+      replayed.push({
+        wake: body.congestionWake ?? null,
+        url: body.payload.url,
+        delaySeconds,
+        hops,
+        lifetime: body.congestionLifetime
+      });
+    },
+    async sweepDomain() {
       const response = await coordinator.fetch(new Request("https://do.internal/internal/sweep", {
         method: "POST",
-        body: JSON.stringify({ lane: "browser", domain })
+        body: JSON.stringify({ lane: "browser", limit: 32 })
       }));
       const swept = await response.json();
-      return (swept.jobs ?? []).map((job) => JSON.parse(job.bodyJson));
+      return {
+        jobs: (swept.jobs ?? []).map((item) => ({ body: JSON.parse(item.bodyJson), urlKey: item.urlKey })),
+        remaining: swept.remaining
+      };
+    },
+    async completeParked(_domain, urlKey) {
+      const response = await coordinator.fetch(new Request("https://do.internal/internal/complete", {
+        method: "POST",
+        body: JSON.stringify({ lane: "browser", urlKey })
+      }));
+      assert.equal(response.status, 200);
     },
     count(event) { counts.push(event); }
   });
   assert.deepEqual(capped.ops, [{ op: "ack" }]);
-  assert.deepEqual(counts, ["crawl_congestion_cap"]);
+  assert.deepEqual(counts, ["crawl_congestion_cap", "crawl_domain_park_expired", "crawl_domain_park_expired"]);
   assert.equal(capEvents.filter((item) => item.event === "crawl_domain_park_expired").length, 2);
   assert.equal(replayed.length, 2);
+  assert.ok(waitingAtRequeue > 0);
   assert.deepEqual(replayed.map((item) => item.hops), [0, 0]);
+  assert.deepEqual(replayed.map((item) => item.lifetime), [1, 1]);
   const stateAfter = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
   assert.equal(stateAfter.waiting, 0);
+});
+
+test("a swept job past the lifetime cap is deleted instead of requeued", async () => {
+  const message = fake({
+    ...job("https://hot.example/", CONGESTION_HOP_CAP),
+    congestionWake: "hot.example",
+    congestionSweep: true
+  });
+  const sent = [];
+  const completed = [];
+  const counts = [];
+  const events = [];
+  const parkedBody = { ...job("https://hot.example/old"), congestionLifetime: CONGESTION_HOP_CAP };
+  await handleCrawlQueueBatch([message], {
+    worker: "browser",
+    async process() { throw new Error("domain_busy:60000"); },
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(body, delaySeconds, hops) {
+      sent.push({ url: body.payload.url, hops, lifetime: body.congestionLifetime, sweep: body.congestionSweep ?? null });
+    },
+    async noteWake() {},
+    async sweepDomain() {
+      return { jobs: [{ body: parkedBody, urlKey: "k1" }], remaining: 0 };
+    },
+    async completeParked(_domain, urlKey) { completed.push(urlKey); },
+    count(event) { counts.push(event); },
+    log(_level, event) { events.push(event); }
+  });
+  assert.deepEqual(sent, []);
+  assert.deepEqual(completed, ["k1"]);
+  assert.equal(counts.includes("crawl_congestion_cap"), false);
+  assert.deepEqual(counts, ["crawl_domain_park_expired"]);
+  assert.ok(events.includes("crawl_domain_park_expired"));
+  assert.deepEqual(message.ops, [{ op: "ack" }]);
 });

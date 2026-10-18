@@ -18,6 +18,13 @@ export interface JobEnvelope<T> {
   congestionWake?: string | undefined;
   /** Matches DomainCoordinatorDO's in-flight wake. A stale token is acked and does not drain. */
   congestionWakeToken?: string | undefined;
+  /** Set on a wake that is continuing a chunked sweep. Does not count another hop-cap event. */
+  congestionSweep?: boolean | undefined;
+  /**
+   * How many times this parked job has been swept back onto the queue.
+   * The wake hop reset does not clear it, so a backoff that never ends cannot recycle the job forever.
+   */
+  congestionLifetime?: number | undefined;
   payload: T;
 }
 
