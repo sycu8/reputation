@@ -219,9 +219,13 @@ async function deadLetterFetch(env: Env, body: JobEnvelope<CrawlPayload>, reason
   });
 }
 
-async function sweepFetchDomain(env: Env, domain: string): Promise<DomainSweepResult<JobEnvelope<CrawlPayload>>> {
-  const swept = await postDomain<{ jobs?: Array<{ bodyJson?: unknown; urlKey?: unknown }>; remaining?: unknown }>(
-    env, domain, "/internal/sweep", { lane: "fetch", limit: SWEEP_CHUNK }
+async function sweepFetchDomain(
+  env: Env,
+  domain: string,
+  options?: { continueSweep?: boolean }
+): Promise<DomainSweepResult<JobEnvelope<CrawlPayload>>> {
+  const swept = await postDomain<{ jobs?: Array<{ bodyJson?: unknown; urlKey?: unknown }>; remaining?: unknown; unvisited?: unknown }>(
+    env, domain, "/internal/sweep", { lane: "fetch", limit: SWEEP_CHUNK, continue: options?.continueSweep === true }
   );
   if (!swept) throw new Error("domain_park_unavailable");
   const jobs: Array<{ body: JobEnvelope<CrawlPayload>; urlKey: string }> = [];
@@ -238,7 +242,12 @@ async function sweepFetchDomain(env: Env, domain: string): Promise<DomainSweepRe
       }
     }
   }
-  return { jobs, remaining: Number(swept.remaining ?? 0) };
+  const remaining = Number(swept.remaining ?? 0);
+  return {
+    jobs,
+    remaining,
+    unvisited: typeof swept.unvisited === "number" ? swept.unvisited : remaining
+  };
 }
 
 function replayFetch(env: Env, body: JobEnvelope<CrawlPayload>): { message: Message<JobEnvelope<CrawlPayload>>; pending: Array<Promise<unknown>> } {
@@ -486,7 +495,7 @@ function queueDeps(env: Env) {
       monitorId: string | undefined;
     }) => parkFetchDomain(env, input),
     noteWake: (domain: string, delaySeconds: number, hops: number) => noteFetchWake(env, domain, delaySeconds, hops),
-    sweepDomain: (domain: string) => sweepFetchDomain(env, domain),
+    sweepDomain: (domain: string, options?: { continueSweep?: boolean }) => sweepFetchDomain(env, domain, options),
     completeParked: (domain: string, urlKey: string) => completeFetchParked(env, domain, urlKey),
     noteParked: (domain: string, urlKey: string, body: JobEnvelope<CrawlPayload>) => noteFetchParked(env, domain, urlKey, body),
     deadLetter: (body: JobEnvelope<CrawlPayload>, reason: string, domain: string) => deadLetterFetch(env, body, reason, domain),

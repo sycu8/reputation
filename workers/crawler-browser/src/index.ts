@@ -136,9 +136,13 @@ async function deadLetterBrowser(env: Env, body: JobEnvelope<CrawlPayload>, reas
   });
 }
 
-async function sweepBrowserDomain(env: Env, domain: string): Promise<DomainSweepResult<JobEnvelope<CrawlPayload>>> {
-  const swept = await postDomain<{ jobs?: Array<{ bodyJson?: unknown; urlKey?: unknown }>; remaining?: unknown }>(
-    env, domain, "/internal/sweep", { lane: "browser", limit: SWEEP_CHUNK }
+async function sweepBrowserDomain(
+  env: Env,
+  domain: string,
+  options?: { continueSweep?: boolean }
+): Promise<DomainSweepResult<JobEnvelope<CrawlPayload>>> {
+  const swept = await postDomain<{ jobs?: Array<{ bodyJson?: unknown; urlKey?: unknown }>; remaining?: unknown; unvisited?: unknown }>(
+    env, domain, "/internal/sweep", { lane: "browser", limit: SWEEP_CHUNK, continue: options?.continueSweep === true }
   );
   if (!swept) throw new Error("domain_park_unavailable");
   const jobs: Array<{ body: JobEnvelope<CrawlPayload>; urlKey: string }> = [];
@@ -155,7 +159,12 @@ async function sweepBrowserDomain(env: Env, domain: string): Promise<DomainSweep
       }
     }
   }
-  return { jobs, remaining: Number(swept.remaining ?? 0) };
+  const remaining = Number(swept.remaining ?? 0);
+  return {
+    jobs,
+    remaining,
+    unvisited: typeof swept.unvisited === "number" ? swept.unvisited : remaining
+  };
 }
 
 function replayBrowser(env: Env, body: JobEnvelope<CrawlPayload>): { message: Message<JobEnvelope<CrawlPayload>>; pending: Array<Promise<unknown>> } {
@@ -421,7 +430,7 @@ function queueDeps(env: Env) {
       monitorId: string | undefined;
     }) => parkBrowserDomain(env, input),
     noteWake: (domain: string, delaySeconds: number, hops: number) => noteBrowserWake(env, domain, delaySeconds, hops),
-    sweepDomain: (domain: string) => sweepBrowserDomain(env, domain),
+    sweepDomain: (domain: string, options?: { continueSweep?: boolean }) => sweepBrowserDomain(env, domain, options),
     completeParked: (domain: string, urlKey: string) => completeBrowserParked(env, domain, urlKey),
     noteParked: (domain: string, urlKey: string, body: JobEnvelope<CrawlPayload>) => noteBrowserParked(env, domain, urlKey, body),
     deadLetter: (body: JobEnvelope<CrawlPayload>, reason: string, domain: string) => deadLetterBrowser(env, body, reason, domain),

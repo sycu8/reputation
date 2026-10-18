@@ -53,6 +53,11 @@
   "vars": {
     "BROWSER_POOL_MAX": "200"
   },
+  "queues": {
+    "producers": [
+      { "binding": "CRAWL_DLQ", "queue": "reputa-crawl-dlq-dev" }
+    ]
+  },
   "migrations": [
     {
       "tag": "v1",
@@ -80,6 +85,11 @@
       "name": "reputa-state-production",
       "vars": {
         "BROWSER_POOL_MAX": "200"
+      },
+      "queues": {
+        "producers": [
+          { "binding": "CRAWL_DLQ", "queue": "reputa-crawl-dlq-production" }
+        ]
       }
     }
   }

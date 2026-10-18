@@ -30,6 +30,11 @@ export interface JobEnvelope<T> {
   parkExpiredDomain?: string | undefined;
   /** ISO time the DLQ send was accepted. */
   parkExpiredAt?: string | undefined;
+  /**
+   * How many times this domain wake was sent again because the slot wait was within one lease.
+   * This climbs the 2s–30s delay only. It does not climb congestionHops or the park lifetime.
+   */
+  congestionSlotHops?: number | undefined;
   payload: T;
 }
 

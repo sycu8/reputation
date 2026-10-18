@@ -8,6 +8,7 @@ import {
   CONGESTION_HOP_CAP,
   domainBusyWakeDelaySeconds,
   domainContinueDelaySeconds,
+  domainSlotWaitDelaySeconds,
   drainDomainWake,
   fetchFailureAction,
   handleCrawlQueueBatch
@@ -339,11 +340,13 @@ class SqlAdapter {
 class FakeState {
   constructor() {
     const sql = new SqlAdapter();
+    let alarm = null;
     this.storage = {
       sql,
       transaction: async (closure) => closure(),
-      setAlarm: async () => {},
-      deleteAlarm: async () => {}
+      setAlarm: async (at) => { alarm = at; },
+      getAlarm: async () => alarm,
+      deleteAlarm: async () => { alarm = null; }
     };
   }
 }
@@ -437,8 +440,8 @@ test("a domain wake that is still busy is re-sent once", async () => {
   };
   await handleCrawlQueueBatch([wake], deps);
   assert.equal(parked, 0);
-  assert.deepEqual(sent, [{ wake: "hot.example", url: "https://hot.example/p0", delaySeconds: domainContinueDelaySeconds(800, () => 0), hops: 3 }]);
-  assert.equal(sent[0].delaySeconds, 1);
+  assert.deepEqual(sent, [{ wake: "hot.example", url: "https://hot.example/p0", delaySeconds: domainSlotWaitDelaySeconds(0, () => 0), hops: 3 }]);
+  assert.equal(sent[0].delaySeconds, 2);
   assert.deepEqual(wake.ops, [{ op: "ack" }]);
 
   const more = fake(job("https://hot.example/later"));
@@ -484,7 +487,7 @@ test("a hop-capped slot wait does not sweep", async () => {
     random: () => 0,
     log() {}
   });
-  assert.deepEqual(sent, [{ delaySeconds: 1, hops: CONGESTION_HOP_CAP }]);
+  assert.deepEqual(sent, [{ delaySeconds: 2, hops: CONGESTION_HOP_CAP }]);
   assert.deepEqual(message.ops, [{ op: "ack" }]);
 });
 
@@ -940,4 +943,186 @@ test("a swept job under the lifetime cap stays parked and the wake resets", asyn
   assert.deepEqual(sent, [{ wake: "hot.example", delaySeconds: 1, hops: 0, sweep: null }]);
   assert.deepEqual(counts, ["crawl_domain_park_expired:hot.example"]);
   assert.deepEqual(message.ops, [{ op: "ack" }]);
+});
+
+test("a kept sweep chunk does not walk the unvisited rows", async () => {
+  const message = fake({
+    ...job("https://hot.example/", CONGESTION_HOP_CAP),
+    congestionWake: "hot.example",
+    congestionWakeToken: "tok"
+  });
+  const sent = [];
+  const dead = [];
+  await handleCrawlQueueBatch([message], {
+    worker: "browser",
+    async process() { throw new Error("domain_busy:120000"); },
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(body, delaySeconds, hops) {
+      sent.push({ delaySeconds, hops, sweep: body.congestionSweep ?? null });
+    },
+    async sweepDomain() {
+      return {
+        jobs: [{ body: job("https://hot.example/old"), urlKey: "k1" }],
+        remaining: 400,
+        unvisited: 400
+      };
+    },
+    async noteParked() {},
+    async deadLetter(_body, reason) { dead.push(reason); },
+    log() {}
+  });
+  assert.deepEqual(dead, []);
+  assert.deepEqual(sent, [{ delaySeconds: 1, hops: 0, sweep: null }]);
+});
+
+test("a short slot wait backs off from 2s to 30s without climbing hops", async () => {
+  let slot = 0;
+  const delays = [];
+  for (let step = 0; step < 6; step += 1) {
+    const message = fake({
+      ...job("https://hot.example/p0", 3),
+      congestionWake: "hot.example",
+      congestionSlotHops: slot
+    });
+    const sent = [];
+    await handleCrawlQueueBatch([message], {
+      worker: "browser",
+      async process() { throw new Error("domain_busy:800"); },
+      failureAction,
+      async noteUrlFailure() { return 0; },
+      async rememberSkip() {},
+      async requeue(body, delaySeconds, hops) {
+        sent.push({ delaySeconds, hops, slot: body.congestionSlotHops });
+      },
+      random: () => 0,
+      log() {}
+    });
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].hops, 3);
+    delays.push(sent[0].delaySeconds);
+    slot = sent[0].slot;
+  }
+  assert.deepEqual(delays, [2, 4, 8, 16, 30, 30]);
+});
+
+function slotWakeWrites(domains, horizonSeconds) {
+  let writes = 0;
+  for (let domain = 0; domain < domains; domain += 1) {
+    let hop = 0;
+    let elapsed = 0;
+    while (true) {
+      const delay = domainSlotWaitDelaySeconds(hop, () => 0);
+      elapsed += delay;
+      if (elapsed > horizonSeconds) break;
+      writes += 1;
+      hop += 1;
+    }
+  }
+  return writes;
+}
+
+test("three hot domains stay at or below the 57k queue-write baseline", () => {
+  const baseline = 57_000;
+  const parkRecycles = 6_300;
+  const slotWrites = slotWakeWrites(3, 3600);
+  const projected = baseline - parkRecycles + slotWrites;
+  assert.equal(slotWrites, 369);
+  assert.equal(projected, 51_069);
+  assert.ok(projected <= baseline);
+});
+
+test("more than 32 parked rows with a long backoff are not dead-lettered within 15 minutes", async () => {
+  let now = 1_700_000_000_000;
+  const start = now;
+  const coordinator = new DomainCoordinatorDO(new FakeState(), { nowMs: () => now });
+  for (let index = 0; index < 40; index += 1) {
+    const response = await coordinator.fetch(new Request("https://do.internal/internal/park", {
+      method: "POST",
+      body: JSON.stringify({
+        lane: "browser",
+        urlKey: `tenant\u001fhttps://hot.example/${index}`,
+        bodyJson: JSON.stringify(job(`https://hot.example/${index}`)),
+        delaySeconds: 30,
+        hops: 0,
+        tenantId: "tenant-a",
+        monitorId: "monitor-a"
+      })
+    }));
+    assert.equal(response.status, 200);
+  }
+  const dead = [];
+  const queue = [{
+    at: now,
+    body: {
+      ...job("https://hot.example/"),
+      congestionWake: "hot.example",
+      congestionWakeToken: "sim",
+      congestionHops: 0
+    }
+  }];
+  const horizon = start + 15 * 60 * 1000;
+  let steps = 0;
+  while (queue.length > 0 && steps < 500) {
+    queue.sort((left, right) => left.at - right.at);
+    const next = queue.shift();
+    if (next.at > horizon) break;
+    now = next.at;
+    const message = fake(next.body);
+    await handleCrawlQueueBatch([message], {
+      worker: "browser",
+      async process() { throw new Error("domain_busy:120000"); },
+      failureAction,
+      async noteUrlFailure() { return 0; },
+      async rememberSkip() {},
+      async requeue(body, delaySeconds, hops) {
+        queue.push({ at: now + delaySeconds * 1000, body: { ...body, congestionHops: hops } });
+      },
+      async noteWake(_domain, delaySeconds, hops) {
+        const response = await coordinator.fetch(new Request("https://do.internal/internal/note-wake", {
+          method: "POST",
+          body: JSON.stringify({ lane: "browser", delaySeconds, hops })
+        }));
+        assert.equal(response.status, 200);
+      },
+      async sweepDomain(_domain, options) {
+        const response = await coordinator.fetch(new Request("https://do.internal/internal/sweep", {
+          method: "POST",
+          body: JSON.stringify({ lane: "browser", limit: 32, continue: options?.continueSweep === true })
+        }));
+        assert.equal(response.status, 200);
+        const swept = await response.json();
+        return {
+          jobs: (swept.jobs ?? []).map((item) => ({ body: JSON.parse(item.bodyJson), urlKey: item.urlKey })),
+          remaining: swept.remaining,
+          unvisited: swept.unvisited
+        };
+      },
+      async noteParked(_domain, urlKey, body) {
+        const response = await coordinator.fetch(new Request("https://do.internal/internal/revise-park", {
+          method: "POST",
+          body: JSON.stringify({ lane: "browser", urlKey, bodyJson: JSON.stringify(body) })
+        }));
+        assert.equal(response.status, 200);
+      },
+      async completeParked(_domain, urlKey) {
+        const response = await coordinator.fetch(new Request("https://do.internal/internal/complete", {
+          method: "POST",
+          body: JSON.stringify({ lane: "browser", urlKey })
+        }));
+        assert.equal(response.status, 200);
+      },
+      async deadLetter(body, reason, domain) {
+        dead.push({ reason, domain, url: body.payload.url, lifetime: body.congestionLifetime });
+      },
+      random: () => 0,
+      log() {}
+    });
+    steps += 1;
+  }
+  assert.equal(dead.length, 0);
+  const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(state.waiting, 40);
+  assert.ok(steps > 0 && steps < 500);
 });

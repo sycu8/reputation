@@ -12,6 +12,11 @@ interface Env {
   DOMAIN_PARK_CAP?: string;
   /** Test clock for park expiry. Production leaves this unset. */
   nowMs?: () => number;
+  /**
+   * Producer for parks the alarm expires. The crawlers use the same queues.
+   * When this is unset the alarm leaves the row in place.
+   */
+  CRAWL_DLQ?: Queue;
 }
 
 function hasColumn(sql: SqlStorage, table: string, column: string): boolean {
@@ -1357,8 +1362,10 @@ export class DomainCoordinatorDO extends SqliteObject {
       token TEXT NOT NULL DEFAULT '',
       last_tenant TEXT
     )`);
+    ensureColumn(this.sql, "domain_waiters", "sweep_seen", "INTEGER NOT NULL DEFAULT 0");
     ensureColumn(this.sql, "domain_wake", "token", "TEXT NOT NULL DEFAULT ''");
     ensureColumn(this.sql, "domain_wake", "last_tenant", "TEXT");
+    ensureColumn(this.sql, "domain_wake", "sweep_gen", "INTEGER NOT NULL DEFAULT 0");
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_domain_waiters_tenant ON domain_waiters(lane, tenant_id, parked_at)`);
     this.sql.exec(`CREATE TABLE IF NOT EXISTS domain_park_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1378,7 +1385,7 @@ export class DomainCoordinatorDO extends SqliteObject {
 
   async alarm(): Promise<void> {
     const now = this.clock();
-    await this.state.storage.transaction(async () => {
+    const due = await this.state.storage.transaction(async () => {
       this.expireLeases(now);
       this.sql.exec(`DELETE FROM domain_park_events WHERE expired_at < ?`, now - PARK_EVENT_TTL_MS);
       const wakes = rows<{ key: string; wake_at: number }>(this.sql.exec(
@@ -1394,17 +1401,38 @@ export class DomainCoordinatorDO extends SqliteObject {
       }>(this.sql.exec(
         `SELECT url_key, lane, body_json, tenant_id, monitor_id, parked_at FROM domain_waiters`
       ));
+      const ready: typeof waiters = [];
       for (const row of waiters) {
         const wake = wakes.find((item) => item.key === row.lane);
         const basis = Math.max(Number(row.parked_at), wake != null ? Number(wake.wake_at) : Number(row.parked_at));
         if (basis + WAKE_STRANDED_GRACE_MS > now) continue;
-        this.logParkExpiry(row);
+        ready.push(row);
+      }
+      return ready;
+    });
+    for (const row of due) {
+      const accepted = await this.publishParkExpiry(row, now);
+      if (!accepted) continue;
+      let removed = false;
+      await this.state.storage.transaction(async () => {
+        const still = rows(this.sql.exec<{ url_key: string }>(
+          `SELECT url_key FROM domain_waiters WHERE url_key=? LIMIT 1`,
+          row.url_key
+        ))[0];
+        if (!still) return;
         this.sql.exec(
           `INSERT INTO domain_park_events(lane, body_json, tenant_id, monitor_id, expired_at) VALUES(?,?,?,?,?)`,
           row.lane, row.body_json, row.tenant_id ?? "", row.monitor_id ?? "", now
         );
         this.sql.exec(`DELETE FROM domain_waiters WHERE url_key=?`, row.url_key);
-      }
+        removed = true;
+      });
+      if (removed) this.logParkExpiry(row);
+    }
+    await this.state.storage.transaction(async () => {
+      const wakes = rows<{ key: string; wake_at: number }>(this.sql.exec(
+        `SELECT key, wake_at FROM domain_wake`
+      ));
       for (const wake of wakes) {
         if (Number(wake.wake_at) + WAKE_STRANDED_GRACE_MS > now) continue;
         if (wake.key !== "fetch" && wake.key !== "browser") continue;
@@ -1471,9 +1499,9 @@ export class DomainCoordinatorDO extends SqliteObject {
     return { perTenant: DOMAIN_PARK_CAP_PER_TENANT, perDomain: DOMAIN_PARK_CAP_PER_DOMAIN };
   }
 
-  private wakeRow(lane: string): { wake_at: number; token: string; hops: number; last_tenant: string | null } | null {
-    return rows(this.sql.exec<{ wake_at: number; token: string; hops: number; last_tenant: string | null }>(
-      `SELECT wake_at, token, hops, last_tenant FROM domain_wake WHERE key=? LIMIT 1`,
+  private wakeRow(lane: string): { wake_at: number; token: string; hops: number; last_tenant: string | null; sweep_gen: number } | null {
+    return rows(this.sql.exec<{ wake_at: number; token: string; hops: number; last_tenant: string | null; sweep_gen: number }>(
+      `SELECT wake_at, token, hops, last_tenant, sweep_gen FROM domain_wake WHERE key=? LIMIT 1`,
       lane
     ))[0] ?? null;
   }
@@ -1516,15 +1544,68 @@ export class DomainCoordinatorDO extends SqliteObject {
     } catch {
       /* the events table still keeps the raw body */
     }
-    structuredLog("warn", "crawl_domain_park_expired", {
+    structuredLog("warn", "crawl_domain_park_lifetime", {
       requestId: jobId ? `park:${jobId}` : "park-expiry",
       tenantId: tenantId || undefined,
       monitorId: monitorId || undefined
-    }, { lane: row.lane, url, jobId, count: 1 });
+    }, { lane: row.lane, url, jobId, domain: this.parkDomainName(row.body_json), count: 1, reason: "crawl_domain_park_lifetime" });
+  }
+
+  /** Send a stranded park to the DLQ. False means the row must stay. */
+  private async publishParkExpiry(row: { lane: string; body_json: string; tenant_id: string; monitor_id: string }, now: number): Promise<boolean> {
+    const queue = this.env.CRAWL_DLQ;
+    if (!queue) return false;
+    const domain = this.parkDomainName(row.body_json);
+    const stampedAt = new Date(now).toISOString();
+    let payload: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(row.body_json) as Record<string, unknown>;
+      payload = {
+        ...parsed,
+        parkExpiredReason: "crawl_domain_park_lifetime",
+        parkExpiredDomain: domain,
+        parkExpiredAt: stampedAt
+      };
+    } catch {
+      payload = {
+        parkExpiredReason: "crawl_domain_park_lifetime",
+        parkExpiredDomain: domain,
+        parkExpiredAt: stampedAt,
+        bodyJson: row.body_json
+      };
+    }
+    try {
+      await queue.send(payload);
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
+  private parkDomainName(bodyJson: string): string {
+    try {
+      const parsed = JSON.parse(bodyJson) as { payload?: { url?: unknown } };
+      if (typeof parsed.payload?.url === "string") return new URL(parsed.payload.url).hostname.toLowerCase();
+    } catch {
+      /* the DLQ record still carries the raw body */
+    }
+    return "unknown";
   }
 
   private async syncAlarm(): Promise<void> {
     const now = this.clock();
+    const earliest = this.earliestAlarmAt();
+    const current = await this.currentAlarm();
+    if (earliest == null) {
+      if (current != null) await this.state.storage.deleteAlarm();
+      return;
+    }
+    const scheduled = Math.max(now + ALARM_REARM_FLOOR_MS, earliest);
+    if (current === scheduled) return;
+    await this.state.storage.setAlarm(scheduled);
+  }
+
+  private earliestAlarmAt(): number | null {
     const basis = rows<{ basis: number | null }>(this.sql.exec(
       `SELECT MIN(MAX(domain_waiters.parked_at, IFNULL(domain_wake.wake_at, domain_waiters.parked_at))) AS basis
        FROM domain_waiters
@@ -1543,12 +1624,15 @@ export class DomainCoordinatorDO extends SqliteObject {
       `SELECT MIN(expires_at) AS expires_at FROM domain_leases`
     ))[0];
     if (lease?.expires_at != null && Number(lease.expires_at) > 0) times.push(Number(lease.expires_at));
-    if (times.length === 0) {
-      await this.state.storage.deleteAlarm();
-      return;
-    }
-    const earliest = Math.min(...times);
-    await this.state.storage.setAlarm(Math.max(now + ALARM_REARM_FLOOR_MS, earliest));
+    if (times.length === 0) return null;
+    return Math.min(...times);
+  }
+
+  private async currentAlarm(): Promise<number | null> {
+    const storage = this.state.storage as { getAlarm?: () => Promise<number | null> };
+    if (typeof storage.getAlarm !== "function") return null;
+    const value = await storage.getAlarm();
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
   }
 
   private retryAfterMs(now: number, lane: "fetch" | "browser"): number {
@@ -1560,7 +1644,7 @@ export class DomainCoordinatorDO extends SqliteObject {
     const backoffUntil = Number(row.backoff_until);
     if (lane === "fetch") return backoffUntil > now ? Math.max(250, backoffUntil - now) : 0;
     const blockedUntil = Math.max(Number(row.next_allowed_at), backoffUntil);
-    const budget = domainLeaseBudget(this.totalWaiting());
+    const budget = domainLeaseBudget(this.waiting("browser"));
     if (this.liveLeases() >= budget || blockedUntil > now) {
       return Math.max(250, blockedUntil > now ? blockedUntil - now : 250);
     }
@@ -1580,11 +1664,6 @@ export class DomainCoordinatorDO extends SqliteObject {
     return Number(row?.active ?? 0);
   }
 
-  private totalWaiting(): number {
-    const row = rows(this.sql.exec<{ waiting: number }>(`SELECT COUNT(*) AS waiting FROM domain_waiters`))[0];
-    return Number(row?.waiting ?? 0);
-  }
-
   private async acquire(request: Request): Promise<Response> {
     const body = await readJson(request);
     const domain = asString(body.domain, "domain").toLowerCase();
@@ -1595,7 +1674,7 @@ export class DomainCoordinatorDO extends SqliteObject {
     const now = this.clock();
     const outcome = await this.state.storage.transaction(async () => {
       const active = this.expireLeases(now);
-      const effective = Math.min(DOMAIN_LEASE_CAP, Math.max(requested, domainLeaseBudget(this.totalWaiting())));
+      const effective = Math.min(DOMAIN_LEASE_CAP, Math.max(requested, domainLeaseBudget(this.waiting("browser"))));
       const row = rows(this.sql.exec<{ next_allowed_at: number; backoff_until: number }>(
         `SELECT next_allowed_at, backoff_until FROM domain_state WHERE key='self' LIMIT 1`
       ))[0];
@@ -1665,16 +1744,17 @@ export class DomainCoordinatorDO extends SqliteObject {
     const urlKey = asString(body.urlKey, "url_key");
     const bodyJson = asString(body.bodyJson, "body_json");
     if (bodyJson.length > DOMAIN_PARK_BODY_MAX) return json({ ok: false, error: "body_too_large" }, 400);
-    const now = this.clock();
     const updated = await this.state.storage.transaction(async () => {
       const existing = rows(this.sql.exec<{ url_key: string }>(
         `SELECT url_key FROM domain_waiters WHERE url_key=? AND lane=? LIMIT 1`,
         urlKey, lane
       ))[0];
       if (!existing) return false;
+      const wake = this.wakeRow(lane);
+      const seen = Number(wake?.sweep_gen ?? 0);
       this.sql.exec(
-        `UPDATE domain_waiters SET body_json=?, parked_at=?, claimed_at=0 WHERE url_key=? AND lane=?`,
-        bodyJson, now, urlKey, lane
+        `UPDATE domain_waiters SET body_json=?, sweep_seen=?, claimed_at=0 WHERE url_key=? AND lane=?`,
+        bodyJson, seen, urlKey, lane
       );
       return true;
     });
@@ -1884,20 +1964,47 @@ export class DomainCoordinatorDO extends SqliteObject {
     ))[0] ?? null;
   }
 
+  private unseenCount(lane: "fetch" | "browser", gen: number): number {
+    const row = rows(this.sql.exec<{ unseen: number }>(
+      `SELECT COUNT(*) AS unseen FROM domain_waiters WHERE lane=? AND sweep_seen < ?`,
+      lane, gen
+    ))[0];
+    return Number(row?.unseen ?? 0);
+  }
+
   private async sweep(request: Request): Promise<Response> {
     const body = await readJson(request);
     const lane = parkLane(body.lane);
     const requested = typeof body.limit === "number" ? Math.floor(body.limit) : DOMAIN_SWEEP_LIMIT;
     const limit = Math.max(1, Math.min(DOMAIN_SWEEP_LIMIT, requested));
+    const cont = body.continue === true;
+    const now = this.clock();
     const result = await this.state.storage.transaction(async () => {
+      const wake = this.wakeRow(lane);
+      let gen = Number(wake?.sweep_gen ?? 0);
+      if (!cont && (gen <= 0 || this.unseenCount(lane, gen) === 0)) {
+        gen += 1;
+        if (wake) {
+          this.sql.exec(`UPDATE domain_wake SET sweep_gen=? WHERE key=?`, gen, lane);
+        } else {
+          this.sql.exec(
+            `INSERT INTO domain_wake(key, wake_at, hops, token, sweep_gen) VALUES(?,?,?,?,?)`,
+            lane, now, 0, crypto.randomUUID(), gen
+          );
+        }
+      }
       const selected = rows(this.sql.exec<{ url_key: string; body_json: string }>(
-        `SELECT url_key, body_json FROM domain_waiters WHERE lane=? ORDER BY parked_at ASC, url_key ASC LIMIT ?`,
-        lane, limit
+        `SELECT url_key, body_json FROM domain_waiters
+         WHERE lane=? AND sweep_seen < ?
+         ORDER BY parked_at ASC, url_key ASC LIMIT ?`,
+        lane, gen, limit
       ));
-      const waiting = this.waiting(lane);
+      const unvisited = Math.max(0, this.unseenCount(lane, gen) - selected.length);
       return {
         jobs: selected.map((job) => ({ bodyJson: job.body_json, urlKey: job.url_key })),
-        remaining: Math.max(0, waiting - selected.length)
+        remaining: unvisited,
+        unvisited,
+        sweepGen: gen
       };
     });
     return json(result);

@@ -270,11 +270,13 @@ class SqlAdapter {
 class FakeState {
   constructor() {
     const sql = new SqlAdapter();
+    let alarm = null;
     this.storage = {
       sql,
       transaction: async (closure) => closure(),
-      setAlarm: async () => {},
-      deleteAlarm: async () => {}
+      setAlarm: async (at) => { alarm = at; },
+      getAlarm: async () => alarm,
+      deleteAlarm: async () => { alarm = null; }
     };
   }
 }
@@ -430,11 +432,17 @@ test("domain park overflows at the configured cap and a large body falls back", 
 
 test("a wake token stays one chain across the delivery lag and the alarm expires a dead wake", async () => {
   const alarms = [];
+  const sent = [];
   const fake = new FakeState();
-  fake.storage.setAlarm = async (at) => { alarms.push(at); };
-  fake.storage.deleteAlarm = async () => { alarms.push("cleared"); };
+  let stored = null;
+  fake.storage.setAlarm = async (at) => { stored = at; alarms.push(at); };
+  fake.storage.getAlarm = async () => stored;
+  fake.storage.deleteAlarm = async () => { stored = null; alarms.push("cleared"); };
   let now = Date.now();
-  const coordinator = new DomainCoordinatorDO(fake, { nowMs: () => now });
+  const coordinator = new DomainCoordinatorDO(fake, {
+    nowMs: () => now,
+    CRAWL_DLQ: { async send(body) { sent.push(body); } }
+  });
   const first = await park(coordinator, "browser", "tenant\u001fmon\u001fhttps://hot.example/a", undefined, "tenant-a", "mon-a");
   assert.equal(first.scheduleWake, true);
   assert.ok(alarms.some((item) => typeof item === "number"));
@@ -455,6 +463,8 @@ test("a wake token stays one chain across the delivery lag and the alarm expires
   now += 60 * 60 * 1000;
   await coordinator.alarm();
   const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(sent.length, 3);
+  assert.ok(sent.every((body) => body.parkExpiredReason === "crawl_domain_park_lifetime"));
   assert.equal(state.waiting, 0);
   assert.equal(state.expired, 3);
   assert.equal(state.parkEvents.length, 3);
@@ -487,13 +497,17 @@ test("a fresh wake with a stale park does not re-arm the alarm for now", async (
   assert.equal(state.expired, 0);
 });
 
-test("an expired park logs and counts each job", async () => {
+test("an expired park is dead-lettered before it is deleted", async () => {
   const warnings = [];
   const original = console.warn;
   console.warn = (line) => { warnings.push(String(line)); };
+  const sent = [];
   try {
     let now = 1_700_000_000_000;
-    const coordinator = new DomainCoordinatorDO(new FakeState(), { nowMs: () => now });
+    const coordinator = new DomainCoordinatorDO(new FakeState(), {
+      nowMs: () => now,
+      CRAWL_DLQ: { async send(body) { sent.push(body); } }
+    });
     await park(coordinator, "browser", "expiry-probe\u001fhttps://hot.example/a", {
       jobId: "job-a",
       tenantId: "expiry-probe",
@@ -506,9 +520,11 @@ test("an expired park logs and counts each job", async () => {
     }, "expiry-probe", "mon-a");
     now += 60 * 60 * 1000;
     await coordinator.alarm();
+    assert.equal(sent.length, 2);
+    assert.ok(sent.every((body) => body.parkExpiredReason === "crawl_domain_park_lifetime" && body.parkExpiredDomain === "hot.example"));
     const expired = warnings.map((line) => {
       try { return JSON.parse(line); } catch { return null; }
-    }).filter((item) => item && item.message === "crawl_domain_park_expired" && item.tenantId === "expiry-probe");
+    }).filter((item) => item && item.message === "crawl_domain_park_lifetime" && item.tenantId === "expiry-probe");
     assert.equal(expired.length, 2);
     assert.ok(expired.every((item) => item.count === 1));
     const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
@@ -517,6 +533,32 @@ test("an expired park logs and counts each job", async () => {
   } finally {
     console.warn = original;
   }
+});
+
+test("an expired park stays when the DLQ send is refused", async () => {
+  let now = 1_700_000_000_000;
+  const unbound = new DomainCoordinatorDO(new FakeState(), { nowMs: () => now });
+  await park(unbound, "browser", "stay\u001fhttps://hot.example/a", {
+    payload: { url: "https://hot.example/a" }
+  }, "tenant-a");
+  now += 60 * 60 * 1000;
+  await unbound.alarm();
+  const stayed = await (await unbound.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(stayed.waiting, 1);
+  assert.equal(stayed.expired, 0);
+
+  const failing = new DomainCoordinatorDO(new FakeState(), {
+    nowMs: () => now,
+    CRAWL_DLQ: { async send() { throw new Error("dlq down"); } }
+  });
+  await park(failing, "browser", "stay\u001fhttps://hot.example/b", {
+    payload: { url: "https://hot.example/b" }
+  }, "tenant-a");
+  now += 60 * 60 * 1000;
+  await failing.alarm();
+  const still = await (await failing.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(still.waiting, 1);
+  assert.equal(still.expired, 0);
 });
 
 test("take rotates across tenants and stays oldest-first inside one tenant", async () => {
@@ -637,11 +679,55 @@ test("a deep park raises the browser lease budget and a release without a lease 
   assert.equal(after.leases, 4);
 });
 
+test("browser lease budget follows the browser lane only", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  for (let index = 0; index < 64; index += 1) {
+    await park(coordinator, "fetch", `tenant\u001fhttps://hot.example/${index}`, {
+      payload: { url: `https://hot.example/${index}` }
+    }, "tenant-a");
+  }
+  for (let slot = 0; slot < 2; slot += 1) {
+    const acquired = await coordinator.fetch(new Request("https://do.internal/internal/acquire", {
+      method: "POST",
+      body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
+    }));
+    assert.equal(acquired.status, 200);
+  }
+  const denied = await coordinator.fetch(new Request("https://do.internal/internal/acquire", {
+    method: "POST",
+    body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
+  }));
+  assert.equal(denied.status, 429);
+});
+
+test("acquire does not reset the alarm when the earliest deadline is unchanged", async () => {
+  const alarms = [];
+  const fake = new FakeState();
+  let stored = null;
+  fake.storage.setAlarm = async (at) => { stored = at; alarms.push(at); };
+  fake.storage.getAlarm = async () => stored;
+  fake.storage.deleteAlarm = async () => { stored = null; alarms.push("cleared"); };
+  const now = 1_700_000_000_000;
+  const coordinator = new DomainCoordinatorDO(fake, { nowMs: () => now });
+  for (let slot = 0; slot < 2; slot += 1) {
+    const acquired = await coordinator.fetch(new Request("https://do.internal/internal/acquire", {
+      method: "POST",
+      body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
+    }));
+    assert.equal(acquired.status, 200);
+  }
+  const sets = alarms.filter((item) => typeof item === "number");
+  assert.equal(sets.length, 1);
+  assert.ok(sets[0] >= now + 60_000);
+});
+
 test("a domain lease alarm stays in the future and then frees the slot", async () => {
   const alarms = [];
   const fake = new FakeState();
-  fake.storage.setAlarm = async (at) => { alarms.push(at); };
-  fake.storage.deleteAlarm = async () => { alarms.push("cleared"); };
+  let stored = null;
+  fake.storage.setAlarm = async (at) => { stored = at; alarms.push(at); };
+  fake.storage.getAlarm = async () => stored;
+  fake.storage.deleteAlarm = async () => { stored = null; alarms.push("cleared"); };
   let now = 1_700_000_000_000;
   const coordinator = new DomainCoordinatorDO(fake, { nowMs: () => now });
   const acquired = await coordinator.fetch(new Request("https://do.internal/internal/acquire", {
@@ -649,6 +735,9 @@ test("a domain lease alarm stays in the future and then frees the slot", async (
     body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
   }));
   assert.equal(acquired.status, 200);
+  const armed = alarms.filter((item) => typeof item === "number");
+  assert.ok(armed.length > 0);
+  assert.ok(armed.every((item) => item >= now + 60_000));
   alarms.length = 0;
   let rearms = 0;
   for (let step = 0; step < 100; step += 1) {
@@ -657,9 +746,7 @@ test("a domain lease alarm stays in the future and then frees the slot", async (
     if (typeof scheduled === "number" && scheduled <= now) rearms += 1;
   }
   assert.equal(rearms, 0);
-  const numeric = alarms.filter((item) => typeof item === "number");
-  assert.ok(numeric.length > 0);
-  assert.ok(numeric.every((item) => item >= now + 60_000));
+  assert.equal(alarms.filter((item) => typeof item === "number").length, 0);
   const held = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
   assert.equal(held.leases, 1);
   now += 60_001;
