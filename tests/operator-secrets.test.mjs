@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { deploySmokePassword, requireCollectorCredentials, resolveSuperAdminEmails } from "../scripts/operator-env.mjs";
+import { deploySmokePassword, operatorSecretError, requireCollectorCredentials, resolveSuperAdminEmails } from "../scripts/operator-env.mjs";
 import { logoutEndpoint, runSignupSmoke } from "../scripts/deploy-smoke.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -152,6 +152,7 @@ test("tracked operator files do not embed collector or smoke passwords", () => {
     "scripts/operator-env.mjs",
     "scripts/deploy-smoke.mjs",
     "scripts/operator-account.mjs",
+    "scripts/operator-signature.mjs",
     "docs/AUTH_BILLING_SUPERADMIN.md",
     "docs/DEPLOYMENT_CLOUDSPACE.md",
     "docs/SECRETS_AND_PROVIDER_ACCESS.md",
@@ -171,10 +172,21 @@ test("tracked operator files do not embed collector or smoke passwords", () => {
     }
   }
   const deploy = readFileSync(resolve(ROOT, "scripts/deploy-cloudspace.mjs"), "utf8");
+  const operatorEnv = readFileSync(resolve(ROOT, "scripts/operator-env.mjs"), "utf8");
   assert.match(deploy, /resolveSuperAdminEmails\(process\.env\.SUPER_ADMIN_EMAILS\)/);
   assert.match(deploy, /deploySmokePassword\(/);
-  assert.match(deploy, /OPERATOR_ACCOUNT_SECRET is missing or empty/);
+  assert.match(deploy, /operatorSecretError\(process\.env\.OPERATOR_ACCOUNT_SECRET\)/);
+  assert.match(operatorEnv, /OPERATOR_ACCOUNT_SECRET is missing or empty/);
+  assert.match(operatorEnv, /shorter than 43/);
   assert.doesNotMatch(deploy, /const required = \[/);
+});
+
+test("deploy rejects an operator secret shorter than 43 characters", () => {
+  assert.match(operatorSecretError(""), /OPERATOR_ACCOUNT_SECRET is missing or empty/);
+  assert.match(operatorSecretError("   "), /OPERATOR_ACCOUNT_SECRET is missing or empty/);
+  assert.match(operatorSecretError("a".repeat(42)), /shorter than 43/);
+  assert.equal(operatorSecretError("a".repeat(43)), null);
+  assert.equal(operatorSecretError(` ${"b".repeat(44)} `), null);
 });
 
 test("deploy workflow keeps the operator secret on the deploy step and manual dispatch on main", () => {

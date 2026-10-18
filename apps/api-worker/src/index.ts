@@ -758,12 +758,73 @@ function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-async function operatorSecretMatches(provided: string, expected: string): Promise<boolean> {
-  const [left, right] = await Promise.all([
-    crypto.subtle.digest("SHA-256", new TextEncoder().encode(provided)),
-    crypto.subtle.digest("SHA-256", new TextEncoder().encode(expected))
-  ]);
-  return constantTimeEqual(base64url(new Uint8Array(left)), base64url(new Uint8Array(right)));
+const OPERATOR_SIGNATURE_WINDOW_MS = 60_000;
+const seenOperatorNonces = new Map<string, number>();
+
+async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function hmacSha256Base64Url(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signed = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return base64url(new Uint8Array(signed));
+}
+
+function operatorSignedPath(request: Request): string {
+  const url = new URL(request.url);
+  return `${normalizeApiPathname(url.pathname)}${url.search}`;
+}
+
+async function operatorBodyHash(request: Request): Promise<string> {
+  if (request.method === "GET" || request.method === "HEAD") return sha256Hex(new ArrayBuffer(0));
+  return sha256Hex(await request.clone().arrayBuffer());
+}
+
+function operatorCanonical(method: string, path: string, timestamp: string, nonce: string, bodyHash: string): string {
+  return `${method.toUpperCase()}\n${path}\n${timestamp}\n${nonce}\n${bodyHash}`;
+}
+
+function operatorAttempt(request: Request): boolean {
+  return request.headers.has("x-operator-secret")
+    || request.headers.has("x-operator-timestamp")
+    || request.headers.has("x-operator-nonce")
+    || request.headers.has("x-operator-signature");
+}
+
+const OPERATOR_NONCE_CACHE_LIMIT = 2048;
+
+function pruneExpiredOperatorNonces(now: number): void {
+  for (const [key, seenAt] of seenOperatorNonces) {
+    if (now - seenAt >= OPERATOR_SIGNATURE_WINDOW_MS) seenOperatorNonces.delete(key);
+  }
+}
+
+function operatorNonceRetryAfter(now: number): number {
+  let oldest = now;
+  for (const seenAt of seenOperatorNonces.values()) {
+    if (seenAt < oldest) oldest = seenAt;
+  }
+  return Math.min(60, Math.max(1, Math.ceil((OPERATOR_SIGNATURE_WINDOW_MS - (now - oldest)) / 1000)));
+}
+
+/**
+ * Stores a nonce for the signature window. Expired entries are the only ones removed.
+ * A cache that is still full of in-window nonces is not evicted; the caller fails closed.
+ */
+function rememberOperatorNonce(nonce: string, now: number): "ok" | "replay" | "full" {
+  pruneExpiredOperatorNonces(now);
+  if (seenOperatorNonces.has(nonce)) return "replay";
+  if (seenOperatorNonces.size >= OPERATOR_NONCE_CACHE_LIMIT) return "full";
+  seenOperatorNonces.set(nonce, now);
+  return "ok";
 }
 
 function requestRay(request: Request): string {
@@ -796,9 +857,9 @@ function clientIp(request: Request): string {
 }
 
 /**
- * Per-isolate memory only. The check runs before the secret is compared. A timestamp is
- * stored only after that comparison fails, with or without a cookie. Correct secrets are
- * not recorded. A session with no secret header is not counted.
+ * Per-isolate memory only. The check runs before the HMAC is compared. A timestamp is
+ * stored only after that check fails, with or without a cookie. Valid signatures are
+ * not recorded. A session with no operator headers is not counted.
  */
 function recentSecretFailures(request: Request): number[] {
   const ip = clientIp(request);
@@ -836,11 +897,20 @@ function operatorGateError(gate: Extract<OperatorGate, { ok: false }>): HttpErro
   return new HttpError(gate.status, gate.error, { "Retry-After": String(gate.retryAfter) });
 }
 
-/** Password reset and lock accept only X-Operator-Secret. A session alone is 403. */
+async function rejectOperatorAttempt(request: Request, env: Env, ray: string): Promise<OperatorGate> {
+  recordFailedSecretGuess(request);
+  const sessionActor = await optionalSessionActor(request, env, ray);
+  if (!sessionActor) return { ok: false, status: 401, error: "invalid_operator_secret" };
+  return { ok: false, status: 401, error: "invalid_operator_secret", sessionActor };
+}
+
+/**
+ * Password reset and lock accept an HMAC over method, path, timestamp, nonce, and body hash.
+ * The raw secret is not a header. A session alone is 403. No operator headers and no session is 401.
+ */
 async function requireOperatorSecret(request: Request, env: Env): Promise<OperatorGate> {
   const ray = requestRay(request);
-  const header = request.headers.get("x-operator-secret");
-  if (header === null) {
+  if (!operatorAttempt(request)) {
     const sessionActor = await optionalSessionActor(request, env, ray);
     if (!sessionActor) return { ok: false, status: 401, error: "authentication_required" };
     return { ok: false, status: 403, error: "operator_secret_required", sessionActor };
@@ -853,19 +923,34 @@ async function requireOperatorSecret(request: Request, env: Env): Promise<Operat
   }
   const limit = secretGuessBlocked(request);
   if (limit.blocked) return { ok: false, status: 429, error: "rate_limited", retryAfter: limit.retryAfter };
-  if (!(await operatorSecretMatches(header.trim(), expected))) {
-    recordFailedSecretGuess(request);
-    const sessionActor = await optionalSessionActor(request, env, ray);
-    if (!sessionActor) return { ok: false, status: 401, error: "invalid_operator_secret" };
-    return { ok: false, status: 401, error: "invalid_operator_secret", sessionActor };
+  // Presence only. The application does not read the value. Cloudflare invocation logs can still store this header.
+  if (request.headers.has("x-operator-secret")) return rejectOperatorAttempt(request, env, ray);
+  const timestamp = request.headers.get("x-operator-timestamp")?.trim() ?? "";
+  const nonce = request.headers.get("x-operator-nonce")?.trim() ?? "";
+  const signature = request.headers.get("x-operator-signature")?.trim() ?? "";
+  const parsedAt = /^\d{1,16}$/.test(timestamp) ? Number(timestamp) : NaN;
+  const freshTimestamp = Number.isInteger(parsedAt) && Math.abs(Date.now() - parsedAt) <= OPERATOR_SIGNATURE_WINDOW_MS;
+  const nonceOk = /^[A-Za-z0-9_-]{16,128}$/.test(nonce);
+  const signatureOk = /^[A-Za-z0-9_-]{43}$/.test(signature);
+  if (!freshTimestamp || !nonceOk || !signatureOk) return rejectOperatorAttempt(request, env, ray);
+  const bodyHash = await operatorBodyHash(request);
+  const expectedSignature = await hmacSha256Base64Url(
+    expected,
+    operatorCanonical(request.method, operatorSignedPath(request), timestamp, nonce, bodyHash)
+  );
+  if (!constantTimeEqual(expectedSignature, signature)) return rejectOperatorAttempt(request, env, ray);
+  const now = Date.now();
+  const nonceState = rememberOperatorNonce(nonce, now);
+  if (nonceState === "replay") return rejectOperatorAttempt(request, env, ray);
+  if (nonceState === "full") {
+    return { ok: false, status: 429, error: "rate_limited", retryAfter: operatorNonceRetryAfter(now) };
   }
   return { ok: true, actor: `operator_secret:${ray}` };
 }
 
-/** Read paths: operator secret, or a super_admin session. Mutations do not use this. */
+/** Read paths: operator signature, or a super_admin session. Mutations do not use this. */
 async function requireAccountReader(request: Request, env: Env): Promise<void> {
-  const header = request.headers.get("x-operator-secret");
-  if (header !== null) {
+  if (operatorAttempt(request)) {
     const gate = await requireOperatorSecret(request, env);
     if (!gate.ok) throw operatorGateError(gate);
     return;

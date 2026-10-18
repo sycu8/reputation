@@ -44,6 +44,22 @@ export function resolveSuperAdminEmails(raw) {
   return emails.join(",");
 }
 
+/**
+ * Deploy gate for OPERATOR_ACCOUNT_SECRET.
+ * Empty is rejected. Shorter than 43 characters is rejected: base64url of 32 bytes is 43 characters.
+ * Returns an error message, or null when the value can be installed.
+ */
+export function operatorSecretError(value) {
+  const secret = String(value ?? "").trim();
+  if (!secret) {
+    return "OPERATOR_ACCOUNT_SECRET is missing or empty. Set it in the environment before deploy. Account reset and lock fail closed until this Worker secret is present.";
+  }
+  if (secret.length < 43) {
+    return "OPERATOR_ACCOUNT_SECRET is shorter than 43 characters. It needs at least 32 bytes of entropy as base64url. Generate it with: openssl rand -base64 32";
+  }
+  return null;
+}
+
 /** Signup smoke password. Null means the deploy smoke must not create an account. */
 export function deploySmokePassword(env = process.env) {
   const password = String(env.DEPLOY_SMOKE_PASSWORD ?? "");
