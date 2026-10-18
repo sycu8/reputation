@@ -21,6 +21,8 @@
  * The probe span is capped at 60s. Each miss creates an empty user Durable Object.
  * After listing tenants it prints the planned lock-request count and sends nothing
  * until RECOVER_SMOKE_CONFIRM=yes. The command does not lock the collector.
+ * A 429 response includes Retry-After. The script waits that long (at most 60s)
+ * and retries up to 3 times. It does not print the operator secret.
  * Generate OPERATOR_ACCOUNT_SECRET with: openssl rand -base64 32
  *
  * The new password and the operator secret are read from the environment
@@ -95,8 +97,52 @@ export function smokeRecoveryPlan(tenants, options = {}) {
 }
 
 function fail(message) {
-  console.error(message);
-  process.exit(1);
+  throw new Error(message);
+}
+
+const MAX_OPERATOR_RETRIES = 3;
+
+/** Seconds from Retry-After, capped at 60s. Missing or invalid values wait 1s. */
+export function retryDelayMs(header) {
+  if (header == null || String(header).trim() === "") return 1000;
+  const seconds = Number(header);
+  if (!Number.isFinite(seconds) || seconds < 0) return 1000;
+  return Math.min(Math.ceil(seconds * 1000), 60_000);
+}
+
+function defaultSleep(ms) {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+export async function operatorRequest(apiBase, secret, method, path, body, deps = {}) {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const sleep = deps.sleep ?? defaultSleep;
+  const log = deps.log ?? ((line) => console.log(line));
+  let response;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      response = await fetchImpl(`${apiBase}${path}`, {
+        method,
+        headers: {
+          "content-type": "application/json",
+          "x-operator-secret": secret
+        },
+        body: body === undefined ? undefined : JSON.stringify(body)
+      });
+    } catch (error) {
+      fail(`${path} failed: ${error instanceof Error ? error.message : "network_error"}`);
+    }
+    if (response.status === 429 && attempt < MAX_OPERATOR_RETRIES) {
+      const delay = retryDelayMs(response.headers.get("retry-after"));
+      log(`operator-account: waiting ${delay}ms after HTTP 429`);
+      await response.arrayBuffer().catch(() => {});
+      await sleep(delay);
+      continue;
+    }
+    break;
+  }
+  const data = await response.json().catch(() => ({}));
+  return { status: response.status, data };
 }
 
 function requireEmail(value, name) {
@@ -105,34 +151,17 @@ function requireEmail(value, name) {
   return email;
 }
 
-async function request(apiBase, secret, method, path, body) {
-  let response;
-  try {
-    response = await fetch(`${apiBase}${path}`, {
-      method,
-      headers: {
-        "content-type": "application/json",
-        "x-operator-secret": secret
-      },
-      body: body === undefined ? undefined : JSON.stringify(body)
-    });
-  } catch (error) {
-    fail(`${path} failed: ${error instanceof Error ? error.message : "network_error"}`);
-  }
-  const data = await response.json().catch(() => ({}));
-  return { status: response.status, data };
-}
-
 async function post(apiBase, secret, path, body) {
-  const result = await request(apiBase, secret, "POST", path, body);
+  const result = await operatorRequest(apiBase, secret, "POST", path, body);
   if (result.status < 200 || result.status >= 300) {
     fail(`${path} failed: HTTP ${result.status} ${result.data.error || "error"}`);
   }
   return result.data;
 }
 
-async function recoverSmoke(apiBase, secret, windowBounds) {
-  const listed = await request(apiBase, secret, "GET", "/v1/admin/tenants");
+export async function recoverSmoke({ apiBase, secret, windowBounds, env = process.env, fetchImpl, sleep, log = console.log }) {
+  const deps = { fetchImpl, sleep, log };
+  const listed = await operatorRequest(apiBase, secret, "GET", "/v1/admin/tenants", undefined, deps);
   if (listed.status !== 200) {
     fail(`/v1/admin/tenants failed: HTTP ${listed.status} ${listed.data.error || "error"}`);
   }
@@ -140,34 +169,34 @@ async function recoverSmoke(apiBase, secret, windowBounds) {
   const plan = smokeRecoveryPlan(tenants, {
     runStartMs: windowBounds.start,
     runEndMs: windowBounds.end,
-    behindMs: process.env.SMOKE_LOOKBACK_MS,
-    aheadMs: process.env.SMOKE_AHEAD_MS
+    behindMs: env.SMOKE_LOOKBACK_MS,
+    aheadMs: env.SMOKE_AHEAD_MS
   });
   const planned = plan.reduce((sum, group) => sum + group.emails.length, 0);
-  console.log(`recover-smoke: planned lock requests=${planned} registryRows=${plan.length}`);
+  log(`recover-smoke: planned lock requests=${planned} registryRows=${plan.length}`);
   if (planned === 0) {
-    console.log("recover-smoke: no Deploy Smoke or API Prefix Smoke registry rows in the run window");
+    log("recover-smoke: no Deploy Smoke or API Prefix Smoke registry rows in the run window");
     return;
   }
-  if (String(process.env.RECOVER_SMOKE_CONFIRM ?? "").trim() !== "yes") {
+  if (String(env.RECOVER_SMOKE_CONFIRM ?? "").trim() !== "yes") {
     fail(`Set RECOVER_SMOKE_CONFIRM=yes to send ${planned} lock requests. Nothing was locked.`);
   }
-  const status = process.env.ACCOUNT_LOCK_STATUS || "suspended";
+  const status = env.ACCOUNT_LOCK_STATUS || "suspended";
   if (status !== "suspended" && status !== "deleted") fail("ACCOUNT_LOCK_STATUS must be suspended or deleted.");
   for (const group of plan) {
     let locked = false;
     for (const email of group.emails) {
-      const result = await request(apiBase, secret, "POST", "/v1/admin/accounts/lock", { email, status });
+      const result = await operatorRequest(apiBase, secret, "POST", "/v1/admin/accounts/lock", { email, status }, deps);
       if (result.status === 404) continue;
       if (result.status === 200) {
-        console.log(`locked email=${result.data.email} status=${result.data.status} sessionsRevoked=${result.data.sessionsRevoked}`);
+        log(`locked email=${result.data.email} status=${result.data.status} sessionsRevoked=${result.data.sessionsRevoked}`);
         locked = true;
         break;
       }
       fail(`/v1/admin/accounts/lock failed: HTTP ${result.status} ${result.data.error || "error"}`);
     }
     if (!locked) {
-      console.log(`recover-smoke: no account found for ${group.name} createdAt=${group.createdAt} probed=${group.emails.length}`);
+      log(`recover-smoke: no account found for ${group.name} createdAt=${group.createdAt} probed=${group.emails.length}`);
     }
   }
 }
@@ -189,7 +218,7 @@ async function main() {
     } catch (error) {
       fail(error instanceof Error ? error.message : "invalid_smoke_window");
     }
-    await recoverSmoke(apiBase, secret, windowBounds);
+    await recoverSmoke({ apiBase, secret, windowBounds });
     return;
   }
   if (command === "reset-password") {
@@ -213,5 +242,8 @@ async function main() {
 
 const entry = process.argv[1];
 if (entry && import.meta.url === pathToFileURL(resolve(entry)).href) {
-  main().catch((error) => fail(error instanceof Error ? error.message : "operator_account_failed"));
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : "operator_account_failed");
+    process.exit(1);
+  });
 }

@@ -220,10 +220,12 @@ async function doJson<T>(stub: DurableObjectStub, path: string, init?: RequestIn
 
 class HttpError extends Error {
   readonly status: number;
+  readonly headers: Record<string, string>;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, headers: Record<string, string> = {}) {
     super(message);
     this.status = status;
+    this.headers = headers;
   }
 }
 
@@ -771,7 +773,7 @@ function requestRay(request: Request): string {
 
 type OperatorGate =
   | { ok: true; actor: string }
-  | { ok: false; status: number; error: string; sessionActor?: string };
+  | { ok: false; status: number; error: string; sessionActor?: string; retryAfter?: number };
 
 async function optionalSessionActor(request: Request, env: Env, ray: string): Promise<string | undefined> {
   const hasSession = Boolean(request.headers.get("cookie") || request.headers.get("authorization") || request.headers.get("Authorization"));
@@ -794,24 +796,44 @@ function clientIp(request: Request): string {
 }
 
 /**
- * Per-isolate memory only. Counts every presented operator secret, with or without a
- * cookie, and runs before the secret is compared. A session with no secret header is not counted.
+ * Per-isolate memory only. The check runs before the secret is compared. A timestamp is
+ * stored only after that comparison fails, with or without a cookie. Correct secrets are
+ * not recorded. A session with no secret header is not counted.
  */
-function secretAttemptLimited(request: Request): boolean {
+function recentSecretFailures(request: Request): number[] {
   const ip = clientIp(request);
   const now = Date.now();
   const recent = (secretGuesses.get(ip) ?? []).filter((ts) => now - ts < SECRET_GUESS_WINDOW_MS);
-  if (recent.length >= SECRET_GUESS_LIMIT) {
-    secretGuesses.set(ip, recent);
-    return true;
-  }
-  recent.push(now);
+  if (recent.length === 0) secretGuesses.delete(ip);
+  else secretGuesses.set(ip, recent);
+  return recent;
+}
+
+function secretGuessBlocked(request: Request): { blocked: boolean; retryAfter: number } {
+  const recent = recentSecretFailures(request);
+  if (recent.length < SECRET_GUESS_LIMIT) return { blocked: false, retryAfter: 0 };
+  const oldest = recent[0] ?? Date.now();
+  const retryAfter = Math.min(
+    60,
+    Math.max(1, Math.ceil((SECRET_GUESS_WINDOW_MS - (Date.now() - oldest)) / 1000))
+  );
+  return { blocked: true, retryAfter };
+}
+
+function recordFailedSecretGuess(request: Request): void {
+  const ip = clientIp(request);
+  const recent = recentSecretFailures(request);
+  recent.push(Date.now());
   secretGuesses.set(ip, recent);
   if (secretGuesses.size > 1024) {
     const oldest = secretGuesses.keys().next().value;
     if (oldest !== undefined) secretGuesses.delete(oldest);
   }
-  return false;
+}
+
+function operatorGateError(gate: Extract<OperatorGate, { ok: false }>): HttpError {
+  if (gate.retryAfter === undefined) return new HttpError(gate.status, gate.error);
+  return new HttpError(gate.status, gate.error, { "Retry-After": String(gate.retryAfter) });
 }
 
 /** Password reset and lock accept only X-Operator-Secret. A session alone is 403. */
@@ -829,8 +851,10 @@ async function requireOperatorSecret(request: Request, env: Env): Promise<Operat
     if (!sessionActor) return { ok: false, status: 503, error: "operator_secret_not_configured" };
     return { ok: false, status: 503, error: "operator_secret_not_configured", sessionActor };
   }
-  if (secretAttemptLimited(request)) return { ok: false, status: 429, error: "rate_limited" };
+  const limit = secretGuessBlocked(request);
+  if (limit.blocked) return { ok: false, status: 429, error: "rate_limited", retryAfter: limit.retryAfter };
   if (!(await operatorSecretMatches(header.trim(), expected))) {
+    recordFailedSecretGuess(request);
     const sessionActor = await optionalSessionActor(request, env, ray);
     if (!sessionActor) return { ok: false, status: 401, error: "invalid_operator_secret" };
     return { ok: false, status: 401, error: "invalid_operator_secret", sessionActor };
@@ -843,7 +867,7 @@ async function requireAccountReader(request: Request, env: Env): Promise<void> {
   const header = request.headers.get("x-operator-secret");
   if (header !== null) {
     const gate = await requireOperatorSecret(request, env);
-    if (!gate.ok) throw new HttpError(gate.status, gate.error);
+    if (!gate.ok) throw operatorGateError(gate);
     return;
   }
   const auth = await resolveAuth(request, env);
@@ -883,7 +907,7 @@ async function resetAccountPassword(request: Request, env: Env): Promise<Respons
   const body = await readJson(request);
   if (!gate.ok) {
     if (gate.sessionActor) await auditDenial(env, body.email, gate.sessionActor, "account.password_reset_denied");
-    throw new HttpError(gate.status, gate.error);
+    throw operatorGateError(gate);
   }
   const email = accountEmail(body.email);
   const password = asString(body.password, "password");
@@ -908,7 +932,7 @@ async function lockAccount(request: Request, env: Env): Promise<Response> {
   const body = await readJson(request);
   if (!gate.ok) {
     if (gate.sessionActor) await auditDenial(env, body.email, gate.sessionActor, "account.lock_denied");
-    throw new HttpError(gate.status, gate.error);
+    throw operatorGateError(gate);
   }
   const email = accountEmail(body.email);
   const status = typeof body.status === "string" && body.status.trim() ? body.status.trim() : "suspended";
@@ -1099,7 +1123,7 @@ export default {
         status: httpError.status,
         errorType: error instanceof Error ? error.name : "unknown"
       });
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = { ...httpError.headers };
       if (httpError.status === 401) {
         headers["WWW-Authenticate"] = `Bearer realm="PulseWatch", resource_metadata="${protectedResourceMetadataUrl(request)}"`;
       }

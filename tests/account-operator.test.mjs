@@ -1,16 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-import { createServer } from "node:http";
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import api from "../apps/api-worker/src/index.ts";
-import { requireSmokeWindow, smokeRecoveryPlan } from "../scripts/operator-account.mjs";
+import { operatorRequest, recoverSmoke, requireSmokeWindow, retryDelayMs, smokeRecoveryPlan } from "../scripts/operator-account.mjs";
 import { cookieFrom, makeLocalEnv } from "./helpers/local-env.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const OLD_PASSWORD = "correct-horse-battery";
 const NEW_PASSWORD = "replacement-horse-battery";
 const OPERATOR_SECRET = "operator-test-secret";
+const DEFAULT_TEST_IP = "198.51.100.10";
 
 function call(env, method, path, body, options = {}) {
   const headers = { origin: "http://127.0.0.1:8788" };
@@ -18,7 +18,7 @@ function call(env, method, path, body, options = {}) {
   if (options.cookie) headers.cookie = options.cookie;
   if (options.operatorSecret !== undefined) headers["x-operator-secret"] = options.operatorSecret;
   if (options.ray) headers["cf-ray"] = options.ray;
-  headers["cf-connecting-ip"] = options.ip ?? `test-${crypto.randomUUID()}`;
+  headers["cf-connecting-ip"] = options.ip ?? DEFAULT_TEST_IP;
   return api.fetch(new Request(`https://api.local${path}`, {
     method,
     headers,
@@ -324,6 +324,19 @@ test("denial cap keys on userId across unique cf-rays and reset stays filterable
   assert.equal(oldSession.status, 401);
 });
 
+test("correct operator secrets from one IP do not consume the failure cap", async () => {
+  const env = makeLocalEnv({ OPERATOR_ACCOUNT_SECRET: OPERATOR_SECRET });
+  const ip = "198.51.100.30";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const ok = await call(env, "GET", "/v1/admin/accounts", undefined, { operatorSecret: OPERATOR_SECRET, ip });
+    assert.equal(ok.status, 200);
+  }
+  const wrong = await call(env, "POST", "/v1/admin/accounts/lock", {
+    email: "person@example.com"
+  }, { operatorSecret: "wrong-secret", ip });
+  assert.equal(wrong.status, 401);
+});
+
 test("secret guesses are limited per IP before comparison, including cookies", async () => {
   const env = makeLocalEnv({ OPERATOR_ACCOUNT_SECRET: OPERATOR_SECRET });
   const user = await signup(env, "cookie-guess@example.com");
@@ -340,6 +353,9 @@ test("secret guesses are limited per IP before comparison, including cookies", a
   }, { operatorSecret: OPERATOR_SECRET, ip, cookie: user.cookie });
   assert.equal(correctSecret.status, 429);
   assert.equal((await correctSecret.json()).error, "rate_limited");
+  const retryAfter = Number(correctSecret.headers.get("retry-after"));
+  assert.equal(Number.isInteger(retryAfter), true);
+  assert.ok(retryAfter >= 1 && retryAfter <= 60);
   const stillLimited = await call(env, "POST", "/v1/admin/accounts/lock", {
     email: "person@example.com"
   }, { operatorSecret: "wrong-secret", ip });
@@ -403,69 +419,112 @@ test("unknown account and short password do not report success", async () => {
   assert.equal((await short.json()).error, "password_too_short");
 });
 
-function runOperator(args, env) {
-  return new Promise((resolveRun, rejectRun) => {
-    const child = spawn(process.execPath, ["scripts/operator-account.mjs", ...args], { cwd: ROOT, env });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill();
-      rejectRun(new Error(`operator script timed out\n${stdout}\n${stderr}`));
-    }, 5000);
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      rejectRun(error);
-    });
-    child.on("close", (status) => {
-      clearTimeout(timer);
-      resolveRun({ status, stdout, stderr });
-    });
+test("operator requests wait for Retry-After and then retry", async () => {
+  assert.equal(retryDelayMs(null), 1000);
+  assert.equal(retryDelayMs("nope"), 1000);
+  assert.equal(retryDelayMs("-1"), 1000);
+  assert.equal(retryDelayMs("2"), 2000);
+  assert.equal(retryDelayMs("120"), 60_000);
+  const waits = [];
+  let calls = 0;
+  const result = await operatorRequest("https://api.local", OPERATOR_SECRET, "GET", "/v1/admin/tenants", undefined, {
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: "rate_limited" }), {
+          status: 429,
+          headers: { "retry-after": "2", "content-type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ tenants: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    },
+    sleep: async (ms) => { waits.push(ms); },
+    log: () => {}
   });
-}
+  assert.equal(result.status, 200);
+  assert.deepEqual(waits, [2000]);
+  assert.equal(calls, 2);
+  assert.equal(JSON.stringify(result).includes(OPERATOR_SECRET), false);
+});
 
-test("recover-smoke prints the planned count and waits for confirmation", async () => {
-  const created = Date.parse("2026-10-18T00:00:01.000Z");
-  const seen = [];
-  const server = createServer((incoming, response) => {
-    seen.push(incoming.method);
-    const listing = incoming.url?.startsWith("/v1/admin/tenants");
-    const payload = listing
-      ? { tenants: [{ name: "Deploy Smoke", createdAt: "2026-10-18T00:00:01.000Z" }] }
-      : { error: "account_not_found" };
-    response.writeHead(listing ? 200 : 404, { "content-type": "application/json" });
-    response.end(JSON.stringify(payload));
+test("recover-smoke locks a Deploy Smoke account through api.fetch", async () => {
+  const env = makeLocalEnv({ OPERATOR_ACCOUNT_SECRET: OPERATOR_SECRET });
+  const stamp = Date.now();
+  const email = `deploy-smoke-${stamp}@example.com`;
+  const createdResponse = await call(env, "POST", "/v1/auth/signup", {
+    email,
+    password: OLD_PASSWORD,
+    workspaceName: "Deploy Smoke"
+  }, { ip: "198.51.100.40" });
+  assert.equal(createdResponse.status, 201);
+  const cookie = cookieFrom(createdResponse);
+  const listed = await call(env, "GET", "/v1/admin/tenants", undefined, {
+    operatorSecret: OPERATOR_SECRET,
+    ip: "198.51.100.41"
   });
-  await new Promise((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
-  try {
-    const address = server.address();
-    const port = typeof address === "object" && address ? address.port : 0;
-    const baseEnv = {
-      ...process.env,
-      OPERATOR_ACCOUNT_SECRET: "present",
-      API_BASE: `http://127.0.0.1:${port}`,
-      SMOKE_RUN_START_MS: String(created - 1000),
-      SMOKE_RUN_END_MS: String(created + 1000),
-      SMOKE_LOOKBACK_MS: "2",
-      SMOKE_AHEAD_MS: "1"
-    };
-    delete baseEnv.RECOVER_SMOKE_CONFIRM;
-    const held = await runOperator(["recover-smoke"], baseEnv);
-    const heldOutput = `${held.stdout}\n${held.stderr}`;
-    assert.notEqual(held.status, 0);
-    assert.match(heldOutput, /planned lock requests=4/);
-    assert.match(heldOutput, /RECOVER_SMOKE_CONFIRM=yes/);
-    assert.equal(heldOutput.includes("present"), false);
-    assert.deepEqual(seen, ["GET"]);
+  assert.equal(listed.status, 200);
+  const row = (await listed.json()).tenants.find((tenant) => tenant.name === "Deploy Smoke");
+  assert.ok(row);
+  const created = Date.parse(row.createdAt);
+  const behindMs = Math.max(0, created - stamp) + 5;
+  const aheadMs = 5;
+  const windowBounds = { start: stamp - 1000, end: created + 1000 };
+  const plan = smokeRecoveryPlan([{ name: "Deploy Smoke", createdAt: row.createdAt }], {
+    runStartMs: windowBounds.start,
+    runEndMs: windowBounds.end,
+    behindMs,
+    aheadMs
+  });
+  assert.equal(plan.length, 1);
+  assert.ok(plan[0].emails.includes(email));
+  const fetchImpl = (input, init) => api.fetch(new Request(input, init), env);
+  const logs = [];
+  const smokeEnv = {
+    SMOKE_LOOKBACK_MS: String(behindMs),
+    SMOKE_AHEAD_MS: String(aheadMs)
+  };
+  await assert.rejects(
+    () => recoverSmoke({
+      apiBase: "https://api.local",
+      secret: OPERATOR_SECRET,
+      windowBounds,
+      env: smokeEnv,
+      fetchImpl,
+      sleep: async () => {},
+      log: (line) => logs.push(line)
+    }),
+    /RECOVER_SMOKE_CONFIRM=yes/
+  );
+  const held = logs.join("\n");
+  assert.match(held, new RegExp(`planned lock requests=${plan[0].emails.length}`));
+  assert.equal(held.includes(OPERATOR_SECRET), false);
+  const stillIn = await call(env, "GET", "/v1/me", undefined, { cookie, ip: "198.51.100.42" });
+  assert.equal(stillIn.status, 200);
 
-    const sent = await runOperator(["recover-smoke"], { ...baseEnv, RECOVER_SMOKE_CONFIRM: "yes" });
-    assert.equal(sent.status, 0, sent.stderr || sent.stdout);
-    assert.match(sent.stdout, /planned lock requests=4/);
-    assert.equal(seen.filter((method) => method === "POST").length, 4);
-  } finally {
-    await new Promise((resolveClose) => server.close(resolveClose));
-  }
+  logs.length = 0;
+  await recoverSmoke({
+    apiBase: "https://api.local",
+    secret: OPERATOR_SECRET,
+    windowBounds,
+    env: { ...smokeEnv, RECOVER_SMOKE_CONFIRM: "yes" },
+    fetchImpl,
+    sleep: async () => {},
+    log: (line) => logs.push(line)
+  });
+  const sent = logs.join("\n");
+  assert.match(sent, new RegExp(`locked email=${email}`));
+  assert.match(sent, /sessionsRevoked=/);
+  assert.equal(sent.includes(OPERATOR_SECRET), false);
+  const lockedLogin = await call(env, "POST", "/v1/auth/login", {
+    email,
+    password: OLD_PASSWORD
+  }, { ip: "198.51.100.43" });
+  assert.equal(lockedLogin.status, 401);
+  const oldSession = await call(env, "GET", "/v1/me", undefined, { cookie, ip: "198.51.100.44" });
+  assert.equal(oldSession.status, 401);
 });
 
 test("recover-smoke refuses to run without a valid window", () => {
