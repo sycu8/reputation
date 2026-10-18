@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import api from "../apps/api-worker/src/index.ts";
+import { redactLogFields, structuredLog } from "../packages/observability/src/index.ts";
 import { operatorRequest, recoverSmoke, requireSmokeWindow, retryDelayMs, smokeRecoveryPlan } from "../scripts/operator-account.mjs";
+import { signOperatorRequest } from "../scripts/operator-signature.mjs";
 import { cookieFrom, makeLocalEnv } from "./helpers/local-env.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -14,16 +16,46 @@ const DEFAULT_TEST_IP = "198.51.100.10";
 
 function call(env, method, path, body, options = {}) {
   const headers = { origin: "http://127.0.0.1:8788" };
-  if (body !== undefined) headers["content-type"] = "application/json";
+  const bodyText = body === undefined ? undefined : JSON.stringify(body);
+  if (bodyText !== undefined) headers["content-type"] = "application/json";
   if (options.cookie) headers.cookie = options.cookie;
-  if (options.operatorSecret !== undefined) headers["x-operator-secret"] = options.operatorSecret;
+  if (options.operatorSecret !== undefined) {
+    const signed = signOperatorRequest({
+      secret: options.operatorSecret,
+      method,
+      path,
+      body: bodyText ?? "",
+      timestamp: options.timestamp ?? Date.now(),
+      nonce: options.nonce
+    });
+    Object.assign(headers, signed.headers);
+  }
+  if (options.rawOperatorSecret !== undefined) headers["x-operator-secret"] = options.rawOperatorSecret;
   if (options.ray) headers["cf-ray"] = options.ray;
   headers["cf-connecting-ip"] = options.ip ?? DEFAULT_TEST_IP;
   return api.fetch(new Request(`https://api.local${path}`, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body)
+    body: bodyText
   }), env);
+}
+
+function captureConsole(fn) {
+  const lines = [];
+  const levels = ["log", "info", "warn", "error", "debug"];
+  const previous = {};
+  for (const level of levels) {
+    previous[level] = console[level];
+    console[level] = (...args) => {
+      lines.push(args.map((arg) => typeof arg === "string" ? arg : JSON.stringify(arg)).join(" "));
+    };
+  }
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      for (const level of levels) console[level] = previous[level];
+    })
+    .then((result) => ({ result, lines }));
 }
 
 async function signup(env, email) {
@@ -369,6 +401,75 @@ test("secret guesses are limited per IP before comparison, including cookies", a
     password: NEW_PASSWORD
   }, { cookie: user.cookie, ip });
   assert.equal(sessionOnly.status, 403);
+});
+
+test("operator secret never appears in logged output or signed headers", async () => {
+  const env = makeLocalEnv({ OPERATOR_ACCOUNT_SECRET: OPERATOR_SECRET });
+  const ip = "198.51.100.50";
+  const { lines } = await captureConsole(async () => {
+    const ok = await call(env, "GET", "/v1/admin/accounts", undefined, { operatorSecret: OPERATOR_SECRET, ip });
+    assert.equal(ok.status, 200);
+    const wrong = await call(env, "POST", "/v1/admin/accounts/lock", {
+      email: "person@example.com"
+    }, { operatorSecret: "wrong-operator-secret", ip });
+    assert.equal(wrong.status, 401);
+    const raw = await call(env, "POST", "/v1/admin/accounts/lock", {
+      email: "person@example.com"
+    }, { rawOperatorSecret: OPERATOR_SECRET, ip: "198.51.100.51" });
+    assert.equal(raw.status, 401);
+    assert.equal((await raw.json()).error, "invalid_operator_secret");
+    structuredLog("warn", "invalid_operator_secret", { requestId: "ray", route: "/v1/admin/accounts/lock" }, {
+      headers: { "x-operator-secret": OPERATOR_SECRET, authorization: "Bearer session-token" }
+    });
+  });
+  const logged = lines.join("\n");
+  assert.equal(logged.includes(OPERATOR_SECRET), false);
+  assert.equal(logged.includes("wrong-operator-secret"), false);
+  assert.equal(logged.includes("Bearer session-token"), false);
+  assert.equal(JSON.stringify(redactLogFields({ headers: { "x-operator-secret": OPERATOR_SECRET } })).includes(OPERATOR_SECRET), false);
+
+  const seen = [];
+  await operatorRequest("https://api.local", OPERATOR_SECRET, "GET", "/v1/admin/accounts", undefined, {
+    fetchImpl: async (_url, init) => {
+      seen.push(init);
+      return new Response(JSON.stringify({ accounts: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+    sleep: async () => {},
+    log: () => {}
+  });
+  const wire = JSON.stringify(seen);
+  assert.equal(wire.includes(OPERATOR_SECRET), false);
+  assert.equal(wire.includes("x-operator-secret"), false);
+  assert.equal(wire.includes("x-operator-signature"), true);
+});
+
+test("operator signatures expire, reject replays, and do not accept the raw secret header", async () => {
+  const env = makeLocalEnv({ OPERATOR_ACCOUNT_SECRET: OPERATOR_SECRET });
+  const ip = "198.51.100.60";
+  const nonce = "nonce-replay-fixed1";
+  const first = await call(env, "GET", "/v1/admin/accounts", undefined, {
+    operatorSecret: OPERATOR_SECRET,
+    ip,
+    nonce,
+    timestamp: Date.now()
+  });
+  assert.equal(first.status, 200);
+  const replay = await call(env, "GET", "/v1/admin/accounts", undefined, {
+    operatorSecret: OPERATOR_SECRET,
+    ip,
+    nonce,
+    timestamp: Date.now()
+  });
+  assert.equal(replay.status, 401);
+  const expired = await call(env, "GET", "/v1/admin/accounts", undefined, {
+    operatorSecret: OPERATOR_SECRET,
+    ip: "198.51.100.61",
+    timestamp: Date.now() - 120_000
+  });
+  assert.equal(expired.status, 401);
+  const missing = await call(env, "POST", "/v1/admin/accounts/lock", { email: "person@example.com" });
+  assert.equal(missing.status, 401);
+  assert.equal((await missing.json()).error, "authentication_required");
 });
 
 test("smoke recovery plan uses registry names and a capped timestamp window", () => {

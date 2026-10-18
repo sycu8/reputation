@@ -58,7 +58,7 @@ Local (this agent):
 
 Auto-bootstrapped after each production deploy (`npm run bootstrap:collection`).
 
-Collector email and password were removed from this file. Bootstrap requires `COLLECTOR_EMAIL` and `COLLECTOR_PASSWORD` and exits if either is missing. The production super-admin allowlist is only the Worker secret `SUPER_ADMIN_EMAILS`, written from that environment variable at deploy time. Git history still has the previous collector password. `scripts/operator-account.mjs` resets that hash and revokes every session only when `X-Operator-Secret` is present. A `super_admin` session alone receives 403 on reset and on lock. The ordered steps are in `docs/SRE_RUNBOOK.md`. Unit tests cover the routes. Those routes have not been deployed; production does not expose account reset or lock.
+Collector email and password were removed from this file. Bootstrap requires `COLLECTOR_EMAIL` and `COLLECTOR_PASSWORD` and exits if either is missing. The production super-admin allowlist is only the Worker secret `SUPER_ADMIN_EMAILS`, written from that environment variable at deploy time. Git history still has the previous collector password. `scripts/operator-account.mjs` resets that hash and revokes every session when the request carries a valid HMAC signature (`X-Operator-Timestamp`, `X-Operator-Nonce`, `X-Operator-Signature`). The raw operator secret is not a header. A `super_admin` session alone receives 403 on reset and on lock. No operator headers and no session is 401. The ordered steps are in `docs/SRE_RUNBOOK.md`. Unit tests cover the routes. The signature scheme is not deployed; production still has the previous `X-Operator-Secret` header until this branch is merged and the main deploy runs.
 
 | Field | Value |
 |---|---|

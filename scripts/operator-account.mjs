@@ -22,7 +22,9 @@
  * After listing tenants it prints the planned lock-request count and sends nothing
  * until RECOVER_SMOKE_CONFIRM=yes. The command does not lock the collector.
  * A 429 response includes Retry-After. The script waits that long (at most 60s)
- * and retries up to 3 times. It does not print the operator secret.
+ * and retries up to 3 times. Each attempt gets a new timestamp and nonce.
+ * Requests are signed with HMAC-SHA256 over method, path, timestamp, nonce, and
+ * the body hash. The raw secret is never sent in a header and is never printed.
  * Generate OPERATOR_ACCOUNT_SECRET with: openssl rand -base64 32
  *
  * The new password and the operator secret are read from the environment
@@ -34,6 +36,7 @@
  */
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { signOperatorRequest } from "./operator-signature.mjs";
 
 const SMOKE_NAMES = {
   "Deploy Smoke": "deploy-smoke-",
@@ -118,16 +121,18 @@ export async function operatorRequest(apiBase, secret, method, path, body, deps 
   const fetchImpl = deps.fetchImpl ?? fetch;
   const sleep = deps.sleep ?? defaultSleep;
   const log = deps.log ?? ((line) => console.log(line));
+  const bodyText = body === undefined ? undefined : JSON.stringify(body);
   let response;
   for (let attempt = 0; ; attempt += 1) {
+    const signed = signOperatorRequest({ secret, method, path, body: bodyText ?? "" });
     try {
       response = await fetchImpl(`${apiBase}${path}`, {
         method,
         headers: {
           "content-type": "application/json",
-          "x-operator-secret": secret
+          ...signed.headers
         },
-        body: body === undefined ? undefined : JSON.stringify(body)
+        body: bodyText
       });
     } catch (error) {
       fail(`${path} failed: ${error instanceof Error ? error.message : "network_error"}`);

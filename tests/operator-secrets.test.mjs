@@ -152,6 +152,7 @@ test("tracked operator files do not embed collector or smoke passwords", () => {
     "scripts/operator-env.mjs",
     "scripts/deploy-smoke.mjs",
     "scripts/operator-account.mjs",
+    "scripts/operator-signature.mjs",
     "docs/AUTH_BILLING_SUPERADMIN.md",
     "docs/DEPLOYMENT_CLOUDSPACE.md",
     "docs/SECRETS_AND_PROVIDER_ACCESS.md",
