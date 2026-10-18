@@ -11,6 +11,11 @@ export interface JobEnvelope<T> {
   attempt: number;
   /** How many times this job was re-sent because a domain or the browser pool was busy. */
   congestionHops?: number | undefined;
+  /**
+   * Set on a domain wake. The value is the hostname whose parked jobs this message should run.
+   * A wake is not fetched.
+   */
+  congestionWake?: string | undefined;
   payload: T;
 }
 

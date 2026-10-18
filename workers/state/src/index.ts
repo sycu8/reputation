@@ -1297,6 +1297,15 @@ export class TenantBudgetDO extends SqliteObject {
   }
 }
 
+const DOMAIN_PARK_CAP = 64;
+const DOMAIN_PARK_BODY_MAX = 16 * 1024;
+const DOMAIN_WAKE_HOLD_MS = 120_000;
+
+function parkLane(value: unknown): "fetch" | "browser" {
+  if (value === "fetch" || value === "browser") return value;
+  throw new Error("invalid_lane");
+}
+
 export class DomainCoordinatorDO extends SqliteObject {
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
@@ -1306,10 +1315,26 @@ export class DomainCoordinatorDO extends SqliteObject {
       recent_429 INTEGER NOT NULL DEFAULT 0, recent_403 INTEGER NOT NULL DEFAULT 0,
       backoff_until INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL
     )`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS domain_waiters (
+      url_key TEXT PRIMARY KEY,
+      lane TEXT NOT NULL,
+      body_json TEXT NOT NULL,
+      parked_at INTEGER NOT NULL
+    )`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_domain_waiters_lane ON domain_waiters(lane, parked_at)`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS domain_wake (
+      key TEXT PRIMARY KEY,
+      wake_at INTEGER NOT NULL,
+      hops INTEGER NOT NULL DEFAULT 0
+    )`);
   }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/internal/park") return this.park(request);
+    if (request.method === "POST" && url.pathname === "/internal/take") return this.take(request);
+    if (request.method === "POST" && url.pathname === "/internal/release-wake") return this.releaseWake(request);
+    if (request.method === "POST" && url.pathname === "/internal/note-wake") return this.noteWake(request);
     if (request.method === "POST" && url.pathname === "/internal/acquire") {
       const body = await readJson(request);
       const domain = asString(body.domain, "domain").toLowerCase();
@@ -1363,9 +1388,176 @@ export class DomainCoordinatorDO extends SqliteObject {
       return json({ ok: true });
     }
     if (request.method === "GET" && url.pathname === "/internal/state") {
-      return json({ state: rows(this.sql.exec<Record<string, unknown>>(`SELECT * FROM domain_state WHERE key='self' LIMIT 1`))[0] ?? null });
+      const waitingRow = rows(this.sql.exec<{ waiting: number }>(`SELECT COUNT(*) AS waiting FROM domain_waiters`))[0];
+      return json({
+        state: rows(this.sql.exec<Record<string, unknown>>(`SELECT * FROM domain_state WHERE key='self' LIMIT 1`))[0] ?? null,
+        waiting: Number(waitingRow?.waiting ?? 0),
+        wake: rows(this.sql.exec<Record<string, unknown>>(`SELECT key, wake_at, hops FROM domain_wake`))
+      });
     }
     return json({ error: "not_found" }, 404);
+  }
+
+  private waiterKey(lane: "fetch" | "browser", urlKey: string): string {
+    return `${lane}\u001f${urlKey}`;
+  }
+
+  private waiting(lane: "fetch" | "browser"): number {
+    const row = rows(this.sql.exec<{ waiting: number }>(
+      `SELECT COUNT(*) AS waiting FROM domain_waiters WHERE lane=?`,
+      lane
+    ))[0];
+    return Number(row?.waiting ?? 0);
+  }
+
+  private retryAfterMs(now: number, lane: "fetch" | "browser"): number {
+    const row = rows(this.sql.exec<{ active_requests: number; next_allowed_at: number; backoff_until: number }>(
+      `SELECT active_requests, next_allowed_at, backoff_until FROM domain_state WHERE key='self' LIMIT 1`
+    ))[0];
+    if (!row) return 0;
+    const backoffUntil = Number(row.backoff_until);
+    if (lane === "fetch") return backoffUntil > now ? Math.max(250, backoffUntil - now) : 0;
+    const blockedUntil = Math.max(Number(row.next_allowed_at), backoffUntil);
+    if (Number(row.active_requests) >= 2 || blockedUntil > now) {
+      return Math.max(250, blockedUntil > now ? blockedUntil - now : 250);
+    }
+    return 0;
+  }
+
+  private async park(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const lane = parkLane(body.lane);
+    const urlKey = asString(body.urlKey, "url_key");
+    const bodyJson = asString(body.bodyJson, "body_json");
+    const delaySeconds = Math.max(1, Math.min(900, Math.ceil(Number(body.delaySeconds) || 1)));
+    const hops = typeof body.hops === "number" && Number.isFinite(body.hops) ? Math.max(0, Math.min(20, Math.floor(body.hops))) : 0;
+    const now = Date.now();
+    const result = await this.state.storage.transaction(async () => {
+      const wake = rows(this.sql.exec<{ wake_at: number }>(
+        `SELECT wake_at FROM domain_wake WHERE key=? LIMIT 1`,
+        lane
+      ))[0];
+      const wakePending = wake != null && Number(wake.wake_at) > now;
+      if (bodyJson.length > DOMAIN_PARK_BODY_MAX) {
+        return {
+          scheduleWake: false,
+          delaySeconds,
+          waiting: this.waiting(lane),
+          overflow: false,
+          duplicate: false,
+          fallback: true
+        };
+      }
+      const key = this.waiterKey(lane, urlKey);
+      const existing = rows(this.sql.exec<{ url_key: string }>(
+        `SELECT url_key FROM domain_waiters WHERE url_key=? LIMIT 1`,
+        key
+      ))[0];
+      if (!existing && this.waiting(lane) >= DOMAIN_PARK_CAP) {
+        const scheduleWake = !wakePending;
+        if (scheduleWake) {
+          this.sql.exec(
+            `INSERT INTO domain_wake(key, wake_at, hops) VALUES(?,?,?)
+             ON CONFLICT(key) DO UPDATE SET wake_at=excluded.wake_at, hops=excluded.hops`,
+            lane, now + delaySeconds * 1000, hops
+          );
+        }
+        return {
+          scheduleWake,
+          delaySeconds,
+          waiting: this.waiting(lane),
+          overflow: true,
+          duplicate: false,
+          fallback: false
+        };
+      }
+      if (!existing) {
+        this.sql.exec(
+          `INSERT INTO domain_waiters(url_key, lane, body_json, parked_at) VALUES(?,?,?,?)`,
+          key, lane, bodyJson, now
+        );
+      }
+      const scheduleWake = !wakePending;
+      if (scheduleWake) {
+        this.sql.exec(
+          `INSERT INTO domain_wake(key, wake_at, hops) VALUES(?,?,?)
+           ON CONFLICT(key) DO UPDATE SET wake_at=excluded.wake_at, hops=excluded.hops`,
+          lane, now + delaySeconds * 1000, hops
+        );
+      }
+      return {
+        scheduleWake,
+        delaySeconds,
+        waiting: this.waiting(lane),
+        overflow: false,
+        duplicate: Boolean(existing),
+        fallback: false
+      };
+    });
+    return json(result);
+  }
+
+  private async take(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const lane = parkLane(body.lane);
+    const requested = typeof body.limit === "number" ? Math.floor(body.limit) : 2;
+    const limit = Math.max(1, Math.min(8, requested));
+    const now = Date.now();
+    const result = await this.state.storage.transaction(async () => {
+      const retryAfterMs = this.retryAfterMs(now, lane);
+      const waiting = this.waiting(lane);
+      if (retryAfterMs > 0) return { jobs: [], retryAfterMs, waiting };
+      const selected = rows(this.sql.exec<{ url_key: string; body_json: string }>(
+        `SELECT url_key, body_json FROM domain_waiters WHERE lane=? ORDER BY parked_at ASC, url_key ASC LIMIT ?`,
+        lane, limit
+      ));
+      for (const job of selected) this.sql.exec(`DELETE FROM domain_waiters WHERE url_key=?`, job.url_key);
+      if (selected.length > 0) {
+        this.sql.exec(
+          `INSERT INTO domain_wake(key, wake_at, hops) VALUES(?,?,0)
+           ON CONFLICT(key) DO UPDATE SET wake_at=excluded.wake_at`,
+          lane, now + DOMAIN_WAKE_HOLD_MS
+        );
+      }
+      return {
+        jobs: selected.map((job) => ({ bodyJson: job.body_json })),
+        retryAfterMs: 0,
+        waiting: this.waiting(lane)
+      };
+    });
+    return json(result);
+  }
+
+  private async releaseWake(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const lane = parkLane(body.lane);
+    const now = Date.now();
+    const result = await this.state.storage.transaction(async () => {
+      const waiting = this.waiting(lane);
+      if (waiting === 0) this.sql.exec(`DELETE FROM domain_wake WHERE key=?`, lane);
+      return { waiting, retryAfterMs: waiting > 0 ? this.retryAfterMs(now, lane) : 0 };
+    });
+    return json(result);
+  }
+
+  private async noteWake(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const lane = parkLane(body.lane);
+    const delaySeconds = Math.ceil(Number(body.delaySeconds) || 0);
+    const hops = typeof body.hops === "number" && Number.isFinite(body.hops) ? Math.max(0, Math.min(20, Math.floor(body.hops))) : 0;
+    await this.state.storage.transaction(async () => {
+      if (delaySeconds <= 0) {
+        this.sql.exec(`DELETE FROM domain_wake WHERE key=?`, lane);
+        return;
+      }
+      const clamped = Math.max(1, Math.min(900, delaySeconds));
+      this.sql.exec(
+        `INSERT INTO domain_wake(key, wake_at, hops) VALUES(?,?,?)
+         ON CONFLICT(key) DO UPDATE SET wake_at=excluded.wake_at, hops=excluded.hops`,
+        lane, Date.now() + clamped * 1000, hops
+      );
+    });
+    return json({ ok: true });
   }
 }
 

@@ -1,13 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import {
   browserFailureAction,
   congestionBackoffDelaySeconds,
   CRAWL_QUEUE_MAX_RETRIES,
   CONGESTION_HOP_CAP,
+  domainWakeDelaySeconds,
+  drainDomainWake,
   fetchFailureAction,
   handleCrawlQueueBatch
 } from "../packages/crawler-core/src/crawl-failure.ts";
+import { DomainCoordinatorDO } from "../workers/state/src/index.ts";
 
 function job(url, hops) {
   const body = {
@@ -266,4 +270,180 @@ test("a failed congestion re-send retries that message and still finishes the ba
   });
   assert.deepEqual(busy.ops, [{ op: "retry", options: { delaySeconds: 30 } }]);
   assert.deepEqual(ok.ops, [{ op: "ack" }]);
+});
+
+class SqlAdapter {
+  constructor() {
+    this.db = new DatabaseSync(":memory:");
+  }
+  exec(query, ...bindings) {
+    const statement = this.db.prepare(query);
+    const trimmed = query.trim().toUpperCase();
+    let values = [];
+    if (trimmed.startsWith("SELECT") || trimmed.startsWith("PRAGMA") || trimmed.includes(" RETURNING ")) {
+      values = statement.all(...bindings);
+    } else {
+      statement.run(...bindings);
+    }
+    return {
+      toArray: () => values,
+      [Symbol.iterator]: function* () { yield* values; }
+    };
+  }
+}
+
+class FakeState {
+  constructor() {
+    const sql = new SqlAdapter();
+    this.storage = {
+      sql,
+      transaction: async (closure) => closure(),
+      setAlarm: async () => {},
+      deleteAlarm: async () => {}
+    };
+  }
+}
+
+function parkDeps(coordinator, sent, events, process) {
+  return {
+    worker: "browser",
+    process,
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(body, delaySeconds, hops) {
+      sent.push({ wake: body.congestionWake ?? null, url: body.payload.url, delaySeconds, hops });
+    },
+    async parkDomain(input) {
+      const response = await coordinator.fetch(new Request("https://do.internal/internal/park", {
+        method: "POST",
+        body: JSON.stringify({
+          lane: "browser",
+          urlKey: input.urlKey,
+          bodyJson: JSON.stringify(input.body),
+          delaySeconds: input.delaySeconds,
+          hops: input.hops
+        })
+      }));
+      assert.equal(response.status, 200);
+      return response.json();
+    },
+    async noteWake(domain, delaySeconds, hops) {
+      const response = await coordinator.fetch(new Request("https://do.internal/internal/note-wake", {
+        method: "POST",
+        body: JSON.stringify({ lane: "browser", delaySeconds, hops, domain })
+      }));
+      assert.equal(response.status, 200);
+    },
+    random: () => 0,
+    log(level, event, fields) {
+      events.push({ level, event, url: fields.url, hops: fields.hops });
+    }
+  };
+}
+
+async function hotProcess(message) {
+  if (message.body.congestionWake) throw new Error("domain_busy:250");
+  const url = message.body.payload.url;
+  if (typeof url === "string" && url.startsWith("https://hot.example/")) throw new Error("domain_busy:250");
+  if (url === "https://pool.example/a") throw new Error("browser_pool_busy:250");
+  throw new Error(`unexpected:${url}`);
+}
+
+test("a hot domain parks each domain_busy job and sends one wake", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  const messages = Array.from({ length: 20 }, (_item, index) => fake(job(`https://hot.example/p${index}`)));
+  const pool = fake(job("https://pool.example/a"));
+  const sent = [];
+  const events = [];
+  await handleCrawlQueueBatch([...messages, pool], parkDeps(coordinator, sent, events, hotProcess));
+  assert.equal(sent.length, 2);
+  const wake = sent.find((item) => item.wake === "hot.example");
+  const poolSend = sent.find((item) => item.wake == null);
+  assert.equal(wake.delaySeconds, 30);
+  assert.equal(wake.hops, 1);
+  assert.equal(poolSend.url, "https://pool.example/a");
+  assert.equal(poolSend.hops, 1);
+  for (const message of messages) assert.deepEqual(message.ops, [{ op: "ack" }]);
+  assert.deepEqual(pool.ops, [{ op: "ack" }]);
+
+  const extra = fake(job("https://hot.example/extra"));
+  const again = [];
+  await handleCrawlQueueBatch([extra], parkDeps(coordinator, again, [], hotProcess));
+  assert.deepEqual(again, []);
+  assert.deepEqual(extra.ops, [{ op: "ack" }]);
+  assert.equal(events.filter((item) => item.event === "crawl_domain_park_full").length, 0);
+});
+
+test("a domain wake that is still busy is re-sent once", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  const wake = fake({ ...job("https://hot.example/p0", 3), congestionWake: "hot.example" });
+  const sent = [];
+  let parked = 0;
+  const deps = parkDeps(coordinator, sent, [], async (message) => {
+    if (message.body.congestionWake) throw new Error("domain_busy:800");
+    throw new Error("unexpected");
+  });
+  const originalPark = deps.parkDomain;
+  deps.parkDomain = async (input) => {
+    parked += 1;
+    return originalPark(input);
+  };
+  await handleCrawlQueueBatch([wake], deps);
+  assert.equal(parked, 0);
+  assert.deepEqual(sent, [{ wake: "hot.example", url: "https://hot.example/p0", delaySeconds: domainWakeDelaySeconds(800, 3, () => 0), hops: 4 }]);
+  assert.equal(sent[0].delaySeconds, 240);
+  assert.deepEqual(wake.ops, [{ op: "ack" }]);
+
+  const more = fake(job("https://hot.example/later"));
+  const follow = [];
+  await handleCrawlQueueBatch([more], parkDeps(coordinator, follow, [], hotProcess));
+  assert.deepEqual(follow, []);
+});
+
+test("a wake with parked jobs left uses a short delay and does not climb hops", async () => {
+  const message = fake({ ...job("https://hot.example/p0", 4), congestionWake: "hot.example" });
+  const sent = [];
+  await handleCrawlQueueBatch([message], {
+    worker: "fetch",
+    async process() { throw new Error("domain_wake:1000"); },
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(body, delaySeconds, hops) {
+      sent.push({ wake: body.congestionWake, delaySeconds, hops });
+    },
+    random: () => 0,
+    log() {}
+  });
+  assert.deepEqual(sent, [{ wake: "hot.example", delaySeconds: 1, hops: 4 }]);
+  assert.deepEqual(message.ops, [{ op: "ack" }]);
+});
+
+test("drainDomainWake runs a free batch and reschedules only the wake when the domain is busy", async () => {
+  await assert.rejects(
+    () => drainDomainWake({
+      async take() { return { jobs: [], waiting: 4, retryAfterMs: 250 }; },
+      async run() { throw new Error("should not run"); },
+      async releaseWake() { throw new Error("should not release"); }
+    }),
+    /domain_busy:250/
+  );
+
+  const ran = [];
+  await drainDomainWake({
+    async take() { return { jobs: ["a", "b"], waiting: 0, retryAfterMs: 0 }; },
+    async run(body) { ran.push(body); },
+    async releaseWake() { return { waiting: 0, retryAfterMs: 0 }; }
+  });
+  assert.deepEqual(ran, ["a", "b"]);
+
+  await assert.rejects(
+    () => drainDomainWake({
+      async take() { return { jobs: ["a"], waiting: 3, retryAfterMs: 0 }; },
+      async run() {},
+      async releaseWake() { return { waiting: 3, retryAfterMs: 0 }; }
+    }),
+    /domain_wake:1000/
+  );
 });

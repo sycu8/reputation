@@ -2,6 +2,7 @@ import { assertPublicHttpUrl, crawlAttemptKey, crawlCacheHit, crawlCacheSkipReas
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
 import { classifyUpstreamStatus, fetchFailureAction, handleCrawlQueueBatch, nextDomainBackoffMs, noteQueuedUrlFailure, parseRetryAfterMs, rememberQueuedSkip } from "./upstream.ts";
+import { domainBusyParkKey, drainDomainWake, type DomainParkResult } from "../../../packages/crawler-core/src/crawl-failure.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -152,7 +153,96 @@ async function recordDomainBackoff(env: Env, domain: string, retryAfterMs: numbe
   });
 }
 
+async function postDomain<T>(env: Env, domain: string, path: string, body: Record<string, unknown>): Promise<T | null> {
+  const stub = domainStub(env, domain);
+  if (!stub) return null;
+  const response = await stub.fetch(`https://do.internal${path}`, { method: "POST", body: JSON.stringify(body) });
+  if (!response.ok) return null;
+  return await response.json() as T;
+}
+
+async function parkFetchDomain(
+  env: Env,
+  input: { domain: string; urlKey: string; body: JobEnvelope<CrawlPayload>; delaySeconds: number; hops: number }
+): Promise<DomainParkResult | null> {
+  try {
+    return await postDomain<DomainParkResult>(env, input.domain, "/internal/park", {
+      lane: "fetch",
+      urlKey: input.urlKey,
+      bodyJson: JSON.stringify(input.body),
+      delaySeconds: input.delaySeconds,
+      hops: input.hops
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function noteFetchWake(env: Env, domain: string, delaySeconds: number, hops: number): Promise<void> {
+  await postDomain(env, domain, "/internal/note-wake", { lane: "fetch", delaySeconds, hops });
+}
+
+function replayFetch(env: Env, body: JobEnvelope<CrawlPayload>): { message: Message<JobEnvelope<CrawlPayload>>; pending: Array<Promise<unknown>> } {
+  const pending: Array<Promise<unknown>> = [];
+  const message = {
+    attempts: 1,
+    body,
+    ack() {},
+    retry(options?: { delaySeconds?: number }) {
+      const delaySeconds = options?.delaySeconds;
+      pending.push(delaySeconds ? env.CRAWL_STATIC.send(body, { delaySeconds }) : env.CRAWL_STATIC.send(body));
+    }
+  } as Message<JobEnvelope<CrawlPayload>>;
+  return { message, pending };
+}
+
+async function drainFetchWake(env: Env, domain: string): Promise<void> {
+  await drainDomainWake({
+    async take() {
+      const taken = await postDomain<{ jobs?: Array<{ bodyJson?: unknown }>; waiting?: number; retryAfterMs?: number }>(
+        env,
+        domain,
+        "/internal/take",
+        { lane: "fetch", limit: 2 }
+      );
+      if (!taken) throw new Error("domain_park_unavailable");
+      const jobs: Array<JobEnvelope<CrawlPayload>> = [];
+      for (const job of taken.jobs ?? []) {
+        if (typeof job.bodyJson !== "string") continue;
+        try {
+          jobs.push(JSON.parse(job.bodyJson) as JobEnvelope<CrawlPayload>);
+        } catch {
+          logCrawlQueue("warn", "crawl_domain_park_bad_body", { requestId: "", domain });
+        }
+      }
+      return { jobs, waiting: Number(taken.waiting ?? 0), retryAfterMs: Number(taken.retryAfterMs ?? 0) };
+    },
+    async run(body) {
+      const replay = replayFetch(env, body);
+      await handleCrawlQueueBatch([replay.message], {
+        ...queueDeps(env),
+        process: (message) => crawlMessage(message, env)
+      });
+      await Promise.all(replay.pending);
+    },
+    async releaseWake() {
+      const left = await postDomain<{ waiting?: number; retryAfterMs?: number }>(env, domain, "/internal/release-wake", { lane: "fetch" });
+      if (!left) throw new Error("domain_park_unavailable");
+      return { waiting: Number(left.waiting ?? 0), retryAfterMs: Number(left.retryAfterMs ?? 0) };
+    }
+  });
+}
+
 async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
+  const wake = message.body.congestionWake;
+  if (typeof wake === "string" && wake.length > 0) {
+    await drainFetchWake(env, wake);
+    return;
+  }
+  await crawlMessage(message, env);
+}
+
+async function crawlMessage(message: Message<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
   const job = message.body;
   const payload = job.payload;
   const normalized = normalizeUrl(assertPublicHttpUrl(payload.url).toString());
@@ -301,25 +391,35 @@ function logCrawlQueue(level: "info" | "warn" | "error", event: string, fields: 
   }, fields);
 }
 
+function queueDeps(env: Env) {
+  return {
+    worker: "fetch" as const,
+    process: (message: Message<JobEnvelope<CrawlPayload>>) => processMessage(message, env),
+    failureAction: (errorMessage: string, attempts: number, urlFailures: number) => fetchFailureAction(errorMessage, { attempts, urlFailures, random: Math.random }),
+    noteUrlFailure: (body: JobEnvelope<CrawlPayload>, errorMessage: string) => noteQueuedUrlFailure(env.CRAWL_CACHE, body, errorMessage, urlHashForPayload),
+    rememberSkip: (body: JobEnvelope<CrawlPayload>, errorMessage: string, ttlSeconds: number) => rememberQueuedSkip(env.CRAWL_CACHE, body, errorMessage, ttlSeconds, urlHashForPayload),
+    requeue: async (body: JobEnvelope<CrawlPayload>, delaySeconds: number, hops: number) => {
+      await env.CRAWL_STATIC.send({ ...body, congestionHops: hops }, { delaySeconds });
+    },
+    parkDomain: (input: { domain: string; urlKey: string; body: JobEnvelope<CrawlPayload>; delaySeconds: number; hops: number }) => parkFetchDomain(env, {
+      ...input,
+      urlKey: input.urlKey || domainBusyParkKey(input.body.tenantId, input.body.payload.url)
+    }),
+    noteWake: (domain: string, delaySeconds: number, hops: number) => noteFetchWake(env, domain, delaySeconds, hops),
+    random: Math.random,
+    log: logCrawlQueue,
+    count(event: string) {
+      env.ANALYTICS?.writeDataPoint({ indexes: [event], blobs: [event, "fetch"], doubles: [1] });
+    }
+  };
+}
+
 export default {
   async fetch(): Promise<Response> {
     return workerHealthResponse("crawler-fetch");
   },
 
   async queue(batch: MessageBatch<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
-    await handleCrawlQueueBatch<JobEnvelope<CrawlPayload>, Message<JobEnvelope<CrawlPayload>>>(batch.messages, {
-      worker: "fetch",
-      process: (message) => processMessage(message, env),
-      failureAction: (errorMessage, attempts, urlFailures) => fetchFailureAction(errorMessage, { attempts, urlFailures, random: Math.random }),
-      noteUrlFailure: (body, errorMessage) => noteQueuedUrlFailure(env.CRAWL_CACHE, body, errorMessage, urlHashForPayload),
-      rememberSkip: (body, errorMessage, ttlSeconds) => rememberQueuedSkip(env.CRAWL_CACHE, body, errorMessage, ttlSeconds, urlHashForPayload),
-      requeue: async (body, delaySeconds, hops) => {
-        await env.CRAWL_STATIC.send({ ...body, congestionHops: hops }, { delaySeconds });
-      },
-      log: logCrawlQueue,
-      count(event) {
-        env.ANALYTICS?.writeDataPoint({ indexes: [event], blobs: [event, "fetch"], doubles: [1] });
-      }
-    });
+    await handleCrawlQueueBatch(batch.messages, queueDeps(env));
   }
 };

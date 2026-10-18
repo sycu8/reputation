@@ -270,3 +270,111 @@ test("domain release records 429 backoff without a prior acquire", async () => {
   }));
   assert.equal(acquire.status, 429);
 });
+
+async function park(coordinator, lane, urlKey, body = { payload: { url: `https://${lane}.example/${urlKey}` } }) {
+  const response = await coordinator.fetch(new Request("https://do.internal/internal/park", {
+    method: "POST",
+    body: JSON.stringify({
+      lane,
+      urlKey,
+      bodyJson: JSON.stringify(body),
+      delaySeconds: 30,
+      hops: 1
+    })
+  }));
+  assert.equal(response.status, 200);
+  return response.json();
+}
+
+test("domain park keeps one wake and take respects the busy lease", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  const first = await park(coordinator, "browser", "tenant-a\u001fhttps://hot.example/a");
+  assert.equal(first.scheduleWake, true);
+  assert.equal(first.duplicate, false);
+  assert.equal(first.waiting, 1);
+  const second = await park(coordinator, "browser", "tenant-a\u001fhttps://hot.example/a");
+  assert.equal(second.scheduleWake, false);
+  assert.equal(second.duplicate, true);
+  assert.equal(second.waiting, 1);
+  const other = await park(coordinator, "browser", "tenant-a\u001fhttps://hot.example/b");
+  assert.equal(other.scheduleWake, false);
+  assert.equal(other.waiting, 2);
+  const fetchLane = await park(coordinator, "fetch", "tenant-a\u001fhttps://hot.example/a");
+  assert.equal(fetchLane.scheduleWake, true);
+  assert.equal(fetchLane.waiting, 1);
+
+  const taken = await (await coordinator.fetch(new Request("https://do.internal/internal/take", {
+    method: "POST",
+    body: JSON.stringify({ lane: "browser", limit: 2 })
+  }))).json();
+  assert.equal(taken.jobs.length, 2);
+  assert.equal(taken.waiting, 0);
+  assert.equal(taken.retryAfterMs, 0);
+  const parsed = taken.jobs.map((job) => JSON.parse(job.bodyJson).payload.url);
+  assert.deepEqual(parsed, ["https://browser.example/tenant-a\u001fhttps://hot.example/a", "https://browser.example/tenant-a\u001fhttps://hot.example/b"]);
+
+  const released = await coordinator.fetch(new Request("https://do.internal/internal/release", {
+    method: "POST",
+    body: JSON.stringify({ domain: "hot.example", status: 429, retryAfterMs: 60_000 })
+  }));
+  assert.equal(released.status, 200);
+  await park(coordinator, "browser", "tenant-a\u001fhttps://hot.example/c");
+  const blocked = await (await coordinator.fetch(new Request("https://do.internal/internal/take", {
+    method: "POST",
+    body: JSON.stringify({ lane: "browser", limit: 2 })
+  }))).json();
+  assert.deepEqual(blocked.jobs, []);
+  assert.equal(blocked.waiting, 1);
+  assert.ok(blocked.retryAfterMs >= 250);
+
+  const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(state.waiting, 2);
+
+  const leased = new DomainCoordinatorDO(new FakeState(), {});
+  for (let slot = 0; slot < 2; slot += 1) {
+    const acquired = await leased.fetch(new Request("https://do.internal/internal/acquire", {
+      method: "POST",
+      body: JSON.stringify({ domain: "hot.example", maxConcurrency: 2, minDelayMs: 0 })
+    }));
+    assert.equal(acquired.status, 200);
+  }
+  await park(leased, "fetch", "tenant-a\u001fhttps://hot.example/fetch");
+  await park(leased, "browser", "tenant-a\u001fhttps://hot.example/browser");
+  const fetchTake = await (await leased.fetch(new Request("https://do.internal/internal/take", {
+    method: "POST",
+    body: JSON.stringify({ lane: "fetch", limit: 2 })
+  }))).json();
+  const browserTake = await (await leased.fetch(new Request("https://do.internal/internal/take", {
+    method: "POST",
+    body: JSON.stringify({ lane: "browser", limit: 2 })
+  }))).json();
+  assert.equal(fetchTake.jobs.length, 1);
+  assert.equal(browserTake.jobs.length, 0);
+  assert.ok(browserTake.retryAfterMs >= 250);
+});
+
+test("domain park overflows at 64 and a large body falls back", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  for (let index = 0; index < 64; index += 1) {
+    const parked = await park(coordinator, "fetch", `tenant\u001fhttps://hot.example/${index}`);
+    assert.equal(parked.overflow, false);
+    assert.equal(parked.scheduleWake, index === 0);
+  }
+  const overflow = await park(coordinator, "fetch", "tenant\u001fhttps://hot.example/overflow");
+  assert.equal(overflow.overflow, true);
+  assert.equal(overflow.scheduleWake, false);
+  assert.equal(overflow.waiting, 64);
+  const huge = await coordinator.fetch(new Request("https://do.internal/internal/park", {
+    method: "POST",
+    body: JSON.stringify({
+      lane: "fetch",
+      urlKey: "tenant\u001foversized",
+      bodyJson: "x".repeat(16 * 1024 + 1),
+      delaySeconds: 30,
+      hops: 1
+    })
+  }));
+  const fallback = await huge.json();
+  assert.equal(fallback.fallback, true);
+  assert.equal(fallback.waiting, 64);
+});
