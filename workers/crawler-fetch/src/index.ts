@@ -1,7 +1,7 @@
 import { assertPublicHttpUrl, crawlAttemptKey, crawlCacheHit, crawlCacheSkipReason, createJob, isHardPaywalledHost, normalizeUrl, parseHardPaywallHosts, sha256Hex, shouldApplyUrlRetryCap, urlRetryCapReached, type CrawlCacheRecord, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
-import { classifyUpstreamStatus, crawlFailureLog, crawlSkipTtlSeconds, countsTowardUrlCap, fetchFailureAction, nextDomainBackoffMs, noteUrlFailure, parseRetryAfterMs } from "./upstream.ts";
+import { classifyUpstreamStatus, crawlFailureLog, crawlSkipTtlSeconds, countsTowardUrlCap, createPlatformRetryBatch, fetchFailureAction, flushPlatformRetries, nextDomainBackoffMs, notePlatformRetry, noteUrlFailure, parseRetryAfterMs } from "./upstream.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -298,6 +298,7 @@ export default {
   },
 
   async queue(batch: MessageBatch<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
+    const platformRetries = createPlatformRetryBatch();
     for (const message of batch.messages) {
       try {
         await processMessage(message, env);
@@ -334,9 +335,13 @@ export default {
             }
           }
           message.ack();
-        } else if (decision.delaySeconds != null) message.retry({ delaySeconds: decision.delaySeconds });
-        else message.retry();
+        } else notePlatformRetry(platformRetries, decision);
       }
+    }
+    const flush = flushPlatformRetries(platformRetries);
+    if (flush.action === "retryAll") {
+      if (flush.delaySeconds != null) batch.retryAll({ delaySeconds: flush.delaySeconds });
+      else batch.retryAll();
     }
   }
 };

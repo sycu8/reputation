@@ -4,11 +4,15 @@ export {
   countsTowardUrlCap,
   crawlFailureLog,
   crawlSkipTtlSeconds,
+  createPlatformRetryBatch,
   fetchFailureAction,
+  flushPlatformRetries,
   isTerminalCrawlFailure,
+  notePlatformRetry,
   noteUrlFailure,
   type CrawlFailureContext,
   type CrawlFailureDecision,
+  type PlatformRetryFlush,
   type UpstreamAction
 } from "../../../packages/crawler-core/src/crawl-failure.ts";
 

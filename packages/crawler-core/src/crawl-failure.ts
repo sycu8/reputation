@@ -20,6 +20,37 @@ export interface CrawlFailureContext {
 
 export type CrawlFailureDecision = { action: "ack" } | { action: "retry"; delaySeconds?: number };
 
+/**
+ * Cloudflare applies `max_retries` when a delivery fails or `retryAll()` runs.
+ * Per-message `message.retry()`, including `retry({ delaySeconds })`, does not
+ * spend that budget, so the same message stays on the queue until retention
+ * (4 days by default) deletes it. Crawl transients must be flushed with `retryAll()`.
+ */
+export interface PlatformRetryBatch {
+  /** null: nothing to retry. 0: retry with no delay. Positive: longest delay in the batch. */
+  delaySeconds: number | null;
+}
+
+export function createPlatformRetryBatch(): PlatformRetryBatch {
+  return { delaySeconds: null };
+}
+
+export function notePlatformRetry(batch: PlatformRetryBatch, decision: CrawlFailureDecision): void {
+  if (decision.action !== "retry") return;
+  const delay = decision.delaySeconds ?? 0;
+  batch.delaySeconds = batch.delaySeconds == null ? delay : Math.max(batch.delaySeconds, delay);
+}
+
+export type PlatformRetryFlush =
+  | { action: "none" }
+  | { action: "retryAll"; delaySeconds?: number };
+
+export function flushPlatformRetries(batch: PlatformRetryBatch): PlatformRetryFlush {
+  if (batch.delaySeconds == null) return { action: "none" };
+  if (batch.delaySeconds > 0) return { action: "retryAll", delaySeconds: batch.delaySeconds };
+  return { action: "retryAll" };
+}
+
 export interface CrawlAttemptCache {
   get(key: string): Promise<string | null>;
   put(key: string, value: string, options: { expirationTtl: number }): Promise<unknown>;

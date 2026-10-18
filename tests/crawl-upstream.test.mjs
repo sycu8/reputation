@@ -12,6 +12,9 @@ import {
   browserFailureAction,
   countsTowardUrlCap,
   crawlFailureLog,
+  createPlatformRetryBatch,
+  flushPlatformRetries,
+  notePlatformRetry,
   noteUrlFailure
 } from "../packages/crawler-core/src/crawl-failure.ts";
 import {
@@ -96,6 +99,29 @@ test("transient errors keep retrying after the cap so the queue can dead-letter 
   }
   assert.equal(fetchFailureAction("hard_paywall_host").action, "ack");
   assert.equal(crawlFailureLog("browser", "browser_http_422", { action: "ack" }).level, "warn");
+});
+
+test("transient retries flush with retryAll so max_retries can dead-letter them", () => {
+  const mixed = createPlatformRetryBatch();
+  notePlatformRetry(mixed, fetchFailureAction("domain_busy:250", { random: () => 0 }));
+  notePlatformRetry(mixed, fetchFailureAction("upstream_http_503"));
+  notePlatformRetry(mixed, fetchFailureAction("upstream_http_404"));
+  assert.deepEqual(flushPlatformRetries(mixed), { action: "retryAll", delaySeconds: 30 });
+
+  const immediate = createPlatformRetryBatch();
+  notePlatformRetry(immediate, fetchFailureAction("upstream_http_503", { attempts: 4, urlFailures: URL_RETRY_CAP }));
+  assert.deepEqual(flushPlatformRetries(immediate), { action: "retryAll" });
+
+  const longest = createPlatformRetryBatch();
+  notePlatformRetry(longest, browserFailureAction("browser_pool_busy:250", { random: () => 0 }));
+  notePlatformRetry(longest, fetchFailureAction("upstream_backoff_429:45000"));
+  assert.deepEqual(flushPlatformRetries(longest), { action: "retryAll", delaySeconds: 45 });
+
+  const acked = createPlatformRetryBatch();
+  notePlatformRetry(acked, fetchFailureAction("hard_paywall_host"));
+  notePlatformRetry(acked, browserFailureAction("browser_http_422"));
+  assert.deepEqual(flushPlatformRetries(acked), { action: "none" });
+  assert.deepEqual(flushPlatformRetries(createPlatformRetryBatch()), { action: "none" });
 });
 
 test("per-URL cap ignores congestion and is scoped per tenant", () => {
