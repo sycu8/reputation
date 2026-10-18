@@ -405,6 +405,8 @@ test("D11/D12 dashboard surfaces expose feedback, billing, admin, reports", asyn
   assert.match(html, /id="alertState"/);
   assert.match(html, /value="open"/);
   assert.match(html, /Not resolved/);
+  assert.match(html, /Needs notification setup/);
+  assert.match(js, /needs_setup/);
   assert.match(html, /How to use Alerts/);
   assert.match(html, /newest publication time/i);
   assert.match(js, /alert\.mention/);

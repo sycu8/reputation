@@ -380,6 +380,7 @@ a.alert-source-link {
   text-decoration: none;
 }
 .tag-state { background: rgba(100, 116, 139, 0.14); color: var(--label); text-transform: lowercase; }
+.tag-state.needs-setup { text-transform: none; background: rgba(180, 83, 9, 0.16); }
 .tag-severity.severity-critical { background: rgba(239, 68, 68, 0.16); color: var(--danger); }
 .tag-severity.severity-high { background: rgba(249, 115, 22, 0.16); color: var(--accent-strong); }
 .tag-severity.severity-medium { background: rgba(245, 158, 11, 0.16); color: var(--warn); }

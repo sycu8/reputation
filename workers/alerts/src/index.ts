@@ -175,6 +175,22 @@ async function processMessage(message: Message<JobEnvelope<AlertPayload>>, env: 
   if (telegramConfigured) configuredChannels.push("telegram");
   const summary = summarizeDeliveryOutcomes({ configuredChannels, results });
   await updateAlert(env, payload, summary.alertState);
+  if (summary.alertState === "needs_setup") {
+    structuredLog("warn", "alert_delivery_skipped", {
+      requestId: message.body.traceId,
+      tenantId: message.body.tenantId,
+      monitorId: message.body.monitorId
+    }, {
+      alertId: payload.alertId,
+      reason: summary.reason
+    });
+    env.ANALYTICS?.writeDataPoint({
+      indexes: [payload.monitorId],
+      blobs: ["alert_skipped", payload.severity, summary.reason],
+      doubles: [payload.severityScore, 0]
+    });
+    return;
+  }
   if (summary.alertState === "failed") {
     throw new Error(summary.reason);
   }
