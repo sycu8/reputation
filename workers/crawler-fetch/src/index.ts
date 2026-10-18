@@ -1,6 +1,7 @@
 import { assertPublicHttpUrl, createJob, normalizeUrl, sha256Hex, type JobEnvelope } from "../../../packages/crawler-core/src/index.ts";
 import type { SourceType } from "../../../packages/source-adapters/src/index.ts";
 import { structuredLog, workerHealthResponse } from "../../../packages/observability/src/index.ts";
+import { classifyUpstreamStatus, fetchFailureAction, nextDomainBackoffMs, parseRetryAfterMs } from "./upstream.ts";
 
 interface CrawlPayload {
   source: SourceType;
@@ -28,6 +29,7 @@ interface Env {
   CRAWL_CACHE: KVNamespace;
   CRAWL_BROWSER: Queue<JobEnvelope<CrawlPayload>>;
   PROCESS_CONTENT: Queue<JobEnvelope<ProcessPayload>>;
+  DOMAIN_DO?: DurableObjectNamespace;
   ANALYTICS?: AnalyticsEngineDataset;
 }
 
@@ -120,6 +122,32 @@ function fetchQuality(contentType: string | null, body: string): { score: number
   return { score, needsBrowser: score < 55, title: parsed.title, text: parsed.text };
 }
 
+function domainStub(env: Env, domain: string): DurableObjectStub | null {
+  if (!env.DOMAIN_DO) return null;
+  return env.DOMAIN_DO.get(env.DOMAIN_DO.idFromName(domain));
+}
+
+async function domainBlockMs(env: Env, domain: string): Promise<{ waitMs: number; recent429: number; backoffUntil: number }> {
+  const stub = domainStub(env, domain);
+  if (!stub) return { waitMs: 0, recent429: 0, backoffUntil: 0 };
+  const response = await stub.fetch("https://do.internal/internal/state");
+  if (!response.ok) return { waitMs: 0, recent429: 0, backoffUntil: 0 };
+  const data = await response.json() as { state?: { backoff_until?: number; recent_429?: number } | null };
+  const backoffUntil = Number(data.state?.backoff_until ?? 0);
+  const recent429 = Number(data.state?.recent_429 ?? 0);
+  const waitMs = backoffUntil - Date.now();
+  return { waitMs: waitMs > 0 ? waitMs : 0, recent429, backoffUntil };
+}
+
+async function recordDomainBackoff(env: Env, domain: string, retryAfterMs: number): Promise<void> {
+  const stub = domainStub(env, domain);
+  if (!stub) return;
+  await stub.fetch("https://do.internal/internal/release", {
+    method: "POST",
+    body: JSON.stringify({ domain, status: 429, retryAfterMs })
+  });
+}
+
 async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: Env): Promise<void> {
   const job = message.body;
   const payload = job.payload;
@@ -146,8 +174,40 @@ async function processMessage(message: Message<JobEnvelope<CrawlPayload>>, env: 
     return;
   }
 
+  const domain = new URL(normalized).hostname.toLowerCase();
+  const blocked = await domainBlockMs(env, domain);
+  if (blocked.waitMs > 0) throw new Error(`domain_busy:${Math.ceil(blocked.waitMs)}`);
+
   const { response, finalUrl } = await safeFetch(normalized);
-  if (!response.ok) throw new Error(`upstream_http_${response.status}`);
+  if (!response.ok) {
+    const action = classifyUpstreamStatus(response.status);
+    try { await response.body?.cancel(); } catch { /* already consumed */ }
+    if (action === "browser") {
+      await env.CRAWL_BROWSER.send(job);
+      env.ANALYTICS?.writeDataPoint({ indexes: [urlHash], blobs: ["browser_escalation_blocked", payload.source], doubles: [response.status] });
+      structuredLog("info", "crawl_fetch_browser", {
+        requestId: job.traceId,
+        tenantId: job.tenantId,
+        monitorId: job.monitorId
+      }, { jobId: job.jobId, url: payload.url, status: response.status });
+      return;
+    }
+    if (action === "permanent") {
+      throw new Error(`upstream_http_permanent:${response.status}`);
+    }
+    if (action === "backoff") {
+      const headerMs = parseRetryAfterMs(response.headers.get("retry-after"));
+      const retryAfterMs = nextDomainBackoffMs({
+        now: Date.now(),
+        backoffUntil: blocked.backoffUntil,
+        recent429: blocked.recent429,
+        retryAfterMs: headerMs
+      });
+      await recordDomainBackoff(env, domain, retryAfterMs);
+      throw new Error(`upstream_backoff_429:${retryAfterMs}`);
+    }
+    throw new Error(`upstream_http_${response.status}`);
+  }
   const contentType = response.headers.get("content-type");
   if (!isTextual(contentType)) throw new Error("unsupported_content_type");
   const contentLength = Number(response.headers.get("content-length") ?? "0");
@@ -214,12 +274,15 @@ export default {
         message.ack();
       } catch (error) {
         const messageText = error instanceof Error ? error.message : "unknown";
-        structuredLog("error", "crawl_fetch_failed", {
+        const decision = fetchFailureAction(messageText);
+        const retryableFailure = decision.action === "retry" && decision.delaySeconds == null;
+        structuredLog(retryableFailure ? "error" : "warn", retryableFailure ? "crawl_fetch_failed" : "crawl_fetch_skipped", {
           requestId: message.body.traceId,
           tenantId: message.body.tenantId,
           monitorId: message.body.monitorId
         }, { jobId: message.body.jobId, url: message.body.payload.url, error: messageText });
-        if (messageText === "ssrf_blocked_host" || messageText === "unsupported_protocol" || messageText === "unsupported_content_type") message.ack();
+        if (decision.action === "ack") message.ack();
+        else if (decision.delaySeconds != null) message.retry({ delaySeconds: decision.delaySeconds });
         else message.retry();
       }
     }

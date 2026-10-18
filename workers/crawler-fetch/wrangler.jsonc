@@ -18,6 +18,11 @@
       "head_sampling_rate": 1
     }
   },
+  "durable_objects": {
+    "bindings": [
+      { "name": "DOMAIN_DO", "class_name": "DomainCoordinatorDO", "script_name": "reputa-state-dev" }
+    ]
+  },
   "kv_namespaces": [{ "binding": "CRAWL_CACHE", "id": "00000000000000000000000000000002" }],
   "r2_buckets": [{ "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-dev" }],
   "queues": {
@@ -33,6 +38,11 @@
   "env": {
     "production": {
       "name": "reputa-crawler-fetch-production",
+      "durable_objects": {
+        "bindings": [
+          { "name": "DOMAIN_DO", "class_name": "DomainCoordinatorDO", "script_name": "reputa-state-production" }
+        ]
+      },
       "kv_namespaces": [{ "binding": "CRAWL_CACHE", "id": "00000000000000000000000000000002" }],
       "r2_buckets": [{ "binding": "RAW_CONTENT", "bucket_name": "reputa-raw-content-production" }],
       "queues": {

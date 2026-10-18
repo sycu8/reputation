@@ -405,6 +405,8 @@ Possible hard stop indicators:
 
 Purpose: allocate browser capacity fairly.
 
+Leases have ids and an expiry. A Durable Object alarm sweeps expired leases so a cancelled, timed-out, or crashed crawl cannot wedge the pool. Release is idempotent and keyed by lease id. Capacity defaults to the account Browser Run concurrent-browser limit and is not taken from a persisted counter.
+
 Lease dimensions:
 
 ```text
@@ -604,16 +606,19 @@ browser launch/session transient error
 AI transient error
 ```
 
-Usually non-retryable:
+Usually non-retryable (ack, do not retry):
 
 ```text
-400/404/410
+400/401/402/404/405/410 and other permanent 4xx
 unsupported MIME
 policy disabled
 authentication required
 SSRF rejection
 malformed URL
+body too large
 ```
+
+403 and 419 are blocks, not permanent failures: route them to the browser crawler instead of retrying the static fetch. 429 records per-domain backoff (honor `Retry-After`, grow while the domain stays hot) and retries after that delay.
 
 Use exponential backoff + jitter. Honor `Retry-After`.
 
