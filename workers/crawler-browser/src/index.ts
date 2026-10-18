@@ -107,8 +107,14 @@ async function parkBrowserDomain(
   }
 }
 
-async function noteBrowserWake(env: Env, domain: string, delaySeconds: number, hops: number): Promise<void> {
-  await postDomain(env, domain, "/internal/note-wake", { lane: "browser", delaySeconds, hops });
+async function noteBrowserWake(
+  env: Env,
+  domain: string,
+  delaySeconds: number,
+  hops: number,
+  retry?: "fail" | "reset"
+): Promise<void> {
+  await postDomain(env, domain, "/internal/note-wake", { lane: "browser", delaySeconds, hops, sweepRetry: retry });
 }
 
 async function completeBrowserParked(env: Env, domain: string, urlKey: string): Promise<void> {
@@ -141,15 +147,25 @@ async function sweepBrowserDomain(
   domain: string,
   options?: { continueSweep?: boolean }
 ): Promise<DomainSweepResult<JobEnvelope<CrawlPayload>>> {
-  const swept = await postDomain<{ jobs?: Array<{ bodyJson?: unknown; urlKey?: unknown }>; remaining?: unknown; unvisited?: unknown }>(
+  const swept = await postDomain<{
+    jobs?: Array<{ bodyJson?: unknown; urlKey?: unknown; lastLifetimeIncAt?: unknown }>;
+    remaining?: unknown;
+    unvisited?: unknown;
+    retryAttempt?: unknown;
+    parked?: unknown;
+  }>(
     env, domain, "/internal/sweep", { lane: "browser", limit: SWEEP_CHUNK, continue: options?.continueSweep === true }
   );
   if (!swept) throw new Error("domain_park_unavailable");
-  const jobs: Array<{ body: JobEnvelope<CrawlPayload>; urlKey: string }> = [];
+  const jobs: Array<{ body: JobEnvelope<CrawlPayload>; urlKey: string; lastLifetimeIncAt?: number }> = [];
   for (const job of swept.jobs ?? []) {
     if (typeof job.bodyJson !== "string" || typeof job.urlKey !== "string") continue;
     try {
-      jobs.push({ body: JSON.parse(job.bodyJson) as JobEnvelope<CrawlPayload>, urlKey: job.urlKey });
+      jobs.push({
+        body: JSON.parse(job.bodyJson) as JobEnvelope<CrawlPayload>,
+        urlKey: job.urlKey,
+        lastLifetimeIncAt: typeof job.lastLifetimeIncAt === "number" ? job.lastLifetimeIncAt : 0
+      });
     } catch {
       logCrawlQueue("warn", "crawl_domain_park_bad_body", { requestId: "", domain, urlKey: job.urlKey });
       try {
@@ -163,7 +179,9 @@ async function sweepBrowserDomain(
   return {
     jobs,
     remaining,
-    unvisited: typeof swept.unvisited === "number" ? swept.unvisited : remaining
+    unvisited: typeof swept.unvisited === "number" ? swept.unvisited : remaining,
+    retryAttempt: typeof swept.retryAttempt === "number" ? swept.retryAttempt : 0,
+    parked: typeof swept.parked === "number" ? swept.parked : jobs.length + remaining
   };
 }
 
@@ -429,7 +447,7 @@ function queueDeps(env: Env) {
       tenantId: string | undefined;
       monitorId: string | undefined;
     }) => parkBrowserDomain(env, input),
-    noteWake: (domain: string, delaySeconds: number, hops: number) => noteBrowserWake(env, domain, delaySeconds, hops),
+    noteWake: (domain: string, delaySeconds: number, hops: number, retry?: "fail" | "reset") => noteBrowserWake(env, domain, delaySeconds, hops, retry),
     sweepDomain: (domain: string, options?: { continueSweep?: boolean }) => sweepBrowserDomain(env, domain, options),
     completeParked: (domain: string, urlKey: string) => completeBrowserParked(env, domain, urlKey),
     noteParked: (domain: string, urlKey: string, body: JobEnvelope<CrawlPayload>) => noteBrowserParked(env, domain, urlKey, body),

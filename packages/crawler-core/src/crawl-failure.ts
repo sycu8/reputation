@@ -218,15 +218,24 @@ export function domainContinueDelaySeconds(waitMs: number, random: () => number 
 
 /**
  * Delay before the same wake is sent again when the domain is busy for at most one lease.
- * Exponential from 2s to a 30s per-domain cap, so a hot domain settles at 120 wake writes an hour.
+ * Exponential from 2s to a 30s per-domain cap, with ±20% jitter, so a hot domain settles at 120–150 wake writes an hour.
  * `slotHop` is how many of these short waits have already been sent. It is not the congestion hop.
  */
 export function domainSlotWaitDelaySeconds(slotHop: number, random: () => number = Math.random): number {
   const safeHop = Number.isFinite(slotHop) && slotHop > 0 ? Math.min(4, Math.floor(slotHop)) : 0;
   const step = Math.min(30, 2 * (2 ** safeHop));
-  const jitter = Math.floor(unitRandom(random));
-  return Math.min(30, Math.max(2, step + jitter));
+  const factor = 0.8 + 0.4 * unitRandom(random);
+  return Math.min(30, Math.max(2, Math.round(step * factor)));
 }
+
+/** First retry is 1s, then 2, 4, 8, 16, 32, and 60. One counter per lane. */
+export function sweepRetryDelaySeconds(attempt: number): number {
+  const n = Number.isFinite(attempt) && attempt > 0 ? Math.min(6, Math.floor(attempt)) : 0;
+  return Math.min(60, 2 ** n);
+}
+
+/** A parked row's congestionLifetime may increase at most once per this interval. */
+export const LIFETIME_MIN_SPACING_MS = 15 * 60 * 1000;
 
 export function crawlHostname(url: string): string | null {
   try {
@@ -392,6 +401,8 @@ export interface DomainParkResult {
 export interface ParkedDrainJob<Body> {
   body: Body;
   urlKey: string;
+  /** Wall-clock time of the last lifetime increment. 0 means the row has no stored clock. */
+  lastLifetimeIncAt?: number;
 }
 
 /** One sweep invocation returns at most this many jobs. The rest stay parked until the next wake. */
@@ -413,6 +424,10 @@ export interface DomainSweepResult<Body> {
    * Kept rows are visited, so they are not counted here.
    */
   unvisited?: number;
+  /** How many failed sweep retries this lane has already scheduled. */
+  retryAttempt?: number;
+  /** Rows still parked on this lane, including ones this chunk did not return. */
+  parked?: number;
 }
 
 export interface DomainSweepOptions {
@@ -441,7 +456,7 @@ export interface CrawlQueueDeps<Body, MessageType extends CrawlQueueMessage<Body
     monitorId: string | undefined;
   }): Promise<DomainParkResult | null>;
   /** Move or clear the domain wake so a second queue send is not scheduled. delaySeconds 0 clears it. */
-  noteWake?(domain: string, delaySeconds: number, hops: number): Promise<void>;
+  noteWake?(domain: string, delaySeconds: number, hops: number, retry?: "fail" | "reset"): Promise<void>;
   /** Return one chunk of parked jobs without deleting them. */
   sweepDomain?(domain: string, options?: DomainSweepOptions): Promise<DomainSweepResult<Body>>;
   /** Delete one parked row after its re-send or DLQ send has been accepted. */
@@ -459,6 +474,8 @@ export interface CrawlQueueDeps<Body, MessageType extends CrawlQueueMessage<Body
   /** Analytics Engine counter. A throw must not skip the ack. Pass the domain for a per-host event. */
   count?(event: string, domain?: string): void;
   random?: () => number;
+  /** Wall clock for lifetime spacing. Tests pass the simulated clock. */
+  now?: () => number;
   log(level: "info" | "warn" | "error", event: string, fields: Record<string, unknown>): void;
 }
 
@@ -554,8 +571,13 @@ function withoutCongestionWake<Body extends object>(body: Body): Body {
   return copy;
 }
 
-function withParkLifetime<Body extends object>(body: Body, lifetime: number): Body {
-  return { ...withoutCongestionWake(body), congestionHops: 0, congestionLifetime: lifetime } as Body;
+function withParkLifetime<Body extends object>(body: Body, lifetime: number, lastLifetimeIncAt: number): Body {
+  return {
+    ...withoutCongestionWake(body),
+    congestionHops: 0,
+    congestionLifetime: lifetime,
+    lastLifetimeIncAt
+  } as Body;
 }
 
 /** A wake carries the domain and token only. The carrier job's tenant is not charged or logged. */
@@ -606,11 +628,12 @@ async function rememberWake<Body extends object, MessageType extends CrawlQueueM
   attempts: number,
   domain: string,
   delaySeconds: number,
-  hops: number
+  hops: number,
+  retry?: "fail" | "reset"
 ): Promise<void> {
   if (!deps.noteWake) return;
   try {
-    await deps.noteWake(domain, delaySeconds, hops);
+    await deps.noteWake(domain, delaySeconds, hops, retry);
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown";
     deps.log("warn", "crawl_domain_wake_failed", failureFields(parsed, attempts, { domain, detail, hops }));
@@ -719,7 +742,8 @@ async function settleSweptPark<Body extends object, MessageType extends CrawlQue
   errorMessage: string,
   domain: string,
   job: ParkedDrainJob<Body>,
-  lifetime: number
+  lifetime: number,
+  lastLifetimeIncAt: number
 ): Promise<ParkSweepOutcome> {
   const jobParsed = readCrawlQueueBody(job.body);
   const fields = failureFields(jobParsed, message.attempts, {
@@ -729,9 +753,9 @@ async function settleSweptPark<Body extends object, MessageType extends CrawlQue
     count: 1
   });
   if (jobParsed != null && lifetime <= CONGESTION_HOP_CAP) {
-    deps.log("warn", "crawl_domain_park_expired", fields);
-    recordCrawlCount(deps, "crawl_domain_park_expired", domain);
-    const stamped = withParkLifetime(job.body, lifetime);
+    deps.log("info", "crawl_domain_park_kept", fields);
+    recordCrawlCount(deps, "crawl_domain_park_kept", domain);
+    const stamped = withParkLifetime(job.body, lifetime, lastLifetimeIncAt);
     if (deps.noteParked) {
       try {
         await deps.noteParked(domain, job.urlKey, stamped);
@@ -758,7 +782,7 @@ async function settleSweptPark<Body extends object, MessageType extends CrawlQue
   recordCrawlCount(deps, "crawl_domain_park_lifetime", domain);
   if (!deps.deadLetter) return "failed";
   try {
-    await deps.deadLetter(withParkLifetime(job.body, lifetime), "crawl_domain_park_lifetime", domain);
+    await deps.deadLetter(withParkLifetime(job.body, lifetime, lastLifetimeIncAt), "crawl_domain_park_lifetime", domain);
   } catch {
     return "failed";
   }
@@ -800,9 +824,10 @@ async function settleCrawlFailure<Body extends object, MessageType extends Crawl
     }
     const random = deps.random ?? Math.random;
     const delaySeconds = domainContinueDelaySeconds(prefixedWaitMs(errorMessage, "domain_wake:"), random);
-    await rememberWake(deps, parsed, message.attempts, domain, delaySeconds, 0);
-    deps.log("info", "crawl_domain_wake", failureFields(parsed, message.attempts, { domain, hops: 0, delaySeconds }));
-    const sent = await sendRequeue(message, deps, parsed, errorMessage, message.body, delaySeconds, 0);
+    const again = { ...message.body, congestionSlotHops: 0 } as Body;
+    await rememberWake(deps, parsed, message.attempts, domain, delaySeconds, 0, "reset");
+    deps.log("info", "crawl_domain_wake", failureFields(parsed, message.attempts, { domain, hops: 0, delaySeconds, slotHops: 0 }));
+    const sent = await sendRequeue(message, deps, parsed, errorMessage, again, delaySeconds, 0);
     if (sent) message.ack();
     return;
   }
@@ -860,37 +885,59 @@ async function settleCrawlFailure<Body extends object, MessageType extends Crawl
           }));
         }
         const unvisited = typeof swept.unvisited === "number" ? swept.unvisited : swept.remaining;
+        const now = deps.now?.() ?? Date.now();
         let failed = 0;
         let kept = 0;
+        let advanced = 0;
         for (const job of swept.jobs) {
           const jobParsed = readCrawlQueueBody(job.body);
-          const lifetime = jobParsed == null ? CONGESTION_HOP_CAP + 1 : jobParsed.lifetime + 1;
-          const outcome = await settleSweptPark(message, deps, parsed, errorMessage, domain, job, lifetime);
+          const current = jobParsed == null ? CONGESTION_HOP_CAP + 1 : jobParsed.lifetime;
+          const last = typeof job.lastLifetimeIncAt === "number" && job.lastLifetimeIncAt > 0 ? job.lastLifetimeIncAt : 0;
+          const due = last === 0 || now - last >= LIFETIME_MIN_SPACING_MS;
+          const lifetime = due ? current + 1 : current;
+          const stampedAt = due ? now : last;
+          const outcome = await settleSweptPark(message, deps, parsed, errorMessage, domain, job, lifetime, stampedAt);
           if (outcome === "kept") kept += 1;
           else if (outcome === "failed") failed += 1;
+          if (due && outcome !== "failed") advanced += 1;
         }
         if (failed > 0) {
+          const delaySeconds = sweepRetryDelaySeconds(swept.retryAttempt ?? 0);
           const again = sweepWake(message.body, CONGESTION_HOP_CAP, true);
-          await rememberWake(deps, parsed, message.attempts, domain, 1, CONGESTION_HOP_CAP);
+          await rememberWake(deps, parsed, message.attempts, domain, delaySeconds, CONGESTION_HOP_CAP, "fail");
+          const sent = await sendRequeue(message, deps, parsed, errorMessage, again, delaySeconds, CONGESTION_HOP_CAP);
+          if (sent) message.ack();
+          return;
+        }
+        if (advanced > 0 && unvisited > 0) {
+          const again = sweepWake(message.body, CONGESTION_HOP_CAP, true);
+          await rememberWake(deps, parsed, message.attempts, domain, 1, CONGESTION_HOP_CAP, "reset");
           const sent = await sendRequeue(message, deps, parsed, errorMessage, again, 1, CONGESTION_HOP_CAP);
           if (sent) message.ack();
           return;
         }
         if (kept > 0) {
           const again = sweepWake(message.body, 0, false);
-          await rememberWake(deps, parsed, message.attempts, domain, 1, 0);
+          await rememberWake(deps, parsed, message.attempts, domain, 1, 0, "reset");
           const sent = await sendRequeue(message, deps, parsed, errorMessage, again, 1, 0);
           if (sent) message.ack();
           return;
         }
         if (unvisited > 0) {
           const again = sweepWake(message.body, CONGESTION_HOP_CAP, true);
-          await rememberWake(deps, parsed, message.attempts, domain, 1, CONGESTION_HOP_CAP);
+          await rememberWake(deps, parsed, message.attempts, domain, 1, CONGESTION_HOP_CAP, "reset");
           const sent = await sendRequeue(message, deps, parsed, errorMessage, again, 1, CONGESTION_HOP_CAP);
           if (sent) message.ack();
           return;
         }
-        await rememberWake(deps, parsed, message.attempts, domain, 0, parsed.hops);
+        if ((swept.parked ?? 0) > 0) {
+          const again = sweepWake(message.body, 0, false);
+          await rememberWake(deps, parsed, message.attempts, domain, 1, 0, "reset");
+          const sent = await sendRequeue(message, deps, parsed, errorMessage, again, 1, 0);
+          if (sent) message.ack();
+          return;
+        }
+        await rememberWake(deps, parsed, message.attempts, domain, 0, parsed.hops, "reset");
       } else if (parsed.congestionWake) {
         await rememberWake(deps, parsed, message.attempts, parsed.congestionWake, 0, parsed.hops);
       }

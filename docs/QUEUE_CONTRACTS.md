@@ -151,7 +151,7 @@ DLQ record must preserve:
 - first failure time
 - last failure time
 
-A park-lifetime message is produced by the crawl workers, or by `reputa-state` when a domain alarm expires a stranded park, onto `reputa-crawl-dlq-production` (dev: `reputa-crawl-dlq-dev`). The state worker deletes the row only after that send is accepted. It keeps the original envelope and adds `parkExpiredReason` (`crawl_domain_park_lifetime`), `parkExpiredDomain`, `parkExpiredAt`, and `congestionLifetime`. Attempts stay the queue delivery count. This change does not add a DLQ consumer.
+A park-lifetime message is produced by the crawl workers onto `reputa-crawl-dlq-production` (dev: `reputa-crawl-dlq-dev`) with `parkExpiredReason` `crawl_domain_park_lifetime`. `reputa-state` produces the same queue when a domain alarm expires a stranded park, with `parkExpiredReason` `crawl_domain_park_stranded`. The state worker deletes the row only after that send is accepted. It keeps the original envelope and adds `parkExpiredDomain`, `parkExpiredAt`, and `congestionLifetime`. Attempts stay the queue delivery count. This change does not add a DLQ consumer. A kept sweep visit logs `crawl_domain_park_kept` and is not a DLQ message. `crawl_domain_park_expired` is no longer emitted.
 
 Admin tooling must support:
 - inspect

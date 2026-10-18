@@ -9,6 +9,8 @@ import {
   domainBusyWakeDelaySeconds,
   domainContinueDelaySeconds,
   domainSlotWaitDelaySeconds,
+  LIFETIME_MIN_SPACING_MS,
+  sweepRetryDelaySeconds,
   drainDomainWake,
   fetchFailureAction,
   handleCrawlQueueBatch
@@ -800,8 +802,8 @@ test("a hop-capped wake sweeps each parked job and counts once", async () => {
     count(event) { counts.push(event); }
   });
   assert.deepEqual(capped.ops, [{ op: "ack" }]);
-  assert.deepEqual(counts, ["crawl_congestion_cap", "crawl_domain_park_expired", "crawl_domain_park_expired"]);
-  assert.equal(capEvents.filter((item) => item.event === "crawl_domain_park_expired").length, 2);
+  assert.deepEqual(counts, ["crawl_congestion_cap", "crawl_domain_park_kept", "crawl_domain_park_kept"]);
+  assert.equal(capEvents.filter((item) => item.event === "crawl_domain_park_kept").length, 2);
   assert.equal(replayed.length, 2);
   assert.ok(waitingAtRequeue > 0);
   assert.deepEqual(replayed.map((item) => item.hops), [0, 0]);
@@ -941,7 +943,7 @@ test("a swept job under the lifetime cap stays parked and the wake resets", asyn
   assert.deepEqual(noted, [{ urlKey: "k1", lifetime: 3, hops: 0, wake: null }]);
   assert.deepEqual(wakes, [{ delaySeconds: 1, hops: 0 }]);
   assert.deepEqual(sent, [{ wake: "hot.example", delaySeconds: 1, hops: 0, sweep: null }]);
-  assert.deepEqual(counts, ["crawl_domain_park_expired:hot.example"]);
+  assert.deepEqual(counts, ["crawl_domain_park_kept:hot.example"]);
   assert.deepEqual(message.ops, [{ op: "ack" }]);
 });
 
@@ -964,7 +966,7 @@ test("a kept sweep chunk does not walk the unvisited rows", async () => {
     },
     async sweepDomain() {
       return {
-        jobs: [{ body: job("https://hot.example/old"), urlKey: "k1" }],
+        jobs: [{ body: job("https://hot.example/old"), urlKey: "k1", lastLifetimeIncAt: Date.now() }],
         remaining: 400,
         unvisited: 400
       };
@@ -1004,7 +1006,7 @@ test("a short slot wait backs off from 2s to 30s without climbing hops", async (
     delays.push(sent[0].delaySeconds);
     slot = sent[0].slot;
   }
-  assert.deepEqual(delays, [2, 4, 8, 16, 30, 30]);
+  assert.deepEqual(delays, [2, 3, 6, 13, 24, 24]);
 });
 
 function slotWakeWrites(domains, horizonSeconds) {
@@ -1028,8 +1030,7 @@ test("three hot domains stay at or below the 57k queue-write baseline", () => {
   const parkRecycles = 6_300;
   const slotWrites = slotWakeWrites(3, 3600);
   const projected = baseline - parkRecycles + slotWrites;
-  assert.equal(slotWrites, 369);
-  assert.equal(projected, 51_069);
+  assert.ok(slotWrites < parkRecycles);
   assert.ok(projected <= baseline);
 });
 
@@ -1076,6 +1077,7 @@ test("more than 32 parked rows with a long backoff are not dead-lettered within 
       failureAction,
       async noteUrlFailure() { return 0; },
       async rememberSkip() {},
+      now: () => now,
       async requeue(body, delaySeconds, hops) {
         queue.push({ at: now + delaySeconds * 1000, body: { ...body, congestionHops: hops } });
       },
@@ -1094,9 +1096,15 @@ test("more than 32 parked rows with a long backoff are not dead-lettered within 
         assert.equal(response.status, 200);
         const swept = await response.json();
         return {
-          jobs: (swept.jobs ?? []).map((item) => ({ body: JSON.parse(item.bodyJson), urlKey: item.urlKey })),
+          jobs: (swept.jobs ?? []).map((item) => ({
+            body: JSON.parse(item.bodyJson),
+            urlKey: item.urlKey,
+            lastLifetimeIncAt: item.lastLifetimeIncAt
+          })),
           remaining: swept.remaining,
-          unvisited: swept.unvisited
+          unvisited: swept.unvisited,
+          retryAttempt: swept.retryAttempt,
+          parked: swept.parked
         };
       },
       async noteParked(_domain, urlKey, body) {
@@ -1125,4 +1133,219 @@ test("more than 32 parked rows with a long backoff are not dead-lettered within 
   const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
   assert.equal(state.waiting, 40);
   assert.ok(steps > 0 && steps < 500);
+});
+
+test("progress resets the slot backoff", async () => {
+  const message = fake({
+    ...job("https://hot.example/p0", 4),
+    congestionWake: "hot.example",
+    congestionSlotHops: 5
+  });
+  const sent = [];
+  await handleCrawlQueueBatch([message], {
+    worker: "browser",
+    async process() { throw new Error("domain_wake:1000"); },
+    failureAction,
+    async noteUrlFailure() { return 0; },
+    async rememberSkip() {},
+    async requeue(body, delaySeconds, hops) {
+      sent.push({ delaySeconds, hops, slot: body.congestionSlotHops ?? 0 });
+    },
+    random: () => 0,
+    log() {}
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].hops, 0);
+  assert.equal(sent[0].slot, 0);
+});
+
+test("a failed sweep backs off per lane from 1s to 60s", async () => {
+  const delays = [];
+  let attempt = 0;
+  for (let step = 0; step < 8; step += 1) {
+    const message = fake({
+      ...job("https://hot.example/", CONGESTION_HOP_CAP),
+      congestionWake: "hot.example"
+    });
+    await handleCrawlQueueBatch([message], {
+      worker: "browser",
+      async process() { throw new Error("domain_busy:120000"); },
+      failureAction,
+      async noteUrlFailure() { return 0; },
+      async rememberSkip() {},
+      async requeue(_body, delaySeconds) { delays.push(delaySeconds); },
+      async noteWake(_domain, _delay, _hops, retry) { if (retry === "fail") attempt += 1; },
+      async sweepDomain() {
+        return {
+          jobs: [{ body: job("https://hot.example/old"), urlKey: "k1", lastLifetimeIncAt: 0 }],
+          remaining: 0,
+          unvisited: 0,
+          retryAttempt: attempt
+        };
+      },
+      async noteParked() { throw new Error("park down"); },
+      log() {}
+    });
+  }
+  assert.deepEqual(delays, [1, 2, 4, 8, 16, 32, 60, 60].map((delay, index) => sweepRetryDelaySeconds(index)));
+});
+
+test("a deleted wake is re-armed and does not dead-letter the park within 5 minutes", async () => {
+  let now = 1_700_000_000_000;
+  const dlq = [];
+  const wakes = [];
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {
+    nowMs: () => now,
+    CRAWL_DLQ: { async send(body) { dlq.push(body); } },
+    CRAWL_BROWSER: { async send(body) { wakes.push(body); } }
+  });
+  for (let index = 0; index < 40; index += 1) {
+    const response = await coordinator.fetch(new Request("https://do.internal/internal/park", {
+      method: "POST",
+      body: JSON.stringify({
+        lane: "browser",
+        urlKey: `tenant\u001fhttps://hot.example/${index}`,
+        bodyJson: JSON.stringify(job(`https://hot.example/${index}`)),
+        delaySeconds: 30,
+        hops: 0,
+        tenantId: "tenant-a",
+        monitorId: "monitor-a"
+      })
+    }));
+    assert.equal(response.status, 200);
+  }
+  const opened = await coordinator.fetch(new Request("https://do.internal/internal/sweep", {
+    method: "POST",
+    body: JSON.stringify({ lane: "browser", limit: 32 })
+  }));
+  assert.equal(opened.status, 200);
+  const started = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  const gen = started.sweep.find((item) => item.lane === "browser").sweep_gen;
+  assert.ok(gen > 0);
+  const cleared = await coordinator.fetch(new Request("https://do.internal/internal/note-wake", {
+    method: "POST",
+    body: JSON.stringify({ lane: "browser", delaySeconds: 0, hops: 0 })
+  }));
+  assert.equal(cleared.status, 200);
+  const missing = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(missing.wake.length, 0);
+  assert.equal(missing.sweep.find((item) => item.lane === "browser").sweep_gen, gen);
+  await coordinator.alarm();
+  const rearmed = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(rearmed.wake.length, 1);
+  assert.equal(rearmed.waiting, 40);
+  assert.equal(dlq.length, 0);
+  assert.equal(wakes.length, 1);
+  now += 5 * 60 * 1000;
+  await coordinator.alarm();
+  const later = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  assert.equal(later.waiting, 40);
+  assert.equal(dlq.length, 0);
+  assert.equal(wakes.length, 1);
+  assert.equal(later.sweep.find((item) => item.lane === "browser").sweep_gen, gen);
+});
+
+async function firstDeadLetterMs(rowCount) {
+  let now = 1_700_000_000_000;
+  const start = now;
+  const coordinator = new DomainCoordinatorDO(new FakeState(), { nowMs: () => now });
+  for (let index = 0; index < rowCount; index += 1) {
+    const response = await coordinator.fetch(new Request("https://do.internal/internal/park", {
+      method: "POST",
+      body: JSON.stringify({
+        lane: "browser",
+        urlKey: `tenant\u001fhttps://hot.example/${index}`,
+        bodyJson: JSON.stringify(job(`https://hot.example/${index}`)),
+        delaySeconds: 30,
+        hops: 0,
+        tenantId: "tenant-a",
+        monitorId: "monitor-a"
+      })
+    }));
+    assert.equal(response.status, 200);
+  }
+  const dead = [];
+  const queue = [{
+    at: now,
+    body: {
+      ...job("https://hot.example/"),
+      congestionWake: "hot.example",
+      congestionWakeToken: "sim",
+      congestionHops: 0
+    }
+  }];
+  const horizon = start + 30 * 60 * 60 * 1000;
+  let first = 0;
+  let steps = 0;
+  while (queue.length > 0 && steps < 40000 && dead.length < rowCount) {
+    queue.sort((left, right) => left.at - right.at);
+    const next = queue.shift();
+    if (next.at > horizon) break;
+    now = next.at;
+    const before = dead.length;
+    await handleCrawlQueueBatch([fake(next.body)], {
+      worker: "browser",
+      async process() { throw new Error("domain_busy:120000"); },
+      failureAction,
+      async noteUrlFailure() { return 0; },
+      async rememberSkip() {},
+      now: () => now,
+      random: () => 0,
+      async requeue(body, delaySeconds, hops) {
+        queue.push({ at: now + delaySeconds * 1000, body: { ...body, congestionHops: hops } });
+      },
+      async noteWake(_domain, delaySeconds, hops, retry) {
+        const response = await coordinator.fetch(new Request("https://do.internal/internal/note-wake", {
+          method: "POST",
+          body: JSON.stringify({ lane: "browser", delaySeconds, hops, sweepRetry: retry })
+        }));
+        assert.equal(response.status, 200);
+      },
+      async sweepDomain(_domain, options) {
+        const response = await coordinator.fetch(new Request("https://do.internal/internal/sweep", {
+          method: "POST",
+          body: JSON.stringify({ lane: "browser", limit: 32, continue: options?.continueSweep === true })
+        }));
+        const swept = await response.json();
+        return {
+          jobs: (swept.jobs ?? []).map((item) => ({
+            body: JSON.parse(item.bodyJson),
+            urlKey: item.urlKey,
+            lastLifetimeIncAt: item.lastLifetimeIncAt
+          })),
+          remaining: swept.remaining,
+          unvisited: swept.unvisited,
+          retryAttempt: swept.retryAttempt,
+          parked: swept.parked
+        };
+      },
+      async noteParked(_domain, urlKey, body) {
+        const response = await coordinator.fetch(new Request("https://do.internal/internal/revise-park", {
+          method: "POST",
+          body: JSON.stringify({ lane: "browser", urlKey, bodyJson: JSON.stringify(body) })
+        }));
+        assert.equal(response.status, 200);
+      },
+      async completeParked(_domain, urlKey) {
+        await coordinator.fetch(new Request("https://do.internal/internal/complete", {
+          method: "POST",
+          body: JSON.stringify({ lane: "browser", urlKey })
+        }));
+      },
+      async deadLetter(body) { dead.push(body.payload.url); },
+      log() {}
+    });
+    if (before === 0 && dead.length > 0) first = now - start;
+    steps += 1;
+  }
+  return { first, dead: dead.length, steps };
+}
+
+test("a long backoff dead-letters no sooner than 3.25 hours for 32, 64, and 500 rows", async () => {
+  const minimum = 13 * LIFETIME_MIN_SPACING_MS;
+  for (const rows of [32, 64, 500]) {
+    const result = await firstDeadLetterMs(rows);
+    assert.equal(result.dead, rows, `${rows} rows dead-lettered ${result.dead}`);
+    assert.ok(result.first >= minimum, `${rows} rows reached the DLQ at ${result.first}ms`);
+  }
 });

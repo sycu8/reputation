@@ -464,7 +464,7 @@ test("a wake token stays one chain across the delivery lag and the alarm expires
   await coordinator.alarm();
   const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
   assert.equal(sent.length, 3);
-  assert.ok(sent.every((body) => body.parkExpiredReason === "crawl_domain_park_lifetime"));
+  assert.ok(sent.every((body) => body.parkExpiredReason === "crawl_domain_park_stranded"));
   assert.equal(state.waiting, 0);
   assert.equal(state.expired, 3);
   assert.equal(state.parkEvents.length, 3);
@@ -521,10 +521,10 @@ test("an expired park is dead-lettered before it is deleted", async () => {
     now += 60 * 60 * 1000;
     await coordinator.alarm();
     assert.equal(sent.length, 2);
-    assert.ok(sent.every((body) => body.parkExpiredReason === "crawl_domain_park_lifetime" && body.parkExpiredDomain === "hot.example"));
+    assert.ok(sent.every((body) => body.parkExpiredReason === "crawl_domain_park_stranded" && body.parkExpiredDomain === "hot.example"));
     const expired = warnings.map((line) => {
       try { return JSON.parse(line); } catch { return null; }
-    }).filter((item) => item && item.message === "crawl_domain_park_lifetime" && item.tenantId === "expiry-probe");
+    }).filter((item) => item && item.message === "crawl_domain_park_stranded" && item.tenantId === "expiry-probe");
     assert.equal(expired.length, 2);
     assert.ok(expired.every((item) => item.count === 1));
     const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
@@ -677,6 +677,22 @@ test("a deep park raises the browser lease budget and a release without a lease 
   assert.equal(granted.status, 200);
   const after = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
   assert.equal(after.leases, 4);
+});
+
+test("sweep retry counters stay on their own lane", async () => {
+  const coordinator = new DomainCoordinatorDO(new FakeState(), {});
+  for (const lane of ["browser", "browser", "fetch"]) {
+    const response = await coordinator.fetch(new Request("https://do.internal/internal/note-wake", {
+      method: "POST",
+      body: JSON.stringify({ lane, delaySeconds: 30, hops: 0, sweepRetry: "fail" })
+    }));
+    assert.equal(response.status, 200);
+  }
+  const state = await (await coordinator.fetch(new Request("https://do.internal/internal/state"))).json();
+  const browser = state.sweep.find((item) => item.lane === "browser");
+  const fetchLane = state.sweep.find((item) => item.lane === "fetch");
+  assert.equal(browser.retry_attempt, 2);
+  assert.equal(fetchLane.retry_attempt, 1);
 });
 
 test("browser lease budget follows the browser lane only", async () => {
