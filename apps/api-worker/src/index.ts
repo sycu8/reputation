@@ -18,6 +18,7 @@ interface Env {
   RAW_CONTENT: R2Bucket;
   ANALYTICS?: AnalyticsEngineDataset;
   SUPER_ADMIN_EMAILS?: string;
+  OPERATOR_ACCOUNT_SECRET?: string;
   ALLOWED_ORIGINS?: string;
   ENVIRONMENT: string;
   SESSION_COOKIE_NAME?: string;
@@ -219,10 +220,12 @@ async function doJson<T>(stub: DurableObjectStub, path: string, init?: RequestIn
 
 class HttpError extends Error {
   readonly status: number;
+  readonly headers: Record<string, string>;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, headers: Record<string, string> = {}) {
     super(message);
     this.status = status;
+    this.headers = headers;
   }
 }
 
@@ -327,6 +330,7 @@ async function signup(request: Request, env: Env): Promise<Response> {
   await registerTenant(env, { id: workspaceId, name: workspaceName, plan: "free", ownerUserId: account.userId });
   const cookieName = env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT;
   const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
+  await rememberAccount(env, { email: account.email, userId: account.userId, status: "active" });
   return json(
     {
       user: { id: account.userId, email: account.email, globalRole: account.globalRole },
@@ -743,8 +747,257 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, duplicate: false, eventId: event.eventId, plan });
 }
 
-async function listAdminTenants(auth: AuthContext, env: Env): Promise<Response> {
+const ACCOUNT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function constantTimeEqual(a: string, b: string): boolean {
+  const left = new TextEncoder().encode(a);
+  const right = new TextEncoder().encode(b);
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let i = 0; i < left.length; i += 1) diff |= (left[i] ?? 0) ^ (right[i] ?? 0);
+  return diff === 0;
+}
+
+async function operatorSecretMatches(provided: string, expected: string): Promise<boolean> {
+  const [left, right] = await Promise.all([
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(provided)),
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(expected))
+  ]);
+  return constantTimeEqual(base64url(new Uint8Array(left)), base64url(new Uint8Array(right)));
+}
+
+function requestRay(request: Request): string {
+  const ray = request.headers.get("cf-ray")?.trim() ?? "";
+  return ray || "no-request-id";
+}
+
+type OperatorGate =
+  | { ok: true; actor: string }
+  | { ok: false; status: number; error: string; sessionActor?: string; retryAfter?: number };
+
+async function optionalSessionActor(request: Request, env: Env, ray: string): Promise<string | undefined> {
+  const hasSession = Boolean(request.headers.get("cookie") || request.headers.get("authorization") || request.headers.get("Authorization"));
+  if (!hasSession) return undefined;
+  try {
+    const auth = await resolveAuth(request, env);
+    return `${auth.userId}:${ray}`;
+  } catch {
+    return undefined;
+  }
+}
+
+const SECRET_GUESS_LIMIT = 8;
+const SECRET_GUESS_WINDOW_MS = 60_000;
+const secretGuesses = new Map<string, number[]>();
+
+function clientIp(request: Request): string {
+  const value = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
+  return value.slice(0, 128);
+}
+
+/**
+ * Per-isolate memory only. The check runs before the secret is compared. A timestamp is
+ * stored only after that comparison fails, with or without a cookie. Correct secrets are
+ * not recorded. A session with no secret header is not counted.
+ */
+function recentSecretFailures(request: Request): number[] {
+  const ip = clientIp(request);
+  const now = Date.now();
+  const recent = (secretGuesses.get(ip) ?? []).filter((ts) => now - ts < SECRET_GUESS_WINDOW_MS);
+  if (recent.length === 0) secretGuesses.delete(ip);
+  else secretGuesses.set(ip, recent);
+  return recent;
+}
+
+function secretGuessBlocked(request: Request): { blocked: boolean; retryAfter: number } {
+  const recent = recentSecretFailures(request);
+  if (recent.length < SECRET_GUESS_LIMIT) return { blocked: false, retryAfter: 0 };
+  const oldest = recent[0] ?? Date.now();
+  const retryAfter = Math.min(
+    60,
+    Math.max(1, Math.ceil((SECRET_GUESS_WINDOW_MS - (Date.now() - oldest)) / 1000))
+  );
+  return { blocked: true, retryAfter };
+}
+
+function recordFailedSecretGuess(request: Request): void {
+  const ip = clientIp(request);
+  const recent = recentSecretFailures(request);
+  recent.push(Date.now());
+  secretGuesses.set(ip, recent);
+  if (secretGuesses.size > 1024) {
+    const oldest = secretGuesses.keys().next().value;
+    if (oldest !== undefined) secretGuesses.delete(oldest);
+  }
+}
+
+function operatorGateError(gate: Extract<OperatorGate, { ok: false }>): HttpError {
+  if (gate.retryAfter === undefined) return new HttpError(gate.status, gate.error);
+  return new HttpError(gate.status, gate.error, { "Retry-After": String(gate.retryAfter) });
+}
+
+/** Password reset and lock accept only X-Operator-Secret. A session alone is 403. */
+async function requireOperatorSecret(request: Request, env: Env): Promise<OperatorGate> {
+  const ray = requestRay(request);
+  const header = request.headers.get("x-operator-secret");
+  if (header === null) {
+    const sessionActor = await optionalSessionActor(request, env, ray);
+    if (!sessionActor) return { ok: false, status: 401, error: "authentication_required" };
+    return { ok: false, status: 403, error: "operator_secret_required", sessionActor };
+  }
+  const expected = env.OPERATOR_ACCOUNT_SECRET?.trim() ?? "";
+  if (!expected) {
+    const sessionActor = await optionalSessionActor(request, env, ray);
+    if (!sessionActor) return { ok: false, status: 503, error: "operator_secret_not_configured" };
+    return { ok: false, status: 503, error: "operator_secret_not_configured", sessionActor };
+  }
+  const limit = secretGuessBlocked(request);
+  if (limit.blocked) return { ok: false, status: 429, error: "rate_limited", retryAfter: limit.retryAfter };
+  if (!(await operatorSecretMatches(header.trim(), expected))) {
+    recordFailedSecretGuess(request);
+    const sessionActor = await optionalSessionActor(request, env, ray);
+    if (!sessionActor) return { ok: false, status: 401, error: "invalid_operator_secret" };
+    return { ok: false, status: 401, error: "invalid_operator_secret", sessionActor };
+  }
+  return { ok: true, actor: `operator_secret:${ray}` };
+}
+
+/** Read paths: operator secret, or a super_admin session. Mutations do not use this. */
+async function requireAccountReader(request: Request, env: Env): Promise<void> {
+  const header = request.headers.get("x-operator-secret");
+  if (header !== null) {
+    const gate = await requireOperatorSecret(request, env);
+    if (!gate.ok) throw operatorGateError(gate);
+    return;
+  }
+  const auth = await resolveAuth(request, env);
   if (auth.globalRole !== "super_admin") throw new HttpError(403, "forbidden");
+}
+
+async function auditDenial(env: Env, email: unknown, actor: string, action: "account.password_reset_denied" | "account.lock_denied"): Promise<void> {
+  if (typeof email !== "string" || !ACCOUNT_EMAIL_RE.test(email.trim().toLowerCase())) return;
+  const normalized = email.trim().toLowerCase();
+  try {
+    await doJson(userStub(env, await shardForEmail(normalized)), "/internal/account/audit-denied", {
+      method: "POST",
+      body: JSON.stringify({ email: normalized, actorUserId: actor, action })
+    });
+  } catch {
+    // Missing account, or this actor's denial-audit cap. The caller still returns its auth error.
+  }
+}
+
+function accountEmail(value: unknown): string {
+  const email = asString(value, "email").toLowerCase();
+  if (!ACCOUNT_EMAIL_RE.test(email)) throw new HttpError(400, "invalid_email");
+  return email;
+}
+
+async function rememberAccount(env: Env, record: { email: string; userId: string; status: string }): Promise<void> {
+  await env.CONFIG_KV.put(`account:directory:${record.email}`, JSON.stringify({
+    email: record.email,
+    userId: record.userId,
+    status: record.status,
+    updatedAt: new Date().toISOString()
+  }));
+}
+
+async function resetAccountPassword(request: Request, env: Env): Promise<Response> {
+  const gate = await requireOperatorSecret(request, env);
+  const body = await readJson(request);
+  if (!gate.ok) {
+    if (gate.sessionActor) await auditDenial(env, body.email, gate.sessionActor, "account.password_reset_denied");
+    throw operatorGateError(gate);
+  }
+  const email = accountEmail(body.email);
+  const password = asString(body.password, "password");
+  if (password.length < 10) throw new HttpError(400, "password_too_short");
+  const result = await doJson<{ userId: string; email: string; status: string; sessionsRevoked: number }>(
+    userStub(env, await shardForEmail(email)),
+    "/internal/account/reset-password",
+    { method: "POST", body: JSON.stringify({ email, password, actorUserId: gate.actor }) }
+  );
+  await rememberAccount(env, { email: result.email, userId: result.userId, status: result.status });
+  return json({
+    ok: true,
+    email: result.email,
+    userId: result.userId,
+    status: result.status,
+    sessionsRevoked: result.sessionsRevoked
+  });
+}
+
+async function lockAccount(request: Request, env: Env): Promise<Response> {
+  const gate = await requireOperatorSecret(request, env);
+  const body = await readJson(request);
+  if (!gate.ok) {
+    if (gate.sessionActor) await auditDenial(env, body.email, gate.sessionActor, "account.lock_denied");
+    throw operatorGateError(gate);
+  }
+  const email = accountEmail(body.email);
+  const status = typeof body.status === "string" && body.status.trim() ? body.status.trim() : "suspended";
+  if (status !== "suspended" && status !== "deleted") throw new HttpError(400, "invalid_status");
+  const result = await doJson<{ userId: string; email: string; status: string; sessionsRevoked: number }>(
+    userStub(env, await shardForEmail(email)),
+    "/internal/account/lock",
+    { method: "POST", body: JSON.stringify({ email, status, actorUserId: gate.actor }) }
+  );
+  await rememberAccount(env, { email: result.email, userId: result.userId, status: result.status });
+  return json({
+    ok: true,
+    email: result.email,
+    userId: result.userId,
+    status: result.status,
+    sessionsRevoked: result.sessionsRevoked
+  });
+}
+
+const AUDIT_ACTIONS = new Set([
+  "mutations",
+  "account.password_reset",
+  "account.lock",
+  "account.password_reset_denied",
+  "account.lock_denied"
+]);
+
+async function listAccountAudit(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const email = accountEmail(url.searchParams.get("email"));
+  const action = url.searchParams.get("action");
+  if (action && !AUDIT_ACTIONS.has(action)) throw new HttpError(400, "invalid_audit_action");
+  await requireAccountReader(request, env);
+  const query = action ? `?action=${encodeURIComponent(action)}` : "";
+  const audit = await doJson(userStub(env, await shardForEmail(email)), `/internal/account/audit${query}`);
+  return json(audit);
+}
+
+async function listAccountDirectory(request: Request, env: Env): Promise<Response> {
+  await requireAccountReader(request, env);
+  const listed = await env.CONFIG_KV.list({ prefix: "account:directory:" });
+  const accounts = [];
+  for (const key of listed.keys) {
+    const raw = await env.CONFIG_KV.get(key.name);
+    if (!raw) continue;
+    try {
+      const record = JSON.parse(raw) as { email?: string; userId?: string; status?: string; updatedAt?: string };
+      accounts.push({
+        email: record.email ?? null,
+        userId: record.userId ?? null,
+        status: record.status ?? null,
+        updatedAt: record.updatedAt ?? null
+      });
+    } catch {
+      accounts.push({ email: key.name.slice("account:directory:".length), userId: null, status: null, updatedAt: null });
+    }
+  }
+  return json({
+    accounts,
+    note: "Accounts created, reset, or locked after this directory was added. Older accounts are absent until one of those operations."
+  });
+}
+
+async function listAdminTenants(request: Request, env: Env): Promise<Response> {
+  await requireAccountReader(request, env);
   const listed = await env.CONFIG_KV.list({ prefix: "tenant:registry:" });
   const tenants = [];
   for (const key of listed.keys) {
@@ -777,6 +1030,21 @@ async function route(request: Request, env: Env, context: RouteContext): Promise
     }
   }
 
+  if (
+    pathname === "/v1/admin/accounts/reset-password"
+    || pathname === "/v1/admin/accounts/lock"
+    || pathname === "/v1/admin/accounts/audit"
+    || pathname === "/v1/admin/accounts"
+  ) {
+    if (request.method === "POST" && pathname === "/v1/admin/accounts/reset-password") return resetAccountPassword(request, env);
+    if (request.method === "POST" && pathname === "/v1/admin/accounts/lock") return lockAccount(request, env);
+    if (request.method === "GET" && pathname === "/v1/admin/accounts/audit") return listAccountAudit(request, env);
+    if (request.method === "GET" && pathname === "/v1/admin/accounts") return listAccountDirectory(request, env);
+    throw new HttpError(405, "method_not_allowed");
+  }
+
+  if (request.method === "GET" && pathname === "/v1/admin/tenants") return listAdminTenants(request, env);
+
   // Known public paths with wrong method used to fall through to resolveAuth →
   // misleading authentication_required (e.g. GET /v1/auth/login).
   if (
@@ -795,7 +1063,6 @@ async function route(request: Request, env: Env, context: RouteContext): Promise
   if (request.method === "GET" && pathname === "/v1/me") return json({ user: { id: auth.userId, email: auth.email, globalRole: auth.globalRole } });
   if (request.method === "GET" && pathname === "/v1/workspaces") return listWorkspaces(auth, env);
   if (request.method === "POST" && pathname === "/v1/workspaces") return createWorkspace(request, auth, env);
-  if (request.method === "GET" && pathname === "/v1/admin/tenants") return listAdminTenants(auth, env);
   if (request.method === "GET" && pathname === "/v1/admin/source-health") {
     if (auth.globalRole !== "super_admin") throw new HttpError(403, "forbidden");
     return json(sourceHealthSnapshot());
@@ -856,7 +1123,7 @@ export default {
         status: httpError.status,
         errorType: error instanceof Error ? error.name : "unknown"
       });
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = { ...httpError.headers };
       if (httpError.status === 401) {
         headers["WWW-Authenticate"] = `Bearer realm="PulseWatch", resource_metadata="${protectedResourceMetadataUrl(request)}"`;
       }

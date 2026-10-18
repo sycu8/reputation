@@ -5,11 +5,13 @@
  * Required env:
  *   CLOUDFLARE_API_TOKEN
  *   CLOUDFLARE_ACCOUNT_ID=4c15704ef706b9c8954cd6f9feb678d8
+ *   SUPER_ADMIN_EMAILS            comma-separated operator allowlist (no in-repo default)
+ *   OPERATOR_ACCOUNT_SECRET       gates account password reset and lock (no in-repo default)
  *
  * Optional:
  *   DEPLOY_ENV=production|staging|dev  (default production)
  *   SKIP_ROUTES=1                      (skip DNS/route changes)
- *   SUPER_ADMIN_EMAILS=sycu.lee@gmail.com,collector@...  (defaults include owner + live collector)
+ *   DEPLOY_SMOKE_PASSWORD          signup smoke password; signup smoke is skipped when unset
  *   BRAVE_SEARCH_API_KEY=...
  *   TELEGRAM_BOT_TOKEN=...
  *   BILLING_WEBHOOK_SECRET=...
@@ -17,6 +19,8 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { deploySmokePassword, resolveSuperAdminEmails } from "./operator-env.mjs";
+import { runSignupSmoke } from "./deploy-smoke.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID || "4c15704ef706b9c8954cd6f9feb678d8";
@@ -237,14 +241,13 @@ async function putSecret(configPath, name, value) {
   if (result.status !== 0) die(`secret put ${name} failed`);
 }
 
-/** Always keep owner + live collector on the allowlist; merge any extra env emails. */
-function resolveSuperAdminEmails(raw) {
-  const required = ["sycu.lee@gmail.com", "collector@pulsewatch.orangecloud.vn"];
-  const extra = String(raw || "")
-    .split(",")
-    .map((part) => part.trim().toLowerCase())
-    .filter(Boolean);
-  return [...new Set([...required, ...extra])].join(",");
+function warnSmokeCleanup(result) {
+  if (!result || result.skipped || result.status !== 201) return;
+  if (result.cleanup?.attempted && result.cleanup.status !== 200) {
+    console.warn(`Signup smoke session cleanup failed: HTTP ${result.cleanup.status}`);
+  } else if (!result.cleanup?.attempted) {
+    console.warn(`Signup smoke session cleanup skipped: ${result.cleanup?.reason || "unknown"}`);
+  }
 }
 
 async function main() {
@@ -252,6 +255,17 @@ async function main() {
     die(
       "CLOUDFLARE_API_TOKEN is missing. Create an API token for Cloudspace with Workers/KV/R2/Queues/DO/AI/Browser/DNS permissions, then re-run:\n\n  export CLOUDFLARE_API_TOKEN='...'\n  export CLOUDFLARE_ACCOUNT_ID='4c15704ef706b9c8954cd6f9feb678d8'\n  npm run deploy:cloudspace"
     );
+  }
+
+  let superAdminEmails;
+  try {
+    superAdminEmails = resolveSuperAdminEmails(process.env.SUPER_ADMIN_EMAILS);
+  } catch (error) {
+    die(error instanceof Error ? error.message : String(error));
+  }
+  const operatorAccountSecret = String(process.env.OPERATOR_ACCOUNT_SECRET ?? "").trim();
+  if (!operatorAccountSecret) {
+    die("OPERATOR_ACCOUNT_SECRET is missing or empty. Set it in the environment before deploy. Account reset and lock fail closed until this Worker secret is present.");
   }
 
   console.log(`Deploy target: Cloudspace ${ACCOUNT_ID}, env=${SUFFIX}`);
@@ -327,8 +341,9 @@ async function main() {
   await putSecret(
     "apps/api-worker/wrangler.jsonc",
     "SUPER_ADMIN_EMAILS",
-    resolveSuperAdminEmails(process.env.SUPER_ADMIN_EMAILS)
+    superAdminEmails
   );
+  await putSecret("apps/api-worker/wrangler.jsonc", "OPERATOR_ACCOUNT_SECRET", operatorAccountSecret);
   await putSecret("apps/api-worker/wrangler.jsonc", "BILLING_WEBHOOK_SECRET", process.env.BILLING_WEBHOOK_SECRET);
   await putSecret("workers/discovery/wrangler.jsonc", "BRAVE_SEARCH_API_KEY", process.env.BRAVE_SEARCH_API_KEY);
   await putSecret("workers/alerts/wrangler.jsonc", "TELEGRAM_BOT_TOKEN", process.env.TELEGRAM_BOT_TOKEN);
@@ -444,19 +459,25 @@ async function main() {
       console.warn("CORS smoke failed: dashboard origin is not allowed by API ALLOWED_ORIGINS");
     }
 
-    const probeEmail = `deploy-smoke-${Date.now()}@example.com`;
-    const signup = await fetch(`https://${workersHost}/v1/auth/signup`, {
-      method: "POST",
-      headers: { Origin: dashOrigin, "content-type": "application/json" },
-      body: JSON.stringify({ email: probeEmail, password: "Deploy-Smoke-Passphrase-2026!", workspaceName: "Deploy Smoke" }),
-      signal: AbortSignal.timeout(20000)
-    });
-    const setCookie = signup.headers.get("set-cookie") || "";
-    console.log(`Smoke signup -> ${signup.status}; SameSite=${/SameSite=([^;]+)/i.exec(setCookie)?.[1] || "(missing)"}`);
-    if (signup.status !== 201) {
-      console.warn(`Signup smoke failed: ${await signup.text()}`);
-    } else if (SUFFIX === "production" && !/SameSite=None/i.test(setCookie)) {
-      console.warn("Signup smoke warning: production session cookie should be SameSite=None for workers.dev CORS");
+    const smokePassword = deploySmokePassword();
+    if (!smokePassword) {
+      console.log("Signup smoke skipped: DEPLOY_SMOKE_PASSWORD is not set, so no production account is created.");
+    } else {
+      const signup = await runSignupSmoke({
+        endpoint: `https://${workersHost}/v1/auth/signup`,
+        origin: dashOrigin,
+        email: `deploy-smoke-${Date.now()}@example.com`,
+        password: smokePassword,
+        workspaceName: "Deploy Smoke"
+      });
+      const sameSite = /SameSite=([^;]+)/i.exec(signup.setCookie)?.[1] || "(missing)";
+      console.log(`Smoke signup -> ${signup.status}; SameSite=${sameSite}; sessionCleanup=${signup.cleanup.status ?? "not-run"}`);
+      if (signup.status !== 201) {
+        console.warn(`Signup smoke failed: ${signup.errorText}`);
+      } else if (SUFFIX === "production" && !/SameSite=None/i.test(signup.setCookie)) {
+        console.warn("Signup smoke warning: production session cookie should be SameSite=None for workers.dev CORS");
+      }
+      warnSmokeCleanup(signup);
     }
 
     if (SUFFIX === "production") {
@@ -465,19 +486,21 @@ async function main() {
       if (customHealth.status !== 200) {
         console.warn(`Custom /api/health smoke failed: ${await customHealth.text()}`);
       }
-      const customSignup = await fetch(`https://${HOSTNAME}/api/v1/auth/signup`, {
-        method: "POST",
-        headers: { Origin: `https://${HOSTNAME}`, "content-type": "application/json" },
-        body: JSON.stringify({
+      if (!smokePassword) {
+        console.log("Custom /api signup smoke skipped: DEPLOY_SMOKE_PASSWORD is not set.");
+      } else {
+        const customSignup = await runSignupSmoke({
+          endpoint: `https://${HOSTNAME}/api/v1/auth/signup`,
+          origin: `https://${HOSTNAME}`,
           email: `deploy-api-prefix-${Date.now()}@example.com`,
-          password: "Deploy-Smoke-Passphrase-2026!",
+          password: smokePassword,
           workspaceName: "API Prefix Smoke"
-        }),
-        signal: AbortSignal.timeout(20000)
-      });
-      console.log(`Smoke custom /api/v1/auth/signup -> ${customSignup.status}`);
-      if (customSignup.status !== 201) {
-        console.warn(`Custom /api signup smoke failed: ${await customSignup.text()}`);
+        });
+        console.log(`Smoke custom /api/v1/auth/signup -> ${customSignup.status}; sessionCleanup=${customSignup.cleanup.status ?? "not-run"}`);
+        if (customSignup.status !== 201) {
+          console.warn(`Custom /api signup smoke failed: ${customSignup.errorText}`);
+        }
+        warnSmokeCleanup(customSignup);
       }
     }
   } catch (error) {

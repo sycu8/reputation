@@ -1,6 +1,6 @@
 # BUILD_STATUS
 
-Last updated: 2026-10-17 (Cursor Cloud Agent — agent discovery documents)
+Last updated: 2026-10-18 (collector credentials removed from the repo; set them in the environment)
 
 ## Summary
 
@@ -56,16 +56,15 @@ Local (this agent):
 
 ## Live collector (production)
 
-Auto-bootstrapped after each production deploy (`npm run bootstrap:collection`):
+Auto-bootstrapped after each production deploy (`npm run bootstrap:collection`).
+
+Collector email and password were removed from this file. Bootstrap requires `COLLECTOR_EMAIL` and `COLLECTOR_PASSWORD` and exits if either is missing. The production super-admin allowlist is only the Worker secret `SUPER_ADMIN_EMAILS`, written from that environment variable at deploy time. Git history still has the previous collector password. `scripts/operator-account.mjs` resets that hash and revokes every session only when `X-Operator-Secret` is present. A `super_admin` session alone receives 403 on reset and on lock. The ordered steps are in `docs/SRE_RUNBOOK.md`. Unit tests cover the routes. Those routes have not been deployed; production does not expose account reset or lock.
 
 | Field | Value |
 |---|---|
-| Email | `collector@pulsewatch.orangecloud.vn` |
-| Password | `PulseWatch-Collect-2026!` |
-| Role | `super_admin` (ops allowlist — unlocks more monitors + ~120s scans) |
+| Role | `super_admin` when the collector email is listed in `SUPER_ADMIN_EMAILS` |
 | App | https://reputa-dashboard-production.sycu-lee.workers.dev/app/ |
 | Monitors | Cloudflare, OrangeCloud, AI Agents, Cybersecurity, Vietnam Tech |
-| Super admin allowlist | `sycu.lee@gmail.com` + collector (always merged on deploy) |
 
 Always-on free discovery: HN RSS + Algolia, Bing/Yahoo/Google News RSS, Reddit search RSS, DEV.to/Medium tag feeds, plus expanded static RSS (BBC/Guardian/TechCrunch/Ars/Verge/Wired/CF Blog/security/VN…).
 

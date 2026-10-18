@@ -155,6 +155,11 @@ export class UserDirectoryDO extends SqliteObject {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`);
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS audit_events (
+      id TEXT PRIMARY KEY, actor_user_id TEXT NOT NULL, action TEXT NOT NULL, target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL, metadata_json TEXT NOT NULL, created_at TEXT NOT NULL
+    )`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_audit_events_time ON audit_events(created_at DESC)`);
     this.sql.exec(`INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('version', '1')`);
   }
 
@@ -168,6 +173,10 @@ export class UserDirectoryDO extends SqliteObject {
       if (request.method === "POST" && url.pathname === "/internal/global-role") return await this.setGlobalRole(request);
       if (request.method === "POST" && url.pathname === "/internal/memberships") return await this.upsertMembership(request);
       if (request.method === "GET" && url.pathname === "/internal/memberships") return this.listMemberships();
+      if (request.method === "POST" && url.pathname === "/internal/account/reset-password") return await this.resetPassword(request);
+      if (request.method === "POST" && url.pathname === "/internal/account/lock") return await this.lockAccount(request);
+      if (request.method === "POST" && url.pathname === "/internal/account/audit-denied") return await this.auditDenied(request);
+      if (request.method === "GET" && url.pathname === "/internal/account/audit") return this.listAccountAudit(request);
       return json({ error: "not_found" }, 404);
     } catch (error) {
       const message = error instanceof Error ? error.message : "internal_error";
@@ -287,6 +296,169 @@ export class UserDirectoryDO extends SqliteObject {
       `SELECT workspace_id,workspace_name,role FROM memberships ORDER BY created_at ASC`
     )).map((item) => ({ workspaceId: item.workspace_id, workspaceName: item.workspace_name, role: item.role }));
     return json({ memberships });
+  }
+
+  private loadAccount(email: string): { id: string; email: string; global_role: GlobalRole; status: string } | null {
+    const account = rows(this.sql.exec<{ id: string; email: string; global_role: GlobalRole; status: string }>(
+      `SELECT id,email,global_role,status FROM user_account LIMIT 1`
+    ))[0];
+    if (!account || account.email !== email) return null;
+    return account;
+  }
+
+  private revokeOpenSessions(): number {
+    const open = rows(this.sql.exec<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM sessions WHERE revoked_at IS NULL`
+    ))[0];
+    const sessionsRevoked = Number(open?.n ?? 0);
+    if (sessionsRevoked > 0) {
+      this.sql.exec(`UPDATE sessions SET revoked_at = ? WHERE revoked_at IS NULL`, nowIso());
+    }
+    return sessionsRevoked;
+  }
+
+  private auditAccount(actorUserId: string, action: string, targetId: string, metadata: Record<string, unknown>): void {
+    this.sql.exec(
+      `INSERT INTO audit_events(id,actor_user_id,action,target_type,target_id,metadata_json,created_at) VALUES(?,?,?,?,?,?,?)`,
+      crypto.randomUUID(), actorUserId, action, "user", targetId, JSON.stringify(metadata), nowIso()
+    );
+  }
+
+  /**
+   * Caps denial audit writes for one user on this account.
+   * The stored actor is `{userId}:{cf-ray}`; the cap uses userId only, because every
+   * production request has a distinct cf-ray. Password reset and lock do not consult it.
+   */
+  private recentDenialsForUser(actorUserId: string): number {
+    const userId = actorUserId.split(":", 1)[0] ?? actorUserId;
+    const since = new Date(Date.now() - 60_000).toISOString();
+    const row = rows(this.sql.exec<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM audit_events
+       WHERE created_at >= ?
+         AND action IN ('account.password_reset_denied','account.lock_denied')
+         AND (actor_user_id = ? OR substr(actor_user_id, 1, length(?) + 1) = (? || ':'))`,
+      since,
+      userId,
+      userId,
+      userId
+    ))[0];
+    return Number(row?.n ?? 0);
+  }
+
+  private async resetPassword(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const email = asString(body.email, "email").toLowerCase();
+    const password = asString(body.password, "password");
+    const actorUserId = asString(body.actorUserId, "actor_user_id");
+    if (password.length < 10) return json({ error: "password_too_short" }, 400);
+    const account = this.loadAccount(email);
+    if (!account) return json({ error: "account_not_found" }, 404);
+    const salt = new Uint8Array(16);
+    crypto.getRandomValues(salt);
+    const passwordHash = await derivePassword(password, salt);
+    const updatedAt = nowIso();
+    const sessionsRevoked = await this.state.storage.transaction(async () => {
+      this.sql.exec(
+        `UPDATE user_account SET password_hash=?, password_salt=?, password_iterations=?, updated_at=? WHERE id=?`,
+        passwordHash, b64url(salt), PASSWORD_ITERATIONS, updatedAt, account.id
+      );
+      const revoked = this.revokeOpenSessions();
+      this.auditAccount(actorUserId, "account.password_reset", account.id, {
+        email: account.email,
+        sessionsRevoked: revoked
+      });
+      return revoked;
+    });
+    return json({
+      ok: true,
+      userId: account.id,
+      email: account.email,
+      status: account.status,
+      sessionsRevoked
+    });
+  }
+
+  private async lockAccount(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const email = asString(body.email, "email").toLowerCase();
+    const actorUserId = asString(body.actorUserId, "actor_user_id");
+    const requested = typeof body.status === "string" ? body.status.trim() : "";
+    const status = requested || "suspended";
+    if (status !== "suspended" && status !== "deleted") return json({ error: "invalid_status" }, 400);
+    const account = this.loadAccount(email);
+    if (!account) return json({ error: "account_not_found" }, 404);
+    const updatedAt = nowIso();
+    const sessionsRevoked = await this.state.storage.transaction(async () => {
+      this.sql.exec(`UPDATE user_account SET status=?, updated_at=? WHERE id=?`, status, updatedAt, account.id);
+      const revoked = this.revokeOpenSessions();
+      this.auditAccount(actorUserId, "account.lock", account.id, {
+        email: account.email,
+        status,
+        sessionsRevoked: revoked
+      });
+      return revoked;
+    });
+    return json({ ok: true, userId: account.id, email: account.email, status, sessionsRevoked });
+  }
+
+  private async auditDenied(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const email = asString(body.email, "email").toLowerCase();
+    const actorUserId = asString(body.actorUserId, "actor_user_id");
+    const action = body.action === "account.lock_denied" ? "account.lock_denied" : "account.password_reset_denied";
+    const account = this.loadAccount(email);
+    if (!account) return json({ error: "account_not_found" }, 404);
+    if (this.recentDenialsForUser(actorUserId) >= 8) return json({ error: "rate_limited" }, 429);
+    this.auditAccount(actorUserId, action, account.id, { email: account.email, result: "denied" });
+    return json({ ok: true });
+  }
+
+  private listAccountAudit(request: Request): Response {
+    const requested = new URL(request.url).searchParams.get("action");
+    if (requested && requested !== "mutations" && requested !== "account.password_reset" && requested !== "account.lock" && requested !== "account.password_reset_denied" && requested !== "account.lock_denied") {
+      return json({ error: "invalid_audit_action" }, 400);
+    }
+    const events = this.selectAuditEvents(requested);
+    if (requested) return json({ action: requested, events });
+    return json({
+      events,
+      mutations: this.selectAuditEvents("mutations")
+    });
+  }
+
+  /** Reset and lock are queried on their own so denial rows cannot push them out of the newest 50. */
+  private selectAuditEvents(action: string | null): Array<{
+    id: string;
+    actorUserId: string;
+    action: string;
+    targetType: string;
+    targetId: string;
+    metadata: Record<string, unknown>;
+    createdAt: string;
+  }> {
+    const query = action === "mutations"
+      ? `SELECT id,actor_user_id,action,target_type,target_id,metadata_json,created_at FROM audit_events WHERE action IN ('account.password_reset','account.lock') ORDER BY created_at DESC LIMIT 50`
+      : action
+        ? `SELECT id,actor_user_id,action,target_type,target_id,metadata_json,created_at FROM audit_events WHERE action = ? ORDER BY created_at DESC LIMIT 50`
+        : `SELECT id,actor_user_id,action,target_type,target_id,metadata_json,created_at FROM audit_events ORDER BY created_at DESC LIMIT 50`;
+    const events = rows(this.sql.exec<{
+      id: string;
+      actor_user_id: string;
+      action: string;
+      target_type: string;
+      target_id: string;
+      metadata_json: string;
+      created_at: string;
+    }>(query, ...(action && action !== "mutations" ? [action] : [])));
+    return events.map((event) => ({
+      id: event.id,
+      actorUserId: event.actor_user_id,
+      action: event.action,
+      targetType: event.target_type,
+      targetId: event.target_id,
+      metadata: JSON.parse(event.metadata_json) as Record<string, unknown>,
+      createdAt: event.created_at
+    }));
   }
 }
 

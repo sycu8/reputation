@@ -134,7 +134,47 @@ DO schema:
 - backward-compatible readers during rollout
 - destructive changes only after data migration and validation
 
-## 10. Cost controls
+## 10. Incident: leaked account password
+
+Use this after a collector or smoke-account password has been committed. Do not put the old or new password in the repo, the shell history you commit, or the pull request.
+
+The product stores the hash on the user Durable Object for that email. `scripts/operator-account.mjs reset-password` replaces the hash and sets `revoked_at` on every session row for that account. `lock` sets the account to `suspended` (or `deleted` when `ACCOUNT_LOCK_STATUS=deleted`) and revokes every session. Login and session checks reject any status other than `active`.
+
+Reset and lock both require `X-Operator-Secret` for every target. A session alone, including `super_admin`, receives `403 operator_secret_required`. Generate `OPERATOR_ACCOUNT_SECRET` outside the repo with `openssl rand -base64 32`. Denial audits are capped at 8 per user id per account per 60 seconds. The audit actor still includes the cf-ray, and the cap does not. A valid operator secret does not consume that cap. Audit reads keep reset and lock rows on a separate `mutations` list and behind `action=` so denial rows cannot push them out of the newest 50. Failed `X-Operator-Secret` comparisons, with or without a cookie, count toward 8 failures per IP per 60 seconds inside one Worker isolate. The count is checked before the secret is compared. After 8 failures the next attempt is `429 rate_limited` with `Retry-After`, and the secret is not compared. Correct calls are not recorded. `scripts/operator-account.mjs` waits for that `Retry-After` and retries. A Workers Rate Limiting binding is not configured. Recommended, and not applied: a Cloudflare WAF rate limiting rule of about 10 requests per minute per IP on `/v1/admin/accounts*` and `/v1/admin/tenants`. Cuong has to approve that rule before anyone creates it. These routes are not deployed until this change is on `main` and the deploy workflow runs.
+
+Ordered steps:
+
+1. Set GitHub Actions secrets `SUPER_ADMIN_EMAILS`, `COLLECTOR_EMAIL`, and `OPERATOR_ACCOUNT_SECRET`. Generate the operator secret with `openssl rand -base64 32` and do not commit the output. Leave `COLLECTOR_PASSWORD` unset. Leave `DEPLOY_SMOKE_PASSWORD` unset so deploy does not create more smoke accounts.
+2. Merge and deploy. A push to `main` deploys. `workflow_dispatch` deploys only when the selected ref is `refs/heads/main`. `OPERATOR_ACCOUNT_SECRET` is passed only to the deploy step. Deploy writes `SUPER_ADMIN_EMAILS` and `OPERATOR_ACCOUNT_SECRET` and exits before publish if either is empty. The bootstrap step skips while `COLLECTOR_PASSWORD` is empty. That skip is expected.
+3. Reset the collector account. `TARGET_EMAIL` is the address stored in `COLLECTOR_EMAIL` (previously recorded at `BUILD_STATUS.md:63`). `ACCOUNT_NEW_PASSWORD` is a new password that has never been committed.
+
+```text
+API_BASE=https://reputa-api-production.sycu-lee.workers.dev \
+OPERATOR_ACCOUNT_SECRET="$OPERATOR_ACCOUNT_SECRET" \
+TARGET_EMAIL="$COLLECTOR_EMAIL" \
+ACCOUNT_NEW_PASSWORD="$ACCOUNT_NEW_PASSWORD" \
+node scripts/operator-account.mjs reset-password
+```
+
+4. Read `sessionsRevoked` in that command's output. The reset is the revocation: every session for that account has `revoked_at` set. Run the same command again if a new session appears before you finish. Do not log in with the previous password.
+5. Disable smoke accounts from the tenant registry, not from signup logs. Signup bodies were never logged. Deploy created a workspace named exactly `Deploy Smoke` (`deploy-smoke-<unix-ms>@example.com`) or `API Prefix Smoke` (`deploy-api-prefix-<unix-ms>@example.com`). The registry row stores `name` and `createdAt`, not the email. `createdAt` is server time after signup, so the email's `Date.now()` is near `createdAt` and usually earlier. `recover-smoke` exits before any request unless `SMOKE_RUN_START_MS` and `SMOKE_RUN_END_MS` are both finite unix milliseconds and the start is not after the end. Take them from that GitHub Actions run (start through completion). The script keeps registry rows with those names inside the run window, then tries addresses from 2 seconds after `createdAt` back to 15 seconds before it, and stops at the first account that exists. The total span is capped at 60 seconds. A miss creates an empty user Durable Object, so narrow the run window before probing. This command does not lock the collector.
+
+The command prints `planned lock requests=` after reading the registry and sends no lock until `RECOVER_SMOKE_CONFIRM=yes`. A 429 response includes `Retry-After`. The script waits that long and retries, and it does not print the operator secret. Correct secret calls are not counted toward the per-IP failure cap, so a confirmed recover-smoke run is not stopped after eight successful locks.
+
+```text
+API_BASE=https://reputa-api-production.sycu-lee.workers.dev \
+OPERATOR_ACCOUNT_SECRET="$OPERATOR_ACCOUNT_SECRET" \
+SMOKE_RUN_START_MS="$SMOKE_RUN_START_MS" \
+SMOKE_RUN_END_MS="$SMOKE_RUN_END_MS" \
+RECOVER_SMOKE_CONFIRM=yes \
+node scripts/operator-account.mjs recover-smoke
+```
+
+`GET /v1/admin/accounts` lists only accounts created, reset, or locked after the directory was added. It does not enumerate older smoke accounts. An address that cannot be reconstructed cannot be locked, because each user Durable Object is sharded by the SHA-256 of the email. Do not widen the probe into a multi-minute sweep.
+
+6. Set the GitHub secret `COLLECTOR_PASSWORD` to the same new password used in step 3. Then run `npm run bootstrap:collection` with `COLLECTOR_EMAIL` and `COLLECTOR_PASSWORD` set. Bootstrap logs in with that password, so the stored hash from step 3 must already match.
+
+## 11. Cost controls
 
 Primary cost levers:
 - browser fallback rate

@@ -5,12 +5,27 @@
  * Collector is on the SUPER_ADMIN_EMAILS allowlist (ops) so it can run more monitors
  * and faster scan intervals than customer Starter limits.
  *
+ * Required env:
+ *   COLLECTOR_EMAIL
+ *   COLLECTOR_PASSWORD
+ *
+ * Optional env:
+ *   API_BASE, COLLECTOR_WORKSPACE, COLLECTOR_SCAN_INTERVAL_SEC, COLLECTOR_PRIORITY
+ *
  * Usage:
  *   node scripts/bootstrap-production-collection.mjs
  */
+import { requireCollectorCredentials } from "./operator-env.mjs";
+
 const API_BASE = (process.env.API_BASE || "https://reputa-api-production.sycu-lee.workers.dev").replace(/\/$/, "");
-const EMAIL = (process.env.COLLECTOR_EMAIL || "collector@pulsewatch.orangecloud.vn").toLowerCase();
-const PASSWORD = process.env.COLLECTOR_PASSWORD || "PulseWatch-Collect-2026!";
+const { email: EMAIL, password: PASSWORD } = (() => {
+  try {
+    return requireCollectorCredentials(process.env);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  }
+})();
 const WORKSPACE = process.env.COLLECTOR_WORKSPACE || "PulseWatch Live Collection";
 /** Fast ops cadence when collector is super_admin; otherwise API floors at 300s. */
 const SCAN_INTERVAL_SEC = Number(process.env.COLLECTOR_SCAN_INTERVAL_SEC || 120);
@@ -210,7 +225,6 @@ async function main() {
 
   console.log("\nCollector ready (max-yield profile).");
   console.log(`  email: ${EMAIL}`);
-  console.log(`  password: ${PASSWORD}`);
   console.log(`  role: ${role}`);
   console.log(`  scanIntervalSec: ${SCAN_INTERVAL_SEC}`);
   console.log(`  app: https://reputa-dashboard-production.sycu-lee.workers.dev/app/`);
