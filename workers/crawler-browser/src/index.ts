@@ -246,7 +246,10 @@ export default {
       requeue: async (body, delaySeconds, hops) => {
         await env.CRAWL_BROWSER.send({ ...body, congestionHops: hops }, { delaySeconds });
       },
-      log: logCrawlQueue
+      log: logCrawlQueue,
+      count(event) {
+        env.ANALYTICS?.writeDataPoint({ indexes: [event], blobs: [event, "browser"], doubles: [1] });
+      }
     });
   }
 };

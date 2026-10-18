@@ -100,9 +100,9 @@ export function crawlSkipTtlSeconds(message: string): number | null {
 
 /**
  * Browser Run signals that the account is out of sessions or over its request rate.
- * quickAction returns HTTP 429. The binding can also throw these phrases before a status line.
+ * quickAction returns HTTP 429. The binding can also throw these phrases with no status prefix.
  */
-const BROWSER_SESSION_CONGESTION = /too many sessions|too many browsers|browser instance limit|unable to create new browser/i;
+const BROWSER_SESSION_CONGESTION = /too many sessions|too many browsers|browser instance limit|unable to create new browser|rate limit exceeded|rate[\s-]+limited/i;
 
 export function isBrowserSessionCongestion(message: string): boolean {
   if (/^browser_http_429(?:$|:)/.test(message)) return true;
@@ -304,6 +304,19 @@ export interface CrawlQueueDeps<Body, MessageType extends CrawlQueueMessage<Body
   rememberSkip(body: Body, errorMessage: string, ttlSeconds: number): Promise<void>;
   requeue(body: Body, delaySeconds: number, hops: number): Promise<void>;
   log(level: "info" | "warn" | "error", event: string, fields: Record<string, unknown>): void;
+  /** Optional Analytics Engine counter. A throw must not change ack or retry. */
+  count?(event: string): void;
+}
+
+function recordCrawlCount<Body extends object, MessageType extends CrawlQueueMessage<Body>>(
+  deps: CrawlQueueDeps<Body, MessageType>,
+  event: string
+): void {
+  try {
+    deps.count?.(event);
+  } catch {
+    /* a metric failure must not skip the ack */
+  }
 }
 
 function failureFields(parsed: ParsedCrawlBody | null, attempts: number, extra: Record<string, unknown>): Record<string, unknown> {
@@ -369,10 +382,11 @@ async function settleCrawlFailure<Body extends object, MessageType extends Crawl
   if (decision.action === "requeue") {
     const nextHops = parsed.hops + 1;
     if (nextHops > CONGESTION_HOP_CAP) {
-      deps.log("info", "crawl_congestion_cap", failureFields(parsed, message.attempts, {
+      deps.log("warn", "crawl_congestion_cap", failureFields(parsed, message.attempts, {
         error: errorMessage,
         hops: parsed.hops
       }));
+      recordCrawlCount(deps, "crawl_congestion_cap");
       message.ack();
       return;
     }
