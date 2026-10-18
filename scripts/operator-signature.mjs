@@ -6,14 +6,23 @@
  *   METHOD \n pathname+search \n timestamp \n nonce \n hex SHA-256 of the body
  * GET and HEAD sign an empty body. The signature is base64url HMAC-SHA256.
  * The server accepts timestamps within 60 seconds and rejects a reused nonce.
+ * The signed path drops one leading /api prefix, matching the API worker's
+ * normalizeApiPathname, so a custom-domain /api base and a workers.dev base match.
  */
 import { createHash, createHmac, randomBytes } from "node:crypto";
 
 export const OPERATOR_SIGNATURE_WINDOW_MS = 60_000;
 
+/** Same rule as apps/api-worker normalizeApiPathname. */
+export function normalizeOperatorPath(pathname) {
+  if (pathname === "/api") return "/";
+  if (pathname.startsWith("/api/")) return pathname.slice(4) || "/";
+  return pathname;
+}
+
 export function operatorSignedPath(path) {
   const url = new URL(path, "https://operator.local");
-  return `${url.pathname}${url.search}`;
+  return `${normalizeOperatorPath(url.pathname)}${url.search}`;
 }
 
 export function operatorBodyHash(body) {

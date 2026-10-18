@@ -780,7 +780,7 @@ async function hmacSha256Base64Url(secret: string, message: string): Promise<str
 
 function operatorSignedPath(request: Request): string {
   const url = new URL(request.url);
-  return `${url.pathname}${url.search}`;
+  return `${normalizeApiPathname(url.pathname)}${url.search}`;
 }
 
 async function operatorBodyHash(request: Request): Promise<string> {
@@ -799,17 +799,32 @@ function operatorAttempt(request: Request): boolean {
     || request.headers.has("x-operator-signature");
 }
 
-function freshOperatorNonce(nonce: string, now: number): boolean {
+const OPERATOR_NONCE_CACHE_LIMIT = 2048;
+
+function pruneExpiredOperatorNonces(now: number): void {
   for (const [key, seenAt] of seenOperatorNonces) {
     if (now - seenAt >= OPERATOR_SIGNATURE_WINDOW_MS) seenOperatorNonces.delete(key);
   }
-  if (seenOperatorNonces.has(nonce)) return false;
-  seenOperatorNonces.set(nonce, now);
-  if (seenOperatorNonces.size > 2048) {
-    const oldest = seenOperatorNonces.keys().next().value;
-    if (oldest !== undefined) seenOperatorNonces.delete(oldest);
+}
+
+function operatorNonceRetryAfter(now: number): number {
+  let oldest = now;
+  for (const seenAt of seenOperatorNonces.values()) {
+    if (seenAt < oldest) oldest = seenAt;
   }
-  return true;
+  return Math.min(60, Math.max(1, Math.ceil((OPERATOR_SIGNATURE_WINDOW_MS - (now - oldest)) / 1000)));
+}
+
+/**
+ * Stores a nonce for the signature window. Expired entries are the only ones removed.
+ * A cache that is still full of in-window nonces is not evicted; the caller fails closed.
+ */
+function rememberOperatorNonce(nonce: string, now: number): "ok" | "replay" | "full" {
+  pruneExpiredOperatorNonces(now);
+  if (seenOperatorNonces.has(nonce)) return "replay";
+  if (seenOperatorNonces.size >= OPERATOR_NONCE_CACHE_LIMIT) return "full";
+  seenOperatorNonces.set(nonce, now);
+  return "ok";
 }
 
 function requestRay(request: Request): string {
@@ -908,7 +923,7 @@ async function requireOperatorSecret(request: Request, env: Env): Promise<Operat
   }
   const limit = secretGuessBlocked(request);
   if (limit.blocked) return { ok: false, status: 429, error: "rate_limited", retryAfter: limit.retryAfter };
-  // Presence only. The value is not read, compared, or logged.
+  // Presence only. The application does not read the value. Cloudflare invocation logs can still store this header.
   if (request.headers.has("x-operator-secret")) return rejectOperatorAttempt(request, env, ray);
   const timestamp = request.headers.get("x-operator-timestamp")?.trim() ?? "";
   const nonce = request.headers.get("x-operator-nonce")?.trim() ?? "";
@@ -924,7 +939,12 @@ async function requireOperatorSecret(request: Request, env: Env): Promise<Operat
     operatorCanonical(request.method, operatorSignedPath(request), timestamp, nonce, bodyHash)
   );
   if (!constantTimeEqual(expectedSignature, signature)) return rejectOperatorAttempt(request, env, ray);
-  if (!freshOperatorNonce(nonce, Date.now())) return rejectOperatorAttempt(request, env, ray);
+  const now = Date.now();
+  const nonceState = rememberOperatorNonce(nonce, now);
+  if (nonceState === "replay") return rejectOperatorAttempt(request, env, ray);
+  if (nonceState === "full") {
+    return { ok: false, status: 429, error: "rate_limited", retryAfter: operatorNonceRetryAfter(now) };
+  }
   return { ok: true, actor: `operator_secret:${ray}` };
 }
 

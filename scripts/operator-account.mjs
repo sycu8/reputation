@@ -24,8 +24,14 @@
  * A 429 response includes Retry-After. The script waits that long (at most 60s)
  * and retries up to 3 times. Each attempt gets a new timestamp and nonce.
  * Requests are signed with HMAC-SHA256 over method, path, timestamp, nonce, and
- * the body hash. The raw secret is never sent in a header and is never printed.
+ * the body hash. The signed path drops one leading /api prefix, so
+ * API_BASE=https://reputation.orangecloud.vn/api and the workers.dev host match.
+ * The raw secret is never sent in a header and is never printed.
  * Generate OPERATOR_ACCOUNT_SECRET with: openssl rand -base64 32
+ *
+ * audit reads GET /v1/admin/accounts/audit for TARGET_EMAIL and prints the JSON.
+ * Optional AUDIT_ACTION: mutations, account.password_reset, account.lock,
+ * account.password_reset_denied, or account.lock_denied.
  *
  * The new password and the operator secret are read from the environment
  * only and are never printed.
@@ -33,6 +39,7 @@
  *   node scripts/operator-account.mjs reset-password
  *   node scripts/operator-account.mjs lock
  *   node scripts/operator-account.mjs recover-smoke
+ *   node scripts/operator-account.mjs audit
  */
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -156,6 +163,29 @@ function requireEmail(value, name) {
   return email;
 }
 
+const AUDIT_ACTIONS = new Set([
+  "mutations",
+  "account.password_reset",
+  "account.lock",
+  "account.password_reset_denied",
+  "account.lock_denied"
+]);
+
+export async function auditAccount({ apiBase, secret, email, action, fetchImpl, sleep, log }) {
+  const selected = String(action ?? "").trim();
+  if (selected && !AUDIT_ACTIONS.has(selected)) {
+    fail("AUDIT_ACTION must be mutations, account.password_reset, account.lock, account.password_reset_denied, or account.lock_denied.");
+  }
+  const params = new URLSearchParams({ email });
+  if (selected) params.set("action", selected);
+  const path = `/v1/admin/accounts/audit?${params.toString()}`;
+  const result = await operatorRequest(apiBase, secret, "GET", path, undefined, { fetchImpl, sleep, log });
+  if (result.status < 200 || result.status >= 300) {
+    fail(`${path} failed: HTTP ${result.status} ${result.data.error || "error"}`);
+  }
+  return result.data;
+}
+
 async function post(apiBase, secret, path, body) {
   const result = await operatorRequest(apiBase, secret, "POST", path, body);
   if (result.status < 200 || result.status >= 300) {
@@ -213,8 +243,14 @@ async function main() {
   if (!secret) {
     fail("Missing OPERATOR_ACCOUNT_SECRET. Account reset and lock fail closed until it is set. The value is not stored in the repo.");
   }
-  if (command !== "reset-password" && command !== "lock" && command !== "recover-smoke") {
-    fail("Usage: node scripts/operator-account.mjs <reset-password|lock|recover-smoke>");
+  if (command !== "reset-password" && command !== "lock" && command !== "recover-smoke" && command !== "audit") {
+    fail("Usage: node scripts/operator-account.mjs <reset-password|lock|recover-smoke|audit>");
+  }
+  if (command === "audit") {
+    const email = requireEmail(process.env.TARGET_EMAIL, "TARGET_EMAIL");
+    const data = await auditAccount({ apiBase, secret, email, action: process.env.AUDIT_ACTION });
+    console.log(JSON.stringify(data));
+    return;
   }
   if (command === "recover-smoke") {
     let windowBounds;

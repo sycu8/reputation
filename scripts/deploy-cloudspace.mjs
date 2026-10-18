@@ -6,7 +6,7 @@
  *   CLOUDFLARE_API_TOKEN
  *   CLOUDFLARE_ACCOUNT_ID=4c15704ef706b9c8954cd6f9feb678d8
  *   SUPER_ADMIN_EMAILS            comma-separated operator allowlist (no in-repo default)
- *   OPERATOR_ACCOUNT_SECRET       gates account password reset and lock (no in-repo default)
+ *   OPERATOR_ACCOUNT_SECRET       gates account password reset and lock; at least 43 characters (no in-repo default)
  *
  * Optional:
  *   DEPLOY_ENV=production|staging|dev  (default production)
@@ -19,7 +19,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
-import { deploySmokePassword, resolveSuperAdminEmails } from "./operator-env.mjs";
+import { deploySmokePassword, operatorSecretError, resolveSuperAdminEmails } from "./operator-env.mjs";
 import { runSignupSmoke } from "./deploy-smoke.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -263,10 +263,9 @@ async function main() {
   } catch (error) {
     die(error instanceof Error ? error.message : String(error));
   }
+  const operatorSecretProblem = operatorSecretError(process.env.OPERATOR_ACCOUNT_SECRET);
+  if (operatorSecretProblem) die(operatorSecretProblem);
   const operatorAccountSecret = String(process.env.OPERATOR_ACCOUNT_SECRET ?? "").trim();
-  if (!operatorAccountSecret) {
-    die("OPERATOR_ACCOUNT_SECRET is missing or empty. Set it in the environment before deploy. Account reset and lock fail closed until this Worker secret is present.");
-  }
 
   console.log(`Deploy target: Cloudspace ${ACCOUNT_ID}, env=${SUFFIX}`);
   run("npx", ["wrangler", "whoami"]);

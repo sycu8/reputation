@@ -7,10 +7,10 @@ export interface LogContext {
 }
 
 function isSensitiveLogKey(key: string): boolean {
-  return /auth|key|secret|token|jwt|cookie|header/i.test(key);
+  return /secret|signature|authorization/i.test(key);
 }
 
-/** Drop header maps and any field whose name looks like a credential before it is printed. */
+/** Redact secret, signature, and authorization field names before they are printed. */
 export function redactLogFields(value: unknown, depth = 0): unknown {
   if (depth > 6) return "redacted";
   if (Array.isArray(value)) return value.map((item) => redactLogFields(item, depth + 1));
