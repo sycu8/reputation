@@ -161,8 +161,10 @@ function toResult(partial: {
   try {
     const url = assertPublicHttpUrl(partial.url).toString();
     const result: DiscoveryResult = { source: partial.source, url };
-    if (partial.title != null) result.title = partial.title;
-    if (partial.snippet != null) result.snippet = partial.snippet;
+    const title = compactDiscoveryText(partial.title, DISCOVERY_TITLE_MAX_CHARS);
+    const snippet = compactDiscoveryText(partial.snippet, DISCOVERY_SNIPPET_MAX_CHARS);
+    if (title) result.title = title;
+    if (snippet) result.snippet = snippet;
     if (partial.author != null) result.author = partial.author;
     if (partial.publishedAt != null) result.publishedAt = partial.publishedAt;
     if (partial.metadata != null) result.metadata = partial.metadata;
@@ -238,6 +240,75 @@ function splitCsvUrls(value: string | undefined): string[] {
 }
 
 const DISCOVERY_USER_AGENT = "reputa-discovery/0.1 (+https://reputation.orangecloud.vn; PulseWatch collector)";
+const DISCOVERY_FEED_MAX_BYTES = 512 * 1024;
+const DISCOVERY_TITLE_MAX_CHARS = 300;
+const DISCOVERY_SNIPPET_MAX_CHARS = 4_000;
+
+/** Strip markup and cap discovery text so RSS/Atom full-article bodies cannot become queue payloads. */
+export function compactDiscoveryText(value: string | undefined, maxChars: number): string | undefined {
+  if (!value) return undefined;
+  const text = value
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return undefined;
+  return text.length <= maxChars ? text : text.slice(0, maxChars);
+}
+
+async function readResponseTextLimited(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < maxBytes) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      const remaining = maxBytes - size;
+      if (value.byteLength > remaining) {
+        chunks.push(value.subarray(0, remaining));
+        size += remaining;
+        break;
+      }
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  } finally {
+    try { await reader.cancel(); } catch { /* body already closed */ }
+  }
+  const merged = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
+async function mapPool<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      const item = items[index];
+      if (item === undefined) continue;
+      results[index] = await fn(item);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 
 async function fetchText(url: string, init?: RequestInit): Promise<string> {
   const safe = assertPublicHttpUrl(url);
@@ -249,7 +320,7 @@ async function fetchText(url: string, init?: RequestInit): Promise<string> {
     signal: init?.signal ?? AbortSignal.timeout(8000)
   });
   if (!response.ok) throw new Error(`fetch_http_${response.status}`);
-  return response.text();
+  return readResponseTextLimited(response, DISCOVERY_FEED_MAX_BYTES);
 }
 
 /** Reddit's public search prefers simpler text than full Boolean AST strings. */
@@ -370,31 +441,40 @@ export class RssFeedDiscoveryProvider implements DiscoveryProvider {
   readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.rss.capabilities;
 
   readonly feedUrls: string[];
+  private catalogPromise: Promise<DiscoveryResult[]> | null = null;
 
   constructor(feedUrls: string[]) {
     this.feedUrls = feedUrls;
   }
 
-  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
-    const out: DiscoveryResult[] = [];
-    const batches = await Promise.all(this.feedUrls.map(async (feedUrl) => {
+  /** Fetch each configured feed once per provider instance so multi-query jobs do not refetch the catalog. */
+  private catalog(): Promise<DiscoveryResult[]> {
+    if (!this.catalogPromise) this.catalogPromise = this.fetchCatalog();
+    return this.catalogPromise;
+  }
+
+  private async fetchCatalog(): Promise<DiscoveryResult[]> {
+    const batches = await mapPool(this.feedUrls, 12, async (feedUrl) => {
       try {
         const xml = await fetchText(feedUrl, { headers: { accept: "application/rss+xml, application/atom+xml, application/xml, text/xml, */*" } });
-        return parseRssOrAtom(xml, feedUrl).filter((item) => {
-          const haystack = `${item.title ?? ""} ${item.snippet ?? ""}`;
-          return evaluateBooleanAst(input.ast, haystack);
-        });
+        return parseRssOrAtom(xml, feedUrl);
       } catch {
         return [] as DiscoveryResult[];
       }
-    }));
-    for (const batch of batches) {
-      for (const item of batch) {
-        out.push(item);
-        if (out.length >= input.limit) return out;
-      }
+    });
+    return batches.flat();
+  }
+
+  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
+    const catalog = await this.catalog();
+    const out: DiscoveryResult[] = [];
+    for (const item of catalog) {
+      const haystack = `${item.title ?? ""} ${item.snippet ?? ""}`;
+      if (!evaluateBooleanAst(input.ast, haystack)) continue;
+      out.push(item);
+      if (out.length >= input.limit) break;
     }
-    return out.slice(0, input.limit);
+    return out;
   }
 }
 
@@ -695,23 +775,32 @@ export class SitemapDiscoveryProvider implements DiscoveryProvider {
   readonly capabilities = SOURCE_CAPABILITY_DEFAULTS.web.capabilities;
 
   readonly sitemapUrls: string[];
+  private catalogPromise: Promise<DiscoveryResult[]> | null = null;
 
   constructor(sitemapUrls: string[]) {
     this.sitemapUrls = sitemapUrls;
   }
 
-  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
-    const out: DiscoveryResult[] = [];
-    for (const sitemapUrl of this.sitemapUrls) {
+  private catalog(): Promise<DiscoveryResult[]> {
+    if (!this.catalogPromise) this.catalogPromise = this.fetchCatalog();
+    return this.catalogPromise;
+  }
+
+  private async fetchCatalog(): Promise<DiscoveryResult[]> {
+    const batches = await mapPool(this.sitemapUrls, 8, async (sitemapUrl) => {
       try {
         const xml = await fetchText(sitemapUrl, { headers: { accept: "application/xml, text/xml, */*" } });
-        out.push(...parseSitemap(xml));
+        return parseSitemap(xml);
       } catch {
-        // Skip failing sitemaps.
+        return [] as DiscoveryResult[];
       }
-      if (out.length >= input.limit) break;
-    }
-    return out.slice(0, input.limit);
+    });
+    return batches.flat();
+  }
+
+  async discover(input: DiscoveryInput): Promise<DiscoveryResult[]> {
+    const catalog = await this.catalog();
+    return catalog.slice(0, input.limit);
   }
 }
 
