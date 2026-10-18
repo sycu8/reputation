@@ -412,6 +412,7 @@ Order:
 
 Tracking parameters removed from canonical URL:
 - utm_*
+- syn-* (syndication trackers such as FT `?syn-*`)
 - fbclid
 - gclid
 - common click IDs

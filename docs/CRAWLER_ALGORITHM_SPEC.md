@@ -283,6 +283,7 @@ Tracking denylist examples:
 
 ```text
 utm_*
+syn-*
 fbclid
 gclid
 mc_cid
@@ -619,6 +620,10 @@ body too large
 ```
 
 403 and 419 are blocks, not permanent failures: route them to the browser crawler instead of retrying the static fetch. 429 records per-domain backoff (honor `Retry-After`, grow while the domain stays hot) and retries after that delay.
+
+`domain_busy` and `browser_pool_busy` are congestion, not fetch failures. Requeue with the queue `delaySeconds` set to a jittered 30–60 seconds. A longer coordinator hint is honored, up to 15 minutes. Do not turn a 250ms lease hint into a 1 second retry loop. Log those events at info.
+
+Each normalized URL may record at most 8 failures in a 15-minute window. The next message is acked until that window expires. Static messages also stop after 3 retries; browser messages stop after 2. Permanent 4xx (including 401, 402, 404, and 422), oversized or empty browser extractions, and hard-paywall hosts are acked and are not retried. Paywall hosts default to `ft.com` and `nytimes.com` plus their subdomains. Override the list with the `HARD_PAYWALL_HOSTS` var.
 
 Use exponential backoff + jitter. Honor `Retry-After`.
 

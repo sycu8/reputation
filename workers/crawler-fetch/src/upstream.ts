@@ -1,20 +1,18 @@
-export type UpstreamAction = "permanent" | "browser" | "backoff" | "retry";
+export {
+  browserFailureAction,
+  classifyUpstreamStatus,
+  crawlFailureLog,
+  crawlSkipTtlSeconds,
+  fetchFailureAction,
+  isTerminalCrawlFailure,
+  noteUrlFailure,
+  type CrawlFailureContext,
+  type CrawlFailureDecision,
+  type UpstreamAction
+} from "../../../packages/crawler-core/src/crawl-failure.ts";
 
 const BACKOFF_CAP_MS = 15 * 60_000;
 const BACKOFF_BASE_MS = 30_000;
-
-/**
- * Permanent client errors are acked.
- * 403/419 are bot or CSRF blocks and go to the browser crawler.
- * 429 backs off per domain. 408/425 and 5xx (including 520) stay retryable.
- */
-export function classifyUpstreamStatus(status: number): UpstreamAction {
-  if (status === 403 || status === 419) return "browser";
-  if (status === 429) return "backoff";
-  if (status === 408 || status === 425) return "retry";
-  if (status >= 400 && status < 500) return "permanent";
-  return "retry";
-}
 
 export function parseRetryAfterMs(header: string | null, now = Date.now()): number | null {
   if (!header) return null;
@@ -43,24 +41,4 @@ export function nextDomainBackoffMs(input: {
   const stillHot = input.backoffUntil > input.now - BACKOFF_CAP_MS;
   const recent = stillHot ? input.recent429 : 0;
   return domainBackoffDelayMs(recent, input.retryAfterMs);
-}
-
-export function fetchFailureAction(message: string): { action: "ack" } | { action: "retry"; delaySeconds?: number } {
-  if (
-    message === "ssrf_blocked_host"
-    || message === "unsupported_protocol"
-    || message === "unsupported_content_type"
-    || message === "body_too_large"
-    || message === "too_many_redirects"
-    || message === "redirect_without_location"
-    || message.startsWith("upstream_http_permanent:")
-  ) {
-    return { action: "ack" };
-  }
-  const backoff = message.match(/^(?:upstream_backoff_429|domain_busy):(\d+(?:\.\d+)?)$/);
-  if (backoff?.[1]) {
-    const seconds = Math.max(1, Math.min(900, Math.ceil(Number(backoff[1]) / 1000)));
-    return { action: "retry", delaySeconds: seconds };
-  }
-  return { action: "retry" };
 }

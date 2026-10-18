@@ -34,9 +34,15 @@
     "producers": [{ "binding": "PROCESS_CONTENT", "queue": "reputa-process-content-dev" }]
   },
   "analytics_engine_datasets": [{ "binding": "ANALYTICS", "dataset": "reputa_crawl_browser_dev" }],
+  "vars": {
+    "HARD_PAYWALL_HOSTS": "ft.com,nytimes.com"
+  },
   "env": {
     "production": {
       "name": "reputa-crawler-browser-production",
+      "vars": {
+        "HARD_PAYWALL_HOSTS": "ft.com,nytimes.com"
+      },
       "browser": { "binding": "BROWSER", "remote": true },
       "durable_objects": {
         "bindings": [
