@@ -24,6 +24,8 @@ The exact limits are product defaults, not hard-coded pricing. Store plan defini
 
 Production operator allowlist is the Worker secret `SUPER_ADMIN_EMAILS` (comma-separated emails). `scripts/deploy-cloudspace.mjs` writes that secret only from the `SUPER_ADMIN_EMAILS` environment variable and fails if it is missing. There is no in-repo default allowlist.
 
+Account password reset and lock are `POST /v1/admin/accounts/reset-password` and `POST /v1/admin/accounts/lock`. Both require the `OPERATOR_ACCOUNT_SECRET` Worker secret (header `X-Operator-Secret`) or a `super_admin` session. A session alone cannot reset or lock an address that is on `SUPER_ADMIN_EMAILS`; that target requires the operator secret. If the secret is unset, a presented operator header fails closed with `operator_secret_not_configured`. A wrong secret is rejected and is not treated as a session. Reset stores a new password hash and sets `revoked_at` on every session for that user Durable Object. Lock sets status `suspended` or `deleted` and revokes every session. Neither response nor the `audit_events` row includes the password, hash, or salt. The runbook is in `docs/SRE_RUNBOOK.md`.
+
 Matching emails receive role `super_admin` at signup. Existing accounts are promoted/demoted on authenticated requests so allowlist changes apply without re-signup. `super_admin` is never assignable through a public request body.
 
 `super_admin` bypasses customer-facing plan quotas and subscription gates for product usage. It does not bypass:

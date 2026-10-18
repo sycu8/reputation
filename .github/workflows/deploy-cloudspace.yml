@@ -36,6 +36,7 @@ jobs:
       SUPER_ADMIN_EMAILS: ${{ secrets.SUPER_ADMIN_EMAILS }}
       COLLECTOR_EMAIL: ${{ secrets.COLLECTOR_EMAIL }}
       COLLECTOR_PASSWORD: ${{ secrets.COLLECTOR_PASSWORD }}
+      OPERATOR_ACCOUNT_SECRET: ${{ secrets.OPERATOR_ACCOUNT_SECRET }}
       DEPLOY_SMOKE_PASSWORD: ${{ secrets.DEPLOY_SMOKE_PASSWORD }}
       BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -71,4 +72,9 @@ jobs:
 
       - name: Bootstrap live collector workspace
         if: ${{ (github.event.inputs.environment || 'production') == 'production' }}
-        run: npm run bootstrap:collection
+        run: |
+          if [ -z "$COLLECTOR_EMAIL" ] || [ -z "$COLLECTOR_PASSWORD" ]; then
+            echo "Bootstrap skipped: set COLLECTOR_PASSWORD only after the collector account reset."
+            exit 0
+          fi
+          npm run bootstrap:collection

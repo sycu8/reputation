@@ -134,7 +134,43 @@ DO schema:
 - backward-compatible readers during rollout
 - destructive changes only after data migration and validation
 
-## 10. Cost controls
+## 10. Incident: leaked account password
+
+Use this after a collector or smoke-account password has been committed. Do not put the old or new password in the repo, the shell history you commit, or the pull request.
+
+The product stores the hash on the user Durable Object for that email. `scripts/operator-account.mjs reset-password` replaces the hash and sets `revoked_at` on every session row for that account. `lock` sets the account to `suspended` (or `deleted` when `ACCOUNT_LOCK_STATUS=deleted`) and revokes every session. Login and session checks reject any status other than `active`.
+
+A `super_admin` session cannot reset or lock an address that is on `SUPER_ADMIN_EMAILS`. Those targets require `OPERATOR_ACCOUNT_SECRET`. Generate that secret outside the repo.
+
+Ordered steps:
+
+1. Set GitHub Actions secrets `SUPER_ADMIN_EMAILS`, `COLLECTOR_EMAIL`, and `OPERATOR_ACCOUNT_SECRET`. Leave `COLLECTOR_PASSWORD` unset. Leave `DEPLOY_SMOKE_PASSWORD` unset so deploy does not create more smoke accounts.
+2. Merge and deploy (`main` or workflow_dispatch, production). Deploy writes `SUPER_ADMIN_EMAILS` and `OPERATOR_ACCOUNT_SECRET` and exits before publish if either is empty. The bootstrap step skips while `COLLECTOR_PASSWORD` is empty. That skip is expected.
+3. Reset the collector account. `TARGET_EMAIL` is the address stored in `COLLECTOR_EMAIL` (previously recorded at `BUILD_STATUS.md:63`). `ACCOUNT_NEW_PASSWORD` is a new password that has never been committed.
+
+```text
+API_BASE=https://reputa-api-production.sycu-lee.workers.dev \
+OPERATOR_ACCOUNT_SECRET="$OPERATOR_ACCOUNT_SECRET" \
+TARGET_EMAIL="$COLLECTOR_EMAIL" \
+ACCOUNT_NEW_PASSWORD="$ACCOUNT_NEW_PASSWORD" \
+node scripts/operator-account.mjs reset-password
+```
+
+4. Read `sessionsRevoked` in that command's output. The reset is the revocation: every session for that account has `revoked_at` set. Run the same command again if a new session appears before you finish. Do not log in with the previous password.
+5. Disable smoke accounts whose addresses you can recover. Previous deploys created `deploy-smoke-<unix-ms>@example.com` and `deploy-api-prefix-<unix-ms>@example.com`. The timestamps were not stored. Search Workers logs for signup bodies if they were retained. For each recovered address:
+
+```text
+API_BASE=https://reputa-api-production.sycu-lee.workers.dev \
+OPERATOR_ACCOUNT_SECRET="$OPERATOR_ACCOUNT_SECRET" \
+TARGET_EMAILS="first@example.com,second@example.com" \
+node scripts/operator-account.mjs lock
+```
+
+`GET /v1/admin/accounts` lists only accounts created, reset, or locked after the directory was added. It does not enumerate older smoke accounts. An address that cannot be recovered cannot be locked, because each user Durable Object is sharded by email hash.
+
+6. Set the GitHub secret `COLLECTOR_PASSWORD` to the same new password used in step 3. Then run `npm run bootstrap:collection` with `COLLECTOR_EMAIL` and `COLLECTOR_PASSWORD` set. Bootstrap logs in with that password, so the stored hash from step 3 must already match.
+
+## 11. Cost controls
 
 Primary cost levers:
 - browser fallback rate

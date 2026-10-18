@@ -6,6 +6,7 @@
  *   CLOUDFLARE_API_TOKEN
  *   CLOUDFLARE_ACCOUNT_ID=4c15704ef706b9c8954cd6f9feb678d8
  *   SUPER_ADMIN_EMAILS            comma-separated operator allowlist (no in-repo default)
+ *   OPERATOR_ACCOUNT_SECRET       gates account password reset and lock (no in-repo default)
  *
  * Optional:
  *   DEPLOY_ENV=production|staging|dev  (default production)
@@ -262,6 +263,10 @@ async function main() {
   } catch (error) {
     die(error instanceof Error ? error.message : String(error));
   }
+  const operatorAccountSecret = String(process.env.OPERATOR_ACCOUNT_SECRET ?? "").trim();
+  if (!operatorAccountSecret) {
+    die("OPERATOR_ACCOUNT_SECRET is missing or empty. Set it in the environment before deploy. Account reset and lock fail closed until this Worker secret is present.");
+  }
 
   console.log(`Deploy target: Cloudspace ${ACCOUNT_ID}, env=${SUFFIX}`);
   run("npx", ["wrangler", "whoami"]);
@@ -338,6 +343,7 @@ async function main() {
     "SUPER_ADMIN_EMAILS",
     superAdminEmails
   );
+  await putSecret("apps/api-worker/wrangler.jsonc", "OPERATOR_ACCOUNT_SECRET", operatorAccountSecret);
   await putSecret("apps/api-worker/wrangler.jsonc", "BILLING_WEBHOOK_SECRET", process.env.BILLING_WEBHOOK_SECRET);
   await putSecret("workers/discovery/wrangler.jsonc", "BRAVE_SEARCH_API_KEY", process.env.BRAVE_SEARCH_API_KEY);
   await putSecret("workers/alerts/wrangler.jsonc", "TELEGRAM_BOT_TOKEN", process.env.TELEGRAM_BOT_TOKEN);

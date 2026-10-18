@@ -18,6 +18,7 @@ interface Env {
   RAW_CONTENT: R2Bucket;
   ANALYTICS?: AnalyticsEngineDataset;
   SUPER_ADMIN_EMAILS?: string;
+  OPERATOR_ACCOUNT_SECRET?: string;
   ALLOWED_ORIGINS?: string;
   ENVIRONMENT: string;
   SESSION_COOKIE_NAME?: string;
@@ -327,6 +328,7 @@ async function signup(request: Request, env: Env): Promise<Response> {
   await registerTenant(env, { id: workspaceId, name: workspaceName, plan: "free", ownerUserId: account.userId });
   const cookieName = env.SESSION_COOKIE_NAME ?? COOKIE_DEFAULT;
   const cookieValue = `${shard}.${account.sessionId}.${account.sessionSecret}`;
+  await rememberAccount(env, { email: account.email, userId: account.userId, status: "active" });
   return json(
     {
       user: { id: account.userId, email: account.email, globalRole: account.globalRole },
@@ -743,6 +745,130 @@ async function billingWebhook(request: Request, env: Env): Promise<Response> {
   return json({ ok: true, duplicate: false, eventId: event.eventId, plan });
 }
 
+const ACCOUNT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function constantTimeEqual(a: string, b: string): boolean {
+  const left = new TextEncoder().encode(a);
+  const right = new TextEncoder().encode(b);
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let i = 0; i < left.length; i += 1) diff |= (left[i] ?? 0) ^ (right[i] ?? 0);
+  return diff === 0;
+}
+
+async function operatorSecretMatches(provided: string, expected: string): Promise<boolean> {
+  const [left, right] = await Promise.all([
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(provided)),
+    crypto.subtle.digest("SHA-256", new TextEncoder().encode(expected))
+  ]);
+  return constantTimeEqual(base64url(new Uint8Array(left)), base64url(new Uint8Array(right)));
+}
+
+async function requireAccountOperator(request: Request, env: Env, targetEmail?: string): Promise<string> {
+  const header = request.headers.get("x-operator-secret");
+  if (header !== null) {
+    const expected = env.OPERATOR_ACCOUNT_SECRET?.trim() ?? "";
+    if (!expected) throw new HttpError(503, "operator_secret_not_configured");
+    if (!(await operatorSecretMatches(header.trim(), expected))) throw new HttpError(401, "invalid_operator_secret");
+    return "operator_secret";
+  }
+  const auth = await resolveAuth(request, env);
+  if (auth.globalRole !== "super_admin") throw new HttpError(403, "forbidden");
+  if (targetEmail && isSuperAdminEmail(targetEmail, env.SUPER_ADMIN_EMAILS)) {
+    throw new HttpError(403, "operator_secret_required");
+  }
+  return auth.userId;
+}
+
+function accountEmail(value: unknown): string {
+  const email = asString(value, "email").toLowerCase();
+  if (!ACCOUNT_EMAIL_RE.test(email)) throw new HttpError(400, "invalid_email");
+  return email;
+}
+
+async function rememberAccount(env: Env, record: { email: string; userId: string; status: string }): Promise<void> {
+  await env.CONFIG_KV.put(`account:directory:${record.email}`, JSON.stringify({
+    email: record.email,
+    userId: record.userId,
+    status: record.status,
+    updatedAt: new Date().toISOString()
+  }));
+}
+
+async function resetAccountPassword(request: Request, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  const email = accountEmail(body.email);
+  const password = asString(body.password, "password");
+  if (password.length < 10) throw new HttpError(400, "password_too_short");
+  const actorUserId = await requireAccountOperator(request, env, email);
+  const result = await doJson<{ userId: string; email: string; status: string; sessionsRevoked: number }>(
+    userStub(env, await shardForEmail(email)),
+    "/internal/account/reset-password",
+    { method: "POST", body: JSON.stringify({ email, password, actorUserId }) }
+  );
+  await rememberAccount(env, { email: result.email, userId: result.userId, status: result.status });
+  return json({
+    ok: true,
+    email: result.email,
+    userId: result.userId,
+    status: result.status,
+    sessionsRevoked: result.sessionsRevoked
+  });
+}
+
+async function lockAccount(request: Request, env: Env): Promise<Response> {
+  const body = await readJson(request);
+  const email = accountEmail(body.email);
+  const status = typeof body.status === "string" && body.status.trim() ? body.status.trim() : "suspended";
+  if (status !== "suspended" && status !== "deleted") throw new HttpError(400, "invalid_status");
+  const actorUserId = await requireAccountOperator(request, env, email);
+  const result = await doJson<{ userId: string; email: string; status: string; sessionsRevoked: number }>(
+    userStub(env, await shardForEmail(email)),
+    "/internal/account/lock",
+    { method: "POST", body: JSON.stringify({ email, status, actorUserId }) }
+  );
+  await rememberAccount(env, { email: result.email, userId: result.userId, status: result.status });
+  return json({
+    ok: true,
+    email: result.email,
+    userId: result.userId,
+    status: result.status,
+    sessionsRevoked: result.sessionsRevoked
+  });
+}
+
+async function listAccountAudit(request: Request, env: Env): Promise<Response> {
+  const email = accountEmail(new URL(request.url).searchParams.get("email"));
+  await requireAccountOperator(request, env, email);
+  const audit = await doJson(userStub(env, await shardForEmail(email)), "/internal/account/audit");
+  return json(audit);
+}
+
+async function listAccountDirectory(request: Request, env: Env): Promise<Response> {
+  await requireAccountOperator(request, env);
+  const listed = await env.CONFIG_KV.list({ prefix: "account:directory:" });
+  const accounts = [];
+  for (const key of listed.keys) {
+    const raw = await env.CONFIG_KV.get(key.name);
+    if (!raw) continue;
+    try {
+      const record = JSON.parse(raw) as { email?: string; userId?: string; status?: string; updatedAt?: string };
+      accounts.push({
+        email: record.email ?? null,
+        userId: record.userId ?? null,
+        status: record.status ?? null,
+        updatedAt: record.updatedAt ?? null
+      });
+    } catch {
+      accounts.push({ email: key.name.slice("account:directory:".length), userId: null, status: null, updatedAt: null });
+    }
+  }
+  return json({
+    accounts,
+    note: "Accounts created, reset, or locked after this directory was added. Older accounts are absent until one of those operations."
+  });
+}
+
 async function listAdminTenants(auth: AuthContext, env: Env): Promise<Response> {
   if (auth.globalRole !== "super_admin") throw new HttpError(403, "forbidden");
   const listed = await env.CONFIG_KV.list({ prefix: "tenant:registry:" });
@@ -775,6 +901,19 @@ async function route(request: Request, env: Env, context: RouteContext): Promise
     } catch (error) {
       return json({ valid: false, error: error instanceof Error ? error.message : "invalid_boolean_query" }, 400);
     }
+  }
+
+  if (
+    pathname === "/v1/admin/accounts/reset-password"
+    || pathname === "/v1/admin/accounts/lock"
+    || pathname === "/v1/admin/accounts/audit"
+    || pathname === "/v1/admin/accounts"
+  ) {
+    if (request.method === "POST" && pathname === "/v1/admin/accounts/reset-password") return resetAccountPassword(request, env);
+    if (request.method === "POST" && pathname === "/v1/admin/accounts/lock") return lockAccount(request, env);
+    if (request.method === "GET" && pathname === "/v1/admin/accounts/audit") return listAccountAudit(request, env);
+    if (request.method === "GET" && pathname === "/v1/admin/accounts") return listAccountDirectory(request, env);
+    throw new HttpError(405, "method_not_allowed");
   }
 
   // Known public paths with wrong method used to fall through to resolveAuth →

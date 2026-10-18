@@ -66,3 +66,9 @@ Do not store full card data in Workers, R2, KV or Durable Objects.
 
 Do not expose `super_admin` assignment through public signup/profile APIs.
 Bootstrap the owner using an explicit secure operator-only procedure and record an audit event.
+
+## Account reset and lock
+
+`OPERATOR_ACCOUNT_SECRET` is required at deploy. `scripts/deploy-cloudspace.mjs` exits before publish if it is empty, then stores it with `wrangler secret put` on the API Worker. Do not commit the value.
+
+`scripts/operator-account.mjs` calls the admin account routes with that secret. `ACCOUNT_NEW_PASSWORD` is read from the environment and is never printed. See `docs/SRE_RUNBOOK.md` for the order of operations after a credential leak.

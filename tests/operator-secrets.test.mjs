@@ -151,6 +151,7 @@ test("tracked operator files do not embed collector or smoke passwords", () => {
     "scripts/deploy-cloudspace.mjs",
     "scripts/operator-env.mjs",
     "scripts/deploy-smoke.mjs",
+    "scripts/operator-account.mjs",
     "docs/AUTH_BILLING_SUPERADMIN.md",
     "docs/DEPLOYMENT_CLOUDSPACE.md",
     "docs/SECRETS_AND_PROVIDER_ACCESS.md",
@@ -172,5 +173,6 @@ test("tracked operator files do not embed collector or smoke passwords", () => {
   const deploy = readFileSync(resolve(ROOT, "scripts/deploy-cloudspace.mjs"), "utf8");
   assert.match(deploy, /resolveSuperAdminEmails\(process\.env\.SUPER_ADMIN_EMAILS\)/);
   assert.match(deploy, /deploySmokePassword\(/);
+  assert.match(deploy, /OPERATOR_ACCOUNT_SECRET is missing or empty/);
   assert.doesNotMatch(deploy, /const required = \[/);
 });
