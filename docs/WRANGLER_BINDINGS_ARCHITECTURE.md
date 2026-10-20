@@ -44,12 +44,15 @@ This limits blast radius, prevents accidental coupling, and makes generated Env 
 | api | HTTP | TENANT_DO, MONITOR_DO, CONFIG_KV, service bindings | alerts/control jobs when needed | tenant/monitor operational state |
 | scheduler | scheduled/Workflow | MONITOR_DO or scheduler shard DO, DISCOVERY_PRIORITY/NORMAL | discovery queues | due scan state |
 | discovery | queue | CONFIG_KV, R2 optional, service adapters | CRAWL_STATIC/Crawl Browser | discovery candidates/cursors |
-| crawler-fetch | queue | R2_RAW, DOMAIN_DO, CONFIG_KV | PROCESS_CONTENT, CRAWL_BROWSER fallback, CRAWL_STATIC congestion re-send | raw static content |
-| crawler-browser | queue | BROWSER, BROWSER_POOL_DO, DOMAIN_DO, R2_RAW | PROCESS_CONTENT, CRAWL_BROWSER congestion re-send | rendered content/screenshots |
+| crawler-fetch | queue | R2_RAW, DOMAIN_DO, CONFIG_KV | PROCESS_CONTENT, CRAWL_BROWSER fallback, CRAWL_STATIC congestion re-send, CRAWL_DLQ park-lifetime | raw static content |
+| crawler-browser | queue | BROWSER, BROWSER_POOL_DO, DOMAIN_DO, R2_RAW | PROCESS_CONTENT, CRAWL_BROWSER congestion re-send, CRAWL_DLQ park-lifetime | rendered content/screenshots |
+| state | durable object | none | CRAWL_DLQ for a stranded park, CRAWL_STATIC and CRAWL_BROWSER only to re-arm a missing wake | domain leases, parked jobs, sweep generation, alarm DLQ |
 | processor | queue | R2_RAW, MONITOR_DO, VECTORIZE optional, AI optional cheap models | AI_PRIORITY/AI_NORMAL/ALERT candidate | mention metadata, fingerprints |
 | ai-classifier | queue | AI, MONITOR_DO, R2_RAW | ALERT_QUEUE | sentiment/topic/severity |
 | alerts | queue | MONITOR_DO, CONFIG_KV, outbound provider secrets | external channels | alert state/delivery audit |
 | reports | Workflow | MONITOR_DO, R2_REPORTS, AI optional | notification queue | report objects + metadata |
+
+Deploy `reputa-state` before `reputa-crawler-fetch` and `reputa-crawler-browser`. The state worker owns `revise-park`, the sweep generation, and the alarm that produces a stranded park onto `CRAWL_DLQ` and re-arms a missing wake onto `CRAWL_STATIC` or `CRAWL_BROWSER`. The crawlers call those endpoints.
 
 ## Environment strategy
 

@@ -53,6 +53,13 @@
   "vars": {
     "BROWSER_POOL_MAX": "200"
   },
+  "queues": {
+    "producers": [
+      { "binding": "CRAWL_DLQ", "queue": "reputa-crawl-dlq-dev" },
+      { "binding": "CRAWL_STATIC", "queue": "reputa-crawl-static-dev" },
+      { "binding": "CRAWL_BROWSER", "queue": "reputa-crawl-browser-dev" }
+    ]
+  },
   "migrations": [
     {
       "tag": "v1",
@@ -80,6 +87,13 @@
       "name": "reputa-state-production",
       "vars": {
         "BROWSER_POOL_MAX": "200"
+      },
+      "queues": {
+        "producers": [
+          { "binding": "CRAWL_DLQ", "queue": "reputa-crawl-dlq-production" },
+          { "binding": "CRAWL_STATIC", "queue": "reputa-crawl-static-production" },
+          { "binding": "CRAWL_BROWSER", "queue": "reputa-crawl-browser-production" }
+        ]
       }
     }
   }

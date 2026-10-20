@@ -30,6 +30,8 @@ interface Env {
   CRAWL_CACHE: KVNamespace;
   CRAWL_BROWSER: Queue<JobEnvelope<CrawlPayload>>;
   CRAWL_STATIC: Queue<JobEnvelope<CrawlPayload>>;
+  /** Producer for parked jobs that passed the lifetime cap. The queue has no consumer. */
+  CRAWL_DLQ?: Queue<JobEnvelope<CrawlPayload>>;
   PROCESS_CONTENT: Queue<JobEnvelope<ProcessPayload>>;
   DOMAIN_DO?: DurableObjectNamespace;
   ANALYTICS?: AnalyticsEngineDataset;
@@ -188,8 +190,14 @@ async function parkFetchDomain(
   }
 }
 
-async function noteFetchWake(env: Env, domain: string, delaySeconds: number, hops: number): Promise<void> {
-  await postDomain(env, domain, "/internal/note-wake", { lane: "fetch", delaySeconds, hops });
+async function noteFetchWake(
+  env: Env,
+  domain: string,
+  delaySeconds: number,
+  hops: number,
+  retry?: "fail" | "reset"
+): Promise<void> {
+  await postDomain(env, domain, "/internal/note-wake", { lane: "fetch", delaySeconds, hops, sweepRetry: retry });
 }
 
 async function completeFetchParked(env: Env, domain: string, urlKey: string): Promise<void> {
@@ -197,16 +205,50 @@ async function completeFetchParked(env: Env, domain: string, urlKey: string): Pr
   if (!done) throw new Error("domain_park_unavailable");
 }
 
-async function sweepFetchDomain(env: Env, domain: string): Promise<DomainSweepResult<JobEnvelope<CrawlPayload>>> {
-  const swept = await postDomain<{ jobs?: Array<{ bodyJson?: unknown; urlKey?: unknown }>; remaining?: unknown }>(
-    env, domain, "/internal/sweep", { lane: "fetch", limit: SWEEP_CHUNK }
+async function noteFetchParked(env: Env, domain: string, urlKey: string, body: JobEnvelope<CrawlPayload>): Promise<void> {
+  const done = await postDomain<{ ok?: boolean }>(env, domain, "/internal/revise-park", {
+    lane: "fetch",
+    urlKey,
+    bodyJson: JSON.stringify(body)
+  });
+  if (!done?.ok) throw new Error("domain_park_unavailable");
+}
+
+async function deadLetterFetch(env: Env, body: JobEnvelope<CrawlPayload>, reason: string, domain: string): Promise<void> {
+  const queue = env.CRAWL_DLQ;
+  if (!queue) throw new Error("crawl_dlq_unbound");
+  await queue.send({
+    ...body,
+    parkExpiredReason: reason,
+    parkExpiredDomain: domain,
+    parkExpiredAt: new Date().toISOString()
+  });
+}
+
+async function sweepFetchDomain(
+  env: Env,
+  domain: string,
+  options?: { continueSweep?: boolean }
+): Promise<DomainSweepResult<JobEnvelope<CrawlPayload>>> {
+  const swept = await postDomain<{
+    jobs?: Array<{ bodyJson?: unknown; urlKey?: unknown; lastLifetimeIncAt?: unknown }>;
+    remaining?: unknown;
+    unvisited?: unknown;
+    retryAttempt?: unknown;
+    parked?: unknown;
+  }>(
+    env, domain, "/internal/sweep", { lane: "fetch", limit: SWEEP_CHUNK, continue: options?.continueSweep === true }
   );
   if (!swept) throw new Error("domain_park_unavailable");
-  const jobs: Array<{ body: JobEnvelope<CrawlPayload>; urlKey: string }> = [];
+  const jobs: Array<{ body: JobEnvelope<CrawlPayload>; urlKey: string; lastLifetimeIncAt?: number }> = [];
   for (const job of swept.jobs ?? []) {
     if (typeof job.bodyJson !== "string" || typeof job.urlKey !== "string") continue;
     try {
-      jobs.push({ body: JSON.parse(job.bodyJson) as JobEnvelope<CrawlPayload>, urlKey: job.urlKey });
+      jobs.push({
+        body: JSON.parse(job.bodyJson) as JobEnvelope<CrawlPayload>,
+        urlKey: job.urlKey,
+        lastLifetimeIncAt: typeof job.lastLifetimeIncAt === "number" ? job.lastLifetimeIncAt : 0
+      });
     } catch {
       logCrawlQueue("warn", "crawl_domain_park_bad_body", { requestId: "", domain, urlKey: job.urlKey });
       try {
@@ -216,7 +258,14 @@ async function sweepFetchDomain(env: Env, domain: string): Promise<DomainSweepRe
       }
     }
   }
-  return { jobs, remaining: Number(swept.remaining ?? 0) };
+  const remaining = Number(swept.remaining ?? 0);
+  return {
+    jobs,
+    remaining,
+    unvisited: typeof swept.unvisited === "number" ? swept.unvisited : remaining,
+    retryAttempt: typeof swept.retryAttempt === "number" ? swept.retryAttempt : 0,
+    parked: typeof swept.parked === "number" ? swept.parked : jobs.length + remaining
+  };
 }
 
 function replayFetch(env: Env, body: JobEnvelope<CrawlPayload>): { message: Message<JobEnvelope<CrawlPayload>>; pending: Array<Promise<unknown>> } {
@@ -463,11 +512,14 @@ function queueDeps(env: Env) {
       tenantId: string | undefined;
       monitorId: string | undefined;
     }) => parkFetchDomain(env, input),
-    noteWake: (domain: string, delaySeconds: number, hops: number) => noteFetchWake(env, domain, delaySeconds, hops),
-    sweepDomain: (domain: string) => sweepFetchDomain(env, domain),
+    noteWake: (domain: string, delaySeconds: number, hops: number, retry?: "fail" | "reset") => noteFetchWake(env, domain, delaySeconds, hops, retry),
+    sweepDomain: (domain: string, options?: { continueSweep?: boolean }) => sweepFetchDomain(env, domain, options),
     completeParked: (domain: string, urlKey: string) => completeFetchParked(env, domain, urlKey),
-    count(event: string) {
-      env.ANALYTICS?.writeDataPoint({ indexes: [event], blobs: [event, "fetch"], doubles: [1] });
+    noteParked: (domain: string, urlKey: string, body: JobEnvelope<CrawlPayload>) => noteFetchParked(env, domain, urlKey, body),
+    deadLetter: (body: JobEnvelope<CrawlPayload>, reason: string, domain: string) => deadLetterFetch(env, body, reason, domain),
+    count(event: string, domain?: string) {
+      const blobs = domain ? [event, "fetch", domain] : [event, "fetch"];
+      env.ANALYTICS?.writeDataPoint({ indexes: [event], blobs, doubles: [1] });
     },
     random: Math.random,
     log: logCrawlQueue

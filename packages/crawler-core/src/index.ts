@@ -21,10 +21,20 @@ export interface JobEnvelope<T> {
   /** Set on a wake that is continuing a chunked sweep. Does not count another hop-cap event. */
   congestionSweep?: boolean | undefined;
   /**
-   * How many times this parked job has been swept back onto the queue.
-   * The wake hop reset does not clear it, so a backoff that never ends cannot recycle the job forever.
+   * How many hop-cap sweeps this parked job has survived.
+   * The sweep stores it on the parked row. Past the cap the job is produced onto the crawl DLQ.
    */
   congestionLifetime?: number | undefined;
+  /** Why a parked job was produced onto the crawl DLQ. Replay uses this plus the domain. */
+  parkExpiredReason?: string | undefined;
+  parkExpiredDomain?: string | undefined;
+  /** ISO time the DLQ send was accepted. */
+  parkExpiredAt?: string | undefined;
+  /**
+   * How many times this domain wake was sent again because the slot wait was within one lease.
+   * This climbs the 2s–30s delay only. It does not climb congestionHops or the park lifetime.
+   */
+  congestionSlotHops?: number | undefined;
   payload: T;
 }
 
