@@ -247,6 +247,13 @@ test("llms.txt is plain text, pages expose JSON-LD and hreflang, and non-canonic
     assert.ok(types.includes("Organization"));
     assert.ok(types.includes("FAQPage"));
     assert.ok(graph.some((node) => node["@id"] === "https://orangecloud.vn/#person"));
+    const application = graph.find((node) => node["@type"] === "SoftwareApplication");
+    assert.equal(application.offers["@type"], "Offer");
+    assert.equal(application.offers.name, "PulseWatch Free");
+    assert.equal(application.offers.price, "0");
+    assert.equal(application.offers.priceCurrency, "USD");
+    assert.equal(application.aggregateRating, undefined);
+    assert.equal(JSON.stringify(graph).includes("ratingValue"), false);
     const visible = html.replace(/<script[\s\S]*?<\/script>/gi, "");
     const faq = graph.find((node) => node["@type"] === "FAQPage");
     assert.equal(faq.mainEntity.length, 6);
@@ -263,6 +270,10 @@ test("llms.txt is plain text, pages expose JSON-LD and hreflang, and non-canonic
   assert.doesNotMatch(vi, /Jump back into your workspace/);
   assert.doesNotMatch(vi, /Welcome back\. Continue monitoring/);
   assert.doesNotMatch(vi, /View profile/);
+  assert.doesNotMatch(vi, /đọc cảm xúc/);
+  assert.match(vi, /phân tích cảm xúc/);
+  assert.doesNotMatch(vi, /không phải bản để lập chỉ mục/);
+  assert.match(vi, /không được lập chỉ mục/);
   const englishFaq = readPublic("index.html").slice(readPublic("index.html").indexOf('id="faq"'));
   assert.doesNotMatch(englishFaq, /Jump back into your workspace/);
   assert.doesNotMatch(englishFaq, /Welcome back\. Continue monitoring/);
