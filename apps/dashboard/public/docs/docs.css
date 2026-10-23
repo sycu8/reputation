@@ -387,6 +387,7 @@ tr:last-child td { border-bottom: 0; }
 }
 .site-footer .brand-lockup { display: flex; align-items: center; gap: 10px; }
 .site-footer .brand { font-size: 16px; color: var(--ink); margin-right: 0; }
+.footer-links { display: flex; flex-wrap: wrap; gap: 8px 14px; }
 
 .toast {
   position: fixed;

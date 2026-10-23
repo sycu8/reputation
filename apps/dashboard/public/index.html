@@ -7,6 +7,10 @@
   <meta name="description" content="PulseWatch by OrangeCloud monitors online mentions across the public web and supported social platforms, analyzes sentiment, and alerts you to important negative conversations." />
   <meta name="keywords" content="social listening tool, online reputation monitoring, brand monitoring tool, reputation monitoring software, negative mention monitoring" />
   <link rel="canonical" href="https://reputation.orangecloud.vn/" />
+  <link rel="alternate" hreflang="en" href="https://reputation.orangecloud.vn/" />
+  <link rel="alternate" hreflang="vi" href="https://reputation.orangecloud.vn/vi/" />
+  <link rel="alternate" hreflang="x-default" href="https://reputation.orangecloud.vn/" />
+  <link rel="alternate" type="text/plain" href="/llms.txt" title="LLMs" />
   <link rel="api-catalog" href="/.well-known/api-catalog" type="application/linkset+json" />
   <link rel="service-desc" href="/openapi.json" type="application/openapi+json" />
   <link rel="service-doc" href="/docs/" />
@@ -24,6 +28,120 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/landing.css" />
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "Person",
+          "@id": "https://orangecloud.vn/#person",
+          "name": "Cường Lê Sỹ",
+          "url": "https://orangecloud.vn/"
+        },
+        {
+          "@type": "Organization",
+          "@id": "https://orangecloud.vn/#organization",
+          "name": "OrangeCloud",
+          "url": "https://orangecloud.vn/",
+          "founder": { "@id": "https://orangecloud.vn/#person" },
+          "description": "OrangeCloud is a personal project hub. It is not a publication of Cloudflare, Inc. and is not affiliated with Cloudflare, Inc."
+        },
+        {
+          "@type": "SoftwareApplication",
+          "@id": "https://reputation.orangecloud.vn/#software",
+          "name": "PulseWatch",
+          "alternateName": "PulseWatch by OrangeCloud",
+          "applicationCategory": "BusinessApplication",
+          "operatingSystem": "Web",
+          "url": "https://reputation.orangecloud.vn/",
+          "inLanguage": ["vi", "en"],
+          "isAccessibleForFree": true,
+          "offers": {
+            "@type": "Offer",
+            "name": "PulseWatch Free",
+            "price": "0",
+            "priceCurrency": "USD"
+          },
+          "description": "PulseWatch by OrangeCloud monitors online mentions across the public web and supported social platforms, analyzes sentiment, and alerts you to important negative conversations.",
+          "author": { "@id": "https://orangecloud.vn/#person" },
+          "publisher": { "@id": "https://orangecloud.vn/#organization" }
+        },
+        {
+          "@type": "FAQPage",
+          "@id": "https://reputation.orangecloud.vn/#faq",
+          "url": "https://reputation.orangecloud.vn/#faq",
+          "inLanguage": ["vi", "en"],
+          "isPartOf": { "@id": "https://reputation.orangecloud.vn/#website" },
+          "about": { "@id": "https://reputation.orangecloud.vn/#software" },
+          "mainEntity": [
+            {
+              "@type": "Question",
+              "inLanguage": "vi",
+              "name": "PulseWatch theo dõi những gì?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "PulseWatch theo dõi nội dung công khai có nhắc tới một người, thương hiệu, sản phẩm hoặc công ty trên web, báo, blog, diễn đàn và RSS. Nguồn mạng xã hội chỉ được đưa vào khi có trang công khai hoặc quyền truy cập chính thức."
+              }
+            },
+            {
+              "@type": "Question",
+              "inLanguage": "vi",
+              "name": "Cảnh báo tiêu cực tới trong bao lâu?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Với nội dung quan trọng trên nguồn đang hỗ trợ, mục tiêu vận hành là dưới 15 phút ở phân vị thứ 95. Mục tiêu này không bao gồm mọi trang web và mọi kiểu truy cập."
+              }
+            },
+            {
+              "@type": "Question",
+              "inLanguage": "vi",
+              "name": "Đâu là địa chỉ trang chính?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "Trang chính là https://reputation.orangecloud.vn/. Các hostname khác, kể cả workers.dev, không được lập chỉ mục."
+              }
+            },
+            {
+              "@type": "Question",
+              "inLanguage": "en",
+              "name": "What does PulseWatch monitor?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "PulseWatch monitors public mentions of a person, brand, product, or company on the web, in news, on blogs, in forums, and in RSS. A social source is included only when public or official access is available."
+              }
+            },
+            {
+              "@type": "Question",
+              "inLanguage": "en",
+              "name": "How quickly can a negative alert arrive?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "For an important mention on a supported source, the operating target is under 15 minutes at the 95th percentile. That target does not cover every site or every access mode."
+              }
+            },
+            {
+              "@type": "Question",
+              "inLanguage": "en",
+              "name": "Which address is the public site?",
+              "acceptedAnswer": {
+                "@type": "Answer",
+                "text": "The public site is https://reputation.orangecloud.vn/. Other hostnames, including workers.dev, are not the canonical site."
+              }
+            }
+          ]
+        },
+        {
+          "@type": "WebSite",
+          "@id": "https://reputation.orangecloud.vn/#website",
+          "name": "PulseWatch",
+          "url": "https://reputation.orangecloud.vn/",
+          "inLanguage": ["en", "vi"],
+          "publisher": { "@id": "https://orangecloud.vn/#organization" },
+          "author": { "@id": "https://orangecloud.vn/#person" }
+        }
+      ]
+    }
+  </script>
 </head>
 <body>
   <div class="atmosphere" aria-hidden="true"></div>
@@ -40,6 +158,8 @@
       <a href="#product">Product</a>
       <a href="#solutions">Solutions</a>
       <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+      <a href="/vi/" hreflang="vi" lang="vi">Tiếng Việt</a>
       <a href="/docs/index.html">Resources</a>
     </nav>
     <div class="nav-actions" data-auth-nav>
@@ -58,6 +178,8 @@
     <a href="#product">Product</a>
     <a href="#solutions">Solutions</a>
     <a href="#pricing">Pricing</a>
+    <a href="#faq">FAQ</a>
+    <a href="/vi/" hreflang="vi" lang="vi">Tiếng Việt</a>
     <a href="/docs/index.html">Resources</a>
     <a data-auth-guest href="/app/">Sign in</a>
     <a class="btn btn-primary" data-auth-guest href="/app/#signup">Open app</a>
@@ -244,6 +366,45 @@
         <a class="btn btn-primary btn-lg hidden" data-auth-user href="/app/" hidden>Open workspace</a>
       </div>
     </section>
+
+    <section class="section" id="faq">
+      <div class="section-head reveal">
+        <h2>Questions</h2>
+        <p>Short answers in Vietnamese and English.</p>
+      </div>
+      <div class="faq-list">
+        <article class="reveal" lang="vi">
+          <p class="faq-lang">Tiếng Việt</p>
+          <h3>PulseWatch theo dõi những gì?</h3>
+          <p>PulseWatch theo dõi nội dung công khai có nhắc tới một người, thương hiệu, sản phẩm hoặc công ty trên web, báo, blog, diễn đàn và RSS. Nguồn mạng xã hội chỉ được đưa vào khi có trang công khai hoặc quyền truy cập chính thức.</p>
+        </article>
+        <article class="reveal" lang="vi">
+          <p class="faq-lang">Tiếng Việt</p>
+          <h3>Cảnh báo tiêu cực tới trong bao lâu?</h3>
+          <p>Với nội dung quan trọng trên nguồn đang hỗ trợ, mục tiêu vận hành là dưới 15 phút ở phân vị thứ 95. Mục tiêu này không bao gồm mọi trang web và mọi kiểu truy cập.</p>
+        </article>
+        <article class="reveal" lang="vi">
+          <p class="faq-lang">Tiếng Việt</p>
+          <h3>Đâu là địa chỉ trang chính?</h3>
+          <p>Trang chính là https://reputation.orangecloud.vn/. Các hostname khác, kể cả workers.dev, không được lập chỉ mục.</p>
+        </article>
+        <article class="reveal" lang="en">
+          <p class="faq-lang">English</p>
+          <h3>What does PulseWatch monitor?</h3>
+          <p>PulseWatch monitors public mentions of a person, brand, product, or company on the web, in news, on blogs, in forums, and in RSS. A social source is included only when public or official access is available.</p>
+        </article>
+        <article class="reveal" lang="en">
+          <p class="faq-lang">English</p>
+          <h3>How quickly can a negative alert arrive?</h3>
+          <p>For an important mention on a supported source, the operating target is under 15 minutes at the 95th percentile. That target does not cover every site or every access mode.</p>
+        </article>
+        <article class="reveal" lang="en">
+          <p class="faq-lang">English</p>
+          <h3>Which address is the public site?</h3>
+          <p>The public site is https://reputation.orangecloud.vn/. Other hostnames, including workers.dev, are not the canonical site.</p>
+        </article>
+      </div>
+    </section>
   </main>
 
   <footer class="site-footer">
@@ -254,7 +415,16 @@
         <span class="brand-by">by OrangeCloud</span>
       </span>
     </a>
-    <p>© <span id="year"></span> OrangeCloud · <a href="https://reputation.orangecloud.vn/">reputation.orangecloud.vn</a> · <a href="/docs/index.html">API docs</a> · <a href="/app/">App</a></p>
+    <nav class="footer-links" aria-label="OrangeCloud">
+      <a href="https://orangecloud.vn/">OrangeCloud</a>
+      <a href="https://ready.orangecloud.vn/">CF Ready</a>
+      <a href="https://onboarding.orangecloud.vn/">Onboarding</a>
+      <a href="https://wcstat.orangecloud.vn/">PitchIntel</a>
+      <a href="/vi/" hreflang="vi" lang="vi">Tiếng Việt</a>
+      <a href="/docs/index.html">API docs</a>
+      <a href="/app/">App</a>
+    </nav>
+    <p>© <span id="year"></span> OrangeCloud</p>
   </footer>
 
   <script src="/webmcp.js"></script>

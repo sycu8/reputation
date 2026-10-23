@@ -11,9 +11,10 @@ interface Env {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const { pathname } = new URL(request.url);
-    if (pathname === "/mcp") return handleMcp(request);
-    const asset = await env.ASSETS.fetch(request);
-    return applyDiscoveryHeaders(pathname, asset);
+    const url = new URL(request.url);
+    const response = url.pathname === "/mcp"
+      ? await handleMcp(request)
+      : await env.ASSETS.fetch(request);
+    return applyDiscoveryHeaders(url.pathname, response, url.hostname);
   }
 };

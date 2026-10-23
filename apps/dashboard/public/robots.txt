@@ -1,5 +1,6 @@
 # PulseWatch by OrangeCloud — https://reputation.orangecloud.vn
 # Public marketing and docs are crawlable. The signed-in app and API are not.
+# llms.txt: https://reputation.orangecloud.vn/llms.txt
 
 User-agent: *
 Content-Signal: ai-train=no, search=yes, ai-input=no
