@@ -80,6 +80,12 @@ Verified locally with `wrangler dev` on `http://127.0.0.1:8788` (2026-10-17):
 - `POST /mcp` returns JSON-RPC `initialize`.
 - The homepage listening-query form validated `("OrangeCloud" OR PulseWatch) AND NOT hiring` against the local API, and three WebMCP tools registered on load.
 
+SEO/AEO source check on 2026-10-23, not deployed:
+
+- `npm run validate` passed: `tsc -p tsconfig.json --noEmit`, `node scripts/lint.mjs` (`lint: baseline checks passed`), and `npm test` (`176` passed, `0` failed). Node `v22.23.4`.
+- Before this change, live `GET https://reputation.orangecloud.vn/llms.txt` returned `content-type: text/html` because the missing file fell through to the HTML shell. `apps/dashboard/public/llms.txt` is now plain text, and the dashboard worker sets `text/plain; charset=utf-8`. Production still serves HTML until a later deploy.
+- `apps/dashboard/wrangler.jsonc` sets `workers_dev` to `false` for the default, staging, and production dashboard configs. The API worker is unchanged. No `wrangler deploy` was run.
+
 DNS-AID SVCB/HTTPS records are created by `scripts/deploy-cloudspace.mjs` when the deploy token can edit zone DNS. This environment had no `CLOUDFLARE_API_TOKEN`, so live DNS was not changed and DNSSEC was not enabled.
 
 ## Production incident fixes

@@ -543,6 +543,31 @@ body.auth-chrome-ready .hero-cta {
   font-size: 0.9rem;
 }
 .site-footer a:hover { color: var(--cloud); }
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 0;
+}
+.faq-list {
+  display: grid;
+  gap: 22px;
+}
+.faq-list h3 {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+}
+.faq-list p { margin: 0; color: #cbd5e1; line-height: 1.55; }
+.faq-lang {
+  display: inline-block;
+  margin: 0 0 6px;
+  color: var(--orange);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 
 .reveal {
   opacity: 0;

@@ -47,6 +47,7 @@ Public origin files (plain responses, not the marketing HTML shell):
 | Path | Content type | Role |
 |---|---|---|
 | `/robots.txt` | `text/plain` | Crawl rules, AI crawler groups, Content-Signal, sitemap |
+| `/llms.txt` | `text/plain` | Agent summary. A missing file must not fall through to the HTML shell. |
 | `/sitemap.xml` | `application/xml` | Canonical public URLs |
 | `/.well-known/api-catalog` | `application/linkset+json` | RFC 9727 API catalog |
 | `/openapi.json` | `application/json` | OpenAPI description |
@@ -58,6 +59,19 @@ Public origin files (plain responses, not the marketing HTML shell):
 | `/.well-known/ai-catalog.json` | `application/json` | ARD capability manifest |
 
 The homepage sends RFC 8288 `Link` headers for `api-catalog`, `service-desc`, `service-doc`, and `describedby`.
+
+## Language and structured data
+
+- English page: `https://reputation.orangecloud.vn/`
+- Vietnamese page: `https://reputation.orangecloud.vn/vi/`
+- Both pages emit `hreflang` for `en`, `vi`, and `x-default` (English).
+- Both pages include a short bilingual Q&A. The visible answers match `FAQPage` JSON-LD.
+- JSON-LD `@graph` also includes `SoftwareApplication`, `Organization`, and `Person` with `@id` `https://orangecloud.vn/#person`.
+- Footer links the hub `https://orangecloud.vn/` and the sibling sites CF Ready, Cloudflare Onboarding, and PitchIntel.
+
+## Non-canonical hosts
+
+`apps/dashboard/wrangler.jsonc` sets `workers_dev` to `false` for the default, staging, and production dashboard configs. The dashboard worker also sets `X-Robots-Tag: noindex, nofollow` when the request host is not `reputation.orangecloud.vn`. The API worker keeps its workers.dev hostname because that host is the documented production API. This file does not deploy those settings.
 
 DNS-AID SVCB/HTTPS records for `_index._agents.reputation.orangecloud.vn` are published by `scripts/deploy-cloudspace.mjs` when the API token can edit zone DNS. DNSSEC is not turned on by that script.
 

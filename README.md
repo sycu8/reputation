@@ -4,7 +4,9 @@
 
 - Product: **PulseWatch**
 - Endorsed brand: **PulseWatch by OrangeCloud**
-- Production URL: https://reputation.orangecloud.vn
+- Live site: [https://reputation.orangecloud.vn](https://reputation.orangecloud.vn)
+- Vietnamese page: [https://reputation.orangecloud.vn/vi/](https://reputation.orangecloud.vn/vi/)
+- Agent summary: [https://reputation.orangecloud.vn/llms.txt](https://reputation.orangecloud.vn/llms.txt)
 - Tagline: *Know what's being said. Before it spreads.*
 - Marketing landing: `/` · App: `/app/` · API docs: `/docs/index.html`
 

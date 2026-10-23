@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import api from "../apps/api-worker/src/index.ts";
-import { applyDiscoveryHeaders, DISCOVERY_LINK } from "../apps/dashboard/src/discovery-headers.ts";
+import { applyDiscoveryHeaders, CANONICAL_HOST, DISCOVERY_LINK } from "../apps/dashboard/src/discovery-headers.ts";
 import { apiBaseForHost, handleMcp } from "../apps/dashboard/src/mcp.ts";
 import { apiCall, makeLocalEnv } from "./helpers/local-env.mjs";
 
@@ -199,6 +199,84 @@ test("mcp endpoint lists tools and validates a query", async () => {
   const toolBody = await validated.json();
   assert.equal(toolBody.result.isError, false);
   assert.match(toolBody.result.content[0].text, /"valid":true/);
+});
+
+test("llms.txt is plain text, pages expose JSON-LD and hreflang, and non-canonical hosts are noindex", () => {
+  const llms = readPublic("llms.txt");
+  assert.match(llms, /^# PulseWatch\n/);
+  assert.match(llms, /https:\/\/orangecloud\.vn\/#person/);
+  assert.doesNotMatch(llms, /<!doctype html>/i);
+  assert.doesNotMatch(llms, /<html/i);
+  assert.doesNotMatch(llms, /Jump back into your workspace/);
+  assert.doesNotMatch(llms, /Welcome back\. Continue monitoring/);
+  const llmsResponse = applyDiscoveryHeaders("/llms.txt", new Response(llms, {
+    status: 200,
+    headers: { "content-type": "text/html; charset=utf-8" }
+  }), "reputation.orangecloud.vn");
+  assert.equal(llmsResponse.headers.get("content-type"), "text/plain; charset=utf-8");
+  assert.equal(llmsResponse.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(llmsResponse.headers.get("x-robots-tag"), null);
+  assert.equal(CANONICAL_HOST, "reputation.orangecloud.vn");
+
+  const workersDev = applyDiscoveryHeaders("/", new Response("<html></html>", { status: 200 }), "reputa-dashboard-production.sycu-lee.workers.dev");
+  assert.equal(workersDev.headers.get("x-robots-tag"), "noindex, nofollow");
+  const local = applyDiscoveryHeaders("/vi/", new Response("<html></html>", { status: 200 }), "127.0.0.1");
+  assert.equal(local.headers.get("x-robots-tag"), "noindex, nofollow");
+
+  const wrangler = readFileSync(new URL("../apps/dashboard/wrangler.jsonc", import.meta.url), "utf8");
+  assert.equal(wrangler.match(/"workers_dev": false/g)?.length, 3);
+  assert.match(wrangler, /\/llms\.txt/);
+
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.match(readme, /\[https:\/\/reputation\.orangecloud\.vn\]\(https:\/\/reputation\.orangecloud\.vn\)/);
+
+  for (const page of ["index.html", "vi/index.html"]) {
+    const html = readPublic(page);
+    assert.match(html, /hreflang="en"/);
+    assert.match(html, /hreflang="vi"/);
+    assert.match(html, /hreflang="x-default"/);
+    assert.match(html, /https:\/\/orangecloud\.vn\//);
+    assert.match(html, /https:\/\/ready\.orangecloud\.vn\//);
+    assert.match(html, /https:\/\/onboarding\.orangecloud\.vn\//);
+    assert.match(html, /https:\/\/wcstat\.orangecloud\.vn\//);
+    const match = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+    assert.ok(match);
+    const graph = JSON.parse(match[1])["@graph"];
+    const types = graph.map((node) => node["@type"]);
+    assert.ok(types.includes("SoftwareApplication"));
+    assert.ok(types.includes("Organization"));
+    assert.ok(types.includes("FAQPage"));
+    assert.ok(graph.some((node) => node["@id"] === "https://orangecloud.vn/#person"));
+    const visible = html.replace(/<script[\s\S]*?<\/script>/gi, "");
+    const faq = graph.find((node) => node["@type"] === "FAQPage");
+    assert.equal(faq.mainEntity.length, 6);
+    const languages = new Set(faq.mainEntity.map((question) => question.inLanguage));
+    assert.deepEqual(languages, new Set(["vi", "en"]));
+    for (const question of faq.mainEntity) {
+      assert.ok(visible.includes(question.name));
+      assert.ok(visible.includes(question.acceptedAnswer.text));
+    }
+  }
+
+  const vi = readPublic("vi/index.html");
+  assert.match(vi, /<html lang="vi">/);
+  assert.doesNotMatch(vi, /Jump back into your workspace/);
+  assert.doesNotMatch(vi, /Welcome back\. Continue monitoring/);
+  assert.doesNotMatch(vi, /View profile/);
+  const englishFaq = readPublic("index.html").slice(readPublic("index.html").indexOf('id="faq"'));
+  assert.doesNotMatch(englishFaq, /Jump back into your workspace/);
+  assert.doesNotMatch(englishFaq, /Welcome back\. Continue monitoring/);
+
+  for (const page of ["docs/index.html", "app/index.html"]) {
+    const html = readPublic(page);
+    assert.match(html, /https:\/\/orangecloud\.vn\//);
+    assert.match(html, /https:\/\/ready\.orangecloud\.vn\//);
+    assert.match(html, /https:\/\/onboarding\.orangecloud\.vn\//);
+    assert.match(html, /https:\/\/wcstat\.orangecloud\.vn\//);
+  }
+  assert.match(readPublic("sitemap.xml"), /https:\/\/reputation\.orangecloud\.vn\/vi\//);
+  assert.match(readPublic("sitemap.xml"), /https:\/\/reputation\.orangecloud\.vn\/llms\.txt/);
+  assert.match(readPublic("_headers"), /\/llms\.txt[\s\S]*text\/plain/);
 });
 
 test("unauthenticated API responses advertise protected resource metadata", async () => {

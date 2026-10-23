@@ -1,0 +1,33 @@
+# PulseWatch
+
+> PulseWatch by OrangeCloud monitors public mentions of people, brands, products, and companies, then classifies sentiment and sends alerts for important negative mentions.
+
+PulseWatch is a multi-tenant social listening app. It watches the public web, news, blogs, forums, and RSS. A social source is included only when public or official access exists. It does not bypass login, CAPTCHA, or private groups.
+
+Canonical site: https://reputation.orangecloud.vn/
+Vietnamese page: https://reputation.orangecloud.vn/vi/
+Maintainer: Cường Lê Sỹ (https://orangecloud.vn/#person)
+Hub: https://orangecloud.vn/
+
+## Product
+
+- [English homepage](https://reputation.orangecloud.vn/): product overview
+- [Vietnamese page](https://reputation.orangecloud.vn/vi/): bản tiếng Việt
+- [API docs](https://reputation.orangecloud.vn/docs/): HTTP API reference
+- [OpenAPI](https://reputation.orangecloud.vn/openapi.json): machine-readable API
+- [auth.md](https://reputation.orangecloud.vn/auth.md): how an agent registers
+- [App](https://reputation.orangecloud.vn/app/): signed-in workspace; not for indexing
+
+## Sibling projects
+
+- [OrangeCloud](https://orangecloud.vn/): personal project hub
+- [CF Ready](https://ready.orangecloud.vn/): checks before a Cloudflare deploy
+- [Cloudflare Onboarding](https://onboarding.orangecloud.vn/): bilingual learning hub
+- [PitchIntel](https://wcstat.orangecloud.vn/): World Cup 2026 match model
+
+## Notes for agents
+
+- workers.dev hostnames are not the canonical site.
+- Do not claim full coverage of Facebook, TikTok, X, LinkedIn, or private communities.
+- Plan prices are shown on the English homepage. This file does not restate them.
+- robots.txt disallows training crawlers. Search and answer crawlers may read the public pages.
